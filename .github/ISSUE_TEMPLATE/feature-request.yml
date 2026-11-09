@@ -1,0 +1,11 @@
+name: New feature or big change
+description: A short description before you write the code
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What you'd like to change }
+    validations: { required: true }
+  - type: textarea
+    id: why
+    attributes: { label: Why }
+    validations: { required: true }

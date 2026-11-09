@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/runmyai/run-my-ai/discussions
+    about: Ask or suggest something
+  - name: Discord
+    url: https://discord.gg/BfpvUFp58
+    about: Chat with the community

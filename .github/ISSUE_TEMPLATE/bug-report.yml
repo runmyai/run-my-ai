@@ -1,0 +1,25 @@
+name: Bug report
+description: Something doesn't work
+body:
+  - type: input
+    id: version
+    attributes: { label: Run My AI version }
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes: { label: Operating system }
+    validations: { required: true }
+  - type: input
+    id: hardware
+    attributes: { label: GPU and RAM, placeholder: "for example a GPU with 12 GB, and 32 GB of RAM" }
+    validations: { required: true }
+  - type: input
+    id: model
+    attributes: { label: Model }
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: "What you did, what you expected, what you got. A screenshot helps." }
+    validations: { required: true }
+  - type: textarea
+    id: log
+    attributes: { label: Log, render: text }
