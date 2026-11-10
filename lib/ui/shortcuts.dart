@@ -10,6 +10,7 @@ import '../state/prefs.dart';
 import '../state/search.dart';
 import '../state/section.dart';
 import '../theme.dart';
+import 'buttons.dart';
 import 'chat_list.dart';
 import 'pages/chat_page.dart';
 import 'sidebar.dart';
@@ -168,7 +169,7 @@ class _AppShortcutsState extends ConsumerState<AppShortcuts> {
   }
 
   /// Esc, when nothing that closes with it has the keys: closes the search, else the open chat's match highlights,
-  /// else stops the reply being written in the open chat. One at a time.
+  /// else cancels the editing of a message, else stops the reply being written in the open chat. One at a time.
   void _escape() {
     if (_inMenu()) return;
     if (ref.read(searchProvider).open) return ref.read(searchProvider.notifier).close();
@@ -176,6 +177,7 @@ class _AppShortcutsState extends ConsumerState<AppShortcuts> {
     final inChat = ref.read(sectionProvider).kind != null;
     final find = ref.read(findProvider);
     if (inChat && find != null && find.chatId == chats.openId) return ref.read(findProvider.notifier).close();
+    if (inChat && chats.editing != null) return ref.read(chatsProvider.notifier).cancelEdit();
     if (inChat && chats.replyingId != null && chats.replyingId == chats.openId) ref.read(chatsProvider.notifier).stop();
   }
 
@@ -266,7 +268,8 @@ class ShortcutsSheet extends StatelessWidget {
     ('Writing', [
       ([['Enter']], 'Send', null),
       ([['Shift', 'Enter']], 'New line', null),
-      ([['Esc']], 'Stop generating response', null),
+      ([['Ctrl', 'Enter']], 'While a reply is written: send after it', null),
+      ([['Esc']], 'Stop generating response, or cancel editing a message', null),
     ]),
     ('App', [
       ([[_ctrl, 'B']], 'Show / hide the sidebar', null),
@@ -368,20 +371,12 @@ class ShortcutsSheet extends StatelessWidget {
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: c.text),
                         ),
                       ),
-                      Tooltip(
-                        message: 'Close',
-                        waitDuration: const Duration(milliseconds: 400),
-                        child: InkWell(
-                          key: const Key('shortcuts-close'),
-                          borderRadius: BorderRadius.circular(8),
-                          hoverColor: c.selected,
-                          onTap: () => Navigator.pop(context),
-                          child: SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: Icon(Icons.close, size: 18, color: c.textSecondary),
-                          ),
-                        ),
+                      AppIconButton(
+                        key: const Key('shortcuts-close'),
+                        icon: Icons.close,
+                        tooltip: 'Close',
+                        onTap: () => Navigator.pop(context),
+                        size: 32,
                       ),
                     ],
                   ),

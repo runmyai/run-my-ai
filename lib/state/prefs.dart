@@ -14,6 +14,10 @@ class Prefs {
     this.bell = true,
     this.soundName,
     this.soundFile,
+    this.thinking = false,
+    this.engineFolder,
+    this.speedHighlighted = false,
+    this.stateLimitGiB = PrefsData.defaultStateLimitGiB,
   });
 
   /// System until the user picks one in Settings: then Run My AI Dark, unless the computer is set to light (see
@@ -40,6 +44,18 @@ class Prefs {
   final String? soundName;
   final String? soundFile;
 
+  /// A model that can choose thinks before it answers. A change applies from the next reply.
+  final bool thinking;
+
+  /// The folder the engine is in; null: where it is by default.
+  final String? engineFolder;
+
+  /// The speed under a reply stands out (blue and bold) instead of looking like normal text.
+  final bool speedHighlighted;
+
+  /// The most the chats' saved states may take on the disk.
+  final double stateLimitGiB;
+
   /// The text sizes Ctrl+= and Ctrl+- step through.
   static const textScales = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4];
 
@@ -51,6 +67,10 @@ class Prefs {
     double? textScale,
     bool? bell,
     ({String? name, String? file})? sound,
+    bool? thinking,
+    String? Function()? engineFolder,
+    bool? speedHighlighted,
+    double? stateLimitGiB,
   }) => Prefs(
     theme: theme ?? this.theme,
     darkStyle: darkStyle ?? this.darkStyle,
@@ -60,6 +80,10 @@ class Prefs {
     bell: bell ?? this.bell,
     soundName: sound != null ? sound.name : soundName,
     soundFile: sound != null ? sound.file : soundFile,
+    thinking: thinking ?? this.thinking,
+    engineFolder: engineFolder != null ? engineFolder() : this.engineFolder,
+    speedHighlighted: speedHighlighted ?? this.speedHighlighted,
+    stateLimitGiB: stateLimitGiB ?? this.stateLimitGiB,
   );
 }
 
@@ -88,6 +112,10 @@ class PrefsNotifier extends Notifier<Prefs> {
       bell: saved.bell,
       soundName: saved.soundName,
       soundFile: saved.soundFile,
+      thinking: saved.thinking,
+      engineFolder: saved.engineFolder,
+      speedHighlighted: saved.speedHighlighted,
+      stateLimitGiB: saved.stateLimitGiB,
     );
   }
 
@@ -106,6 +134,18 @@ class PrefsNotifier extends Notifier<Prefs> {
   void toggleBell() => _save(state.copyWith(bell: !state.bell));
 
   void setBell(bool on) => _save(state.copyWith(bell: on));
+
+  void setStateLimit(double gib) => _save(state.copyWith(stateLimitGiB: gib));
+
+  void setSpeedHighlighted(bool on) => _save(state.copyWith(speedHighlighted: on));
+
+  void toggleThinking() => _save(state.copyWith(thinking: !state.thinking));
+
+  /// The folder the engine is in; empty: where it is by default.
+  void setEngineFolder(String folder) {
+    folder = folder.trim();
+    _save(state.copyWith(engineFolder: () => folder.isEmpty ? null : folder));
+  }
 
   /// The user's own reply-finished sound ([file] relative to the data folder), or (both null) the app's own.
   void setSound(String? name, String? file) => _save(state.copyWith(sound: (name: name, file: file)));
@@ -132,6 +172,10 @@ class PrefsNotifier extends Notifier<Prefs> {
             sidebarHidden: prefs.sidebarHidden,
             textScale: prefs.textScale,
             bell: prefs.bell,
+            thinking: prefs.thinking,
+            engineFolder: prefs.engineFolder,
+            speedHighlighted: prefs.speedHighlighted,
+            stateLimitGiB: prefs.stateLimitGiB,
             soundName: prefs.soundName,
             soundFile: prefs.soundFile,
           ),

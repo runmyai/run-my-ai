@@ -5,10 +5,13 @@ import 'package:path_provider/path_provider.dart';
 
 /// What the Store remembers: the downloaded files and the picked one.
 class LibraryData {
-  const LibraryData({this.downloaded = const {}, this.picked});
+  const LibraryData({this.downloaded = const {}, this.picked, this.contextLength});
 
   final Set<String> downloaded;
   final String? picked;
+
+  /// The context length last picked; null: none yet.
+  final int? contextLength;
 }
 
 /// The user's display choices.
@@ -20,7 +23,13 @@ class PrefsData {
     this.bell = true,
     this.soundName,
     this.soundFile,
+    this.thinking = false,
+    this.engineFolder,
+    this.speedHighlighted = false,
+    this.stateLimitGiB = defaultStateLimitGiB,
   });
+
+  static const defaultStateLimitGiB = 10.0;
 
   /// 'system', 'light' or 'dark'.
   final String theme;
@@ -36,6 +45,18 @@ class PrefsData {
   /// relative to it); null: the sound the app comes with.
   final String? soundName;
   final String? soundFile;
+
+  /// A model that can choose thinks before it answers.
+  final bool thinking;
+
+  /// The folder the engine is in; null: where it is by default.
+  final String? engineFolder;
+
+  /// The speed under a reply stands out (blue and bold) instead of looking like normal text.
+  final bool speedHighlighted;
+
+  /// The most the chats' saved states may take on the disk.
+  final double stateLimitGiB;
 }
 
 /// Where the window was when it was last moved or resized: its normal size and place (also kept
@@ -88,6 +109,10 @@ class Storage {
       bell: json['bell'] as bool? ?? true,
       soundName: json['soundName'] as String?,
       soundFile: json['soundFile'] as String?,
+      thinking: json['thinking'] as bool? ?? false,
+      engineFolder: json['engineFolder'] as String?,
+      speedHighlighted: json['speedHighlighted'] as bool? ?? false,
+      stateLimitGiB: (json['stateLimitGiB'] as num?)?.toDouble() ?? PrefsData.defaultStateLimitGiB,
     );
   }
 
@@ -98,6 +123,10 @@ class Storage {
     'bell': data.bell,
     'soundName': data.soundName,
     'soundFile': data.soundFile,
+    'thinking': data.thinking,
+    'engineFolder': data.engineFolder,
+    'speedHighlighted': data.speedHighlighted,
+    'stateLimitGiB': data.stateLimitGiB,
   });
 
   WindowData? readWindow() {
@@ -128,11 +157,16 @@ class Storage {
     return LibraryData(
       downloaded: {for (final id in json['downloaded'] as List? ?? const []) id as String},
       picked: json['picked'] as String?,
+      contextLength: json['contextLength'] as int?,
     );
   }
 
   void writeLibrary(LibraryData data) =>
-      _writeJson(File(_path('library.json')), {'downloaded': data.downloaded.toList(), 'picked': data.picked});
+      _writeJson(File(_path('library.json')), {
+        'downloaded': data.downloaded.toList(),
+        'picked': data.picked,
+        'contextLength': data.contextLength,
+      });
 
   /// The folded groups of the chat list, by section ("chat", "code"): "pinned" or a day ("2026-10-30").
   Map<String, List<String>> readFolds() {
@@ -159,6 +193,27 @@ class Storage {
   }
 
   void writeDrafts(Map<String, String> drafts) => _writeJson(File(_path('drafts.json')), drafts);
+
+  /// Each model's engine profiles, as written by [writeProfiles].
+  Map<String, Object?> readProfiles() => _readJson(File(_path('profiles.json'))) ?? const {};
+
+  void writeProfiles(Map<String, Object?> profiles) => _writeJson(File(_path('profiles.json')), profiles);
+
+  /// What the Benchmark tab was last set to, as written by [writeBenchmarkSetup]; null: never set.
+  Map<String, Object?>? readBenchmarkSetup() => _readJson(File(_path('benchmark.json')));
+
+  void writeBenchmarkSetup(Map<String, Object?> setup) => _writeJson(File(_path('benchmark.json')), setup);
+
+  /// The messages waiting to be sent, by chat.
+  Map<String, List<String>> readQueues() {
+    final json = _readJson(File(_path('queues.json'))) ?? const {};
+    return {
+      for (final e in json.entries)
+        if (e.value is List) e.key: (e.value! as List).whereType<String>().toList(),
+    };
+  }
+
+  void writeQueues(Map<String, List<String>> queues) => _writeJson(File(_path('queues.json')), queues);
 
   Map<String, Object?>? _readJson(File f) {
     if (!f.existsSync()) return null;

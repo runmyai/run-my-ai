@@ -8,18 +8,28 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/models.dart';
+import '../../data/reply_stats.dart';
 import '../../search/chat_search.dart';
+import '../../state/benchmark.dart';
 import '../../state/chats.dart';
 import '../../state/drafts.dart';
 import '../../state/library.dart';
 import '../../state/motion.dart';
+import '../../state/prefs.dart';
+import '../../state/queue.dart';
 import '../../state/search.dart';
+import '../../state/section.dart';
 import '../../theme.dart';
+import '../buttons.dart';
 import '../folded_text.dart';
 import '../follow.dart';
 import '../live_reply.dart';
 import '../look.dart';
 import '../marked_text.dart';
+import '../menu_panel.dart';
+import '../reply_card.dart';
+import '../thinking_block.dart';
+import '../thinking_toggle.dart';
 
 /// The Chat section: the conversation and the message box (the model picker sits in the window's top row).
 /// A chat opened from the search results shows its matches highlighted and a bar to step through them.
@@ -329,7 +339,19 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
     // An opened chat whose messages are still on their way from the database (a moment): an empty page.
     final loading = ref.watch(chatsProvider.select((s) => s.openId != null && s.open == null));
     final messages = chat?.messages ?? const <ChatMessage>[];
-    final replying = ref.watch(chatsProvider.select((s) => s.replyingId != null && s.replyingId == s.openId));
+    // Where the reply being written sits in this chat (empty when none is written here).
+    final replyingPath = ref.watch(chatsProvider
+        .select((s) => s.replyingId != null && s.replyingId == s.openId ? s.replyingPath : const <ReplyPlace>[]));
+    // The reply is on screen when the chat shows its version; the user may have flipped to another meanwhile.
+    final writingShown = replyingPath.isNotEmpty && messages.lastOrNull?.node == replyingPath.last.node;
+    final loadingModel = ref.watch(chatsProvider.select((s) => s.loadingModel));
+    final model = ref.watch(shownModelProvider);
+    // Why Edit and Regenerate cannot be pressed now, in the words of the Send button's tooltip.
+    final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
+    final blocked = ref.watch(chatsProvider.select((s) => _sendBlock(s, benchmarking))) ??
+        (model == null ? 'Download a model from the Store to start chatting.' : null);
+    final editedNode = ref.watch(chatsProvider.select((s) => s.editing?.chatId == s.openId ? s.editing?.node : null));
+    final latestReply = messages.lastIndexWhere((m) => m.role == Role.assistant);
     final motion = ref.watch(motionProvider);
     final found = ref.watch(findProvider);
     final find = found != null && found.chatId == chat?.id ? found : null;
@@ -369,7 +391,7 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
     // While a reply is written, the page follows its end if the user is at the bottom; otherwise it stays put.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _follow.replying = replying;
+      _follow.replying = writingShown;
       _follow.changed();
       _updateCover();
       _updateBookmark();
@@ -381,7 +403,7 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
     Widget message(int index) {
       final message = messages[index];
       final last = index == messages.length - 1;
-      final live = last && replying;
+      final live = last && writingShown;
       return Center(
         key: _keys.putIfAbsent(index, GlobalKey.new),
         child: Padding(
@@ -393,20 +415,36 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
               index: index,
               // (The reply being written gets its buttons once it is done.)
               actions: !live,
+              // The latest reply keeps its buttons on show; the others show them under the pointer.
+              always: index == latestReply,
               // A reply's bookmark button bookmarks the message it answers (the one jumped to).
               bookmarked: _answers(messages, index)?.bookmark,
               onBookmark: () => ref.read(chatsProvider.notifier).toggleBookmark(index - 1),
+              blocked: blocked,
+              // The arrows work while a reply is written too; the version being written is marked on them.
+              writing: writingLabel(messages, replyingPath, index),
+              onFlip: (step) => ref.read(chatsProvider.notifier).flip(index, step),
+              onEdit: message.role == Role.user && message.node != null
+                  ? () => ref.read(chatsProvider.notifier).beginEdit(index, model?.file)
+                  : null,
+              onRegenerate: _answers(messages, index) != null
+                  ? () => ref.read(chatsProvider.notifier).regenerate(index, model!.file)
+                  : null,
               child: _Message(
                 message,
+                chatId: chat!.id,
+                index: index,
                 marks: find != null && matches.contains(index) ? highlightsIn(message, find.query) : const [],
                 markStyle: find?.messageIndex == index ? markHere : mark,
                 lastReply: last && message.role == Role.assistant,
                 live: live,
+                loading: live ? loadingModel : null,
                 motion: motion,
                 open: _open.contains(index),
                 onToggle: () => _toggle(index),
                 arrowKey: _arrows.putIfAbsent(index, GlobalKey.new),
                 flash: _flashing == index,
+                editing: message.node != null && message.node == editedNode,
               ),
             ),
           ),
@@ -544,13 +582,12 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
                               child: AnimatedOpacity(
                                 opacity: below ? 1 : 0,
                                 duration: const Duration(milliseconds: 150),
-                                child: _RoundButton(
+                                child: AppIconButton(
                                   key: const Key('jump-newest'),
                                   tooltip: 'Jump to newest',
                                   icon: Icons.arrow_downward,
-                                  fill: c.inputFill,
-                                  iconColor: c.text,
-                                  border: c.inputBorder,
+                                  look: IconButtonLook.outlined,
+                                  round: true,
                                   onTap: _toNewest,
                                 ),
                               ),
@@ -815,16 +852,13 @@ class FindBar extends ConsumerWidget {
     final at = matches.indexOf(state.messageIndex) + 1;
     final of = matches.length;
     final find = ref.read(findProvider.notifier);
-    Widget button(String key, IconData icon, String tooltip, VoidCallback onTap) => Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 400),
-      child: InkWell(
-        key: Key(key),
-        borderRadius: BorderRadius.circular(6),
-        hoverColor: c.selected,
-        onTap: onTap,
-        child: SizedBox(width: 28, height: 28, child: Icon(icon, size: 18, color: c.textSecondary)),
-      ),
+    Widget button(String key, IconData icon, String tooltip, VoidCallback onTap) => AppIconButton(
+      key: Key(key),
+      icon: icon,
+      tooltip: tooltip,
+      onTap: onTap,
+      size: 28,
+      radius: 6,
     );
 
     return Material(
@@ -857,21 +891,32 @@ class FindBar extends ConsumerWidget {
 class _Message extends StatelessWidget {
   const _Message(
     this.message, {
+    required this.chatId,
+    required this.index,
     this.marks = const [],
     this.markStyle,
     this.lastReply = false,
     this.live = false,
+    this.loading,
     this.motion = smoothMotion,
     this.open = false,
     this.onToggle,
     this.arrowKey,
     this.flash = false,
+    this.editing = false,
   });
 
   final ChatMessage message;
 
+  /// The chat the message is in and its place there (what its thinking block is remembered by).
+  final String chatId;
+  final int index;
+
   /// A bookmark just jumped to: its bubble lights up.
   final bool flash;
+
+  /// A sent message being edited in the message box: its bubble is outlined.
+  final bool editing;
 
   /// A long sent message: opened to its full length, the arrow's action and key (lib/ui/folded_text.dart).
   final bool open;
@@ -883,6 +928,9 @@ class _Message extends StatelessWidget {
 
   /// That reply is still being written.
   final bool live;
+
+  /// The model being loaded for it, if one is.
+  final String? loading;
 
   /// How it moves while written.
   final Motion motion;
@@ -901,17 +949,51 @@ class _Message extends StatelessWidget {
     if (message.role == Role.assistant) {
       return Align(
         alignment: Alignment.centerLeft,
-        child: lastReply ? LiveReply(text: message.text, live: live, style: style, done: text, motion: motion) : text,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (loading != null)
+              Text('Loading $loading…', key: const Key('model-loading'), style: TextStyle(fontSize: 13, color: c.textMuted)),
+            if (message.thinking.isNotEmpty)
+              ThinkingBlock(
+                chatId: chatId,
+                // (By the message's number, so each version of a reply has its own block.)
+                index: message.node ?? index,
+                text: message.thinking,
+                thinking: live && message.text.isEmpty,
+                millis: message.thinkingMillis,
+              ),
+            // A reply that was stopped while it thought has no answer to show.
+            if (message.stopped && message.text.isEmpty && !live)
+              Text('Stopped', key: const Key('reply-stopped'), style: TextStyle(fontSize: 13, color: c.textMuted))
+            else if (lastReply)
+              // (By the message's number: another version of the reply is another view, not a continuation.)
+              LiveReply(
+                  key: ValueKey(message.node),
+                  text: message.text,
+                  live: live,
+                  style: style,
+                  done: text,
+                  motion: motion)
+            else
+              text,
+            if (lastReply) _ReplySpeedLine(node: message.node),
+          ],
+        ),
       );
     }
     final bubble = ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: ChatPage.contentWidth * 0.75),
       // A bookmark just jumped to lights up for a moment.
       child: TweenAnimationBuilder<Color?>(
-        tween: ColorTween(end: flash ? Color.alphaBlend(c.text.withValues(alpha: 0.10), c.selected) : c.selected),
+        tween: ColorTween(
+            end: flash || editing ? Color.alphaBlend(c.text.withValues(alpha: 0.10), c.selected) : c.selected),
         duration: const Duration(milliseconds: 250),
         builder: (context, fill, child) => LookBox(
+          key: editing ? const Key('editing-bubble') : null,
           fill: fill!,
+          edge: editing ? c.text.withValues(alpha: 0.55) : null,
           radius: 16,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           child: child!,
@@ -947,6 +1029,49 @@ class _Message extends StatelessWidget {
   }
 }
 
+/// Under the chat's last reply: its speed right now while it is written, then its average.
+class _ReplySpeedLine extends ConsumerWidget {
+  const _ReplySpeedLine({this.node});
+
+  /// The reply it is under: the speed shows only there, not under another version of the reply.
+  final int? node;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final speed = ref.watch(chatsProvider.select((s) {
+      final shown = s.speed;
+      return shown != null && shown.chatId == s.openId && (shown.node == null || shown.node == node) ? shown : null;
+    }));
+    if (speed == null) return const SizedBox.shrink();
+    final highlighted = ref.watch(prefsProvider.select((p) => p.speedHighlighted));
+    final c = context.colors;
+    final color = !highlighted
+        ? c.text
+        : Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF5AA9FF)
+        : const Color(0xFF1F6FEB);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      // The number counts quickly to each new value instead of jumping.
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(end: speed.tokensPerSecond),
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        builder: (context, value, _) => Text(
+          speed.done ? 'Avg ${value.toStringAsFixed(1)} tokens/s' : '${value.round()} tokens/s',
+          key: const Key('reply-speed'),
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: highlighted ? FontWeight.w700 : FontWeight.w400,
+            color: color,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// The sent message that the reply at [index] answers (the one before it); null when [index] is not such a reply.
 ChatMessage? _answers(List<ChatMessage> messages, int index) =>
     messages[index].role == Role.assistant && index > 0 && messages[index - 1].role == Role.user
@@ -956,9 +1081,21 @@ ChatMessage? _answers(List<ChatMessage> messages, int index) =>
 /// Moves to the next bookmark of the open chat ([step] 1) or back (-1), when a chat page is on screen.
 void stepBookmark(int step) => _ChatPageState._shown?._stepBookmark(step);
 
-/// A message with the room under it (the gap before the next one) where its buttons show while the pointer is on
-/// it: Copy (the icon turns into a tick for a moment), and for a reply Bookmark (bookmarks the message it answers,
-/// or takes the bookmark off).
+/// Why nothing can be sent now: a benchmark is running, or a reply is being written (in any chat); null when
+/// something can. The words of the Send button's tooltip ([hereToo] false: not for the reply of the open chat, whose
+/// Send button is the Stop button).
+String? _sendBlock(ChatsState chats, bool benchmarking, {bool hereToo = true}) {
+  if (benchmarking) return 'A benchmark is running.';
+  final id = chats.replyingId;
+  if (id == null || (!hereToo && id == chats.openId)) return null;
+  return '"${chats.byId(id)?.title}" is generating a response. Stop it to send.';
+}
+
+/// A message with the room under it (the gap before the next one) where its buttons show: Copy (the icon turns into
+/// a tick for a moment), Edit on a sent message, Regenerate on a reply, and for a reply Bookmark (bookmarks the
+/// message it answers, or takes the bookmark off). They show while the pointer is on the message, and always under
+/// the latest reply ([always]). A message with more than one version also shows `‹ 1/2 ›`, always, which flips
+/// between the versions.
 class _MessageWithActions extends StatefulWidget {
   const _MessageWithActions({
     required this.message,
@@ -967,15 +1104,35 @@ class _MessageWithActions extends StatefulWidget {
     required this.bookmarked,
     required this.onBookmark,
     required this.child,
+    this.always = false,
+    this.blocked,
+    this.writing,
+    this.onFlip,
+    this.onEdit,
+    this.onRegenerate,
   });
 
   final ChatMessage message;
   final int index;
   final bool actions;
+  final bool always;
 
   /// A reply: whether the message it answers is bookmarked (null: no bookmark button, as for a sent message).
   final bool? bookmarked;
   final VoidCallback onBookmark;
+
+  /// Why Edit and Regenerate cannot be pressed now (shown as their tooltip); null when they can.
+  final String? blocked;
+
+  /// What the arrows say about the reply being written (see [writingLabel]); null: nothing.
+  final String? writing;
+
+  /// Shows the version [step] places on (-1: the one before).
+  final void Function(int step)? onFlip;
+
+  /// Edit, for a sent message; Regenerate, for a reply that answers one; null: no such button.
+  final VoidCallback? onEdit;
+  final VoidCallback? onRegenerate;
   final Widget child;
 
   /// The room under each message.
@@ -988,6 +1145,9 @@ class _MessageWithActions extends StatefulWidget {
 class _MessageWithActionsState extends State<_MessageWithActions> {
   bool _hovered = false;
   bool _copied = false;
+
+  /// The reply's card is open: the buttons stay, or the card would go with them.
+  bool _cardOpen = false;
   Timer? _copiedOff;
 
   @override
@@ -1010,31 +1170,143 @@ class _MessageWithActionsState extends State<_MessageWithActions> {
     required Key key,
     required IconData icon,
     required String tooltip,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
+    double size = 26,
   }) {
+    return AppIconButton(
+      key: key,
+      icon: icon,
+      tooltip: tooltip,
+      onTap: onTap,
+      size: size,
+      height: _MessageWithActions.room,
+      iconSize: 15,
+      radius: 5,
+      muted: true,
+      tooltipWait: const Duration(milliseconds: 500),
+    );
+  }
+
+  /// The "⋯" button of a reply: a small card with how the reply went and what wrote it.
+  Widget _statsButton(BuildContext context, ReplyStats stats) {
     final c = context.colors;
-    return Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 500),
-      child: InkWell(
-        key: key,
-        borderRadius: BorderRadius.circular(5),
-        hoverColor: c.selected,
-        onTap: onTap,
-        child: SizedBox(
-          width: 26,
-          height: _MessageWithActions.room,
-          child: Icon(icon, size: 15, color: c.textMuted),
-        ),
+    return MenuAnchor(
+      style: bareMenuStyle,
+      clipBehavior: Clip.none,
+      onOpen: () => setState(() => _cardOpen = true),
+      onClose: () {
+        if (mounted) setState(() => _cardOpen = false);
+      },
+      builder: (context, controller, _) => _button(
+        context,
+        key: Key('more-${widget.index}'),
+        icon: Icons.more_horiz_rounded,
+        tooltip: 'Details of this reply',
+        onTap: () => controller.isOpen ? controller.close() : controller.open(),
       ),
+      menuChildren: [
+        MenuPanel(
+          color: c.inputFill,
+          border: c.inputBorder,
+          elevation: 2,
+          shadowColor: Theme.of(context).shadowColor,
+          padding: EdgeInsets.zero,
+          children: [ReplyStatsCard(stats: stats)],
+        ),
+      ],
+    );
+  }
+
+  /// `‹ 1/2 ›`, with "writing" (or "2 writing") beside it while a reply is being written under one of the versions
+  /// (on the side away from the edge the row is at, so the arrows do not move when it comes and goes).
+  Widget _versions(BuildContext context, {required bool mine}) {
+    final m = widget.message;
+    final i = widget.index;
+    final flip = widget.onFlip;
+    final writing = widget.writing == null
+        ? null
+        : Padding(
+            padding: EdgeInsets.only(left: mine ? 0 : 6, right: mine ? 6 : 0),
+            child: Text(
+              widget.writing!,
+              key: Key('version-writing-$i'),
+              style: TextStyle(fontSize: 12, color: context.colors.textMuted),
+            ),
+          );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (mine && writing != null) writing,
+        _button(
+          context,
+          key: Key('version-prev-$i'),
+          icon: Icons.chevron_left_rounded,
+          tooltip: 'Previous version',
+          onTap: flip == null || m.version == 0 ? null : () => flip(-1),
+          size: 22,
+        ),
+        Text(
+          '${m.version + 1}/${m.versions}',
+          key: Key('version-$i'),
+          style: TextStyle(fontSize: 12, color: context.colors.textMuted, fontFeatures: const [FontFeature.tabularFigures()]),
+        ),
+        _button(
+          context,
+          key: Key('version-next-$i'),
+          icon: Icons.chevron_right_rounded,
+          tooltip: 'Next version',
+          onTap: flip == null || m.version >= m.versions - 1 ? null : () => flip(1),
+          size: 22,
+        ),
+        if (!mine && writing != null) writing,
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final mine = widget.message.role == Role.user;
-    final shown = widget.actions && (_hovered || _copied);
+    final shown = widget.actions && (_hovered || _copied || _cardOpen || widget.always);
+    // (Also on the reply being written, whose other buttons wait until it is done.)
+    final versions = widget.message.versions > 1;
     final i = widget.index;
+    final blocked = widget.blocked;
+    // (A sent message is at the right edge, so its versions go at the right end of the row and the buttons grow to
+    // their left: the arrows stay where they are when the pointer arrives.)
+    final buttons = [
+      _button(
+        context,
+        key: Key('copy-$i'),
+        icon: _copied ? Icons.check_rounded : Icons.copy_rounded,
+        tooltip: _copied ? 'Copied' : 'Copy',
+        onTap: _copy,
+      ),
+      if (widget.onEdit != null)
+        _button(
+          context,
+          key: Key('edit-$i'),
+          icon: Icons.edit_outlined,
+          tooltip: blocked ?? 'Edit',
+          onTap: blocked == null ? widget.onEdit : null,
+        ),
+      if (widget.onRegenerate != null)
+        _button(
+          context,
+          key: Key('regenerate-$i'),
+          icon: Icons.refresh_rounded,
+          tooltip: blocked ?? 'Regenerate',
+          onTap: blocked == null ? widget.onRegenerate : null,
+        ),
+      if (widget.bookmarked case final on?)
+        _button(
+          context,
+          key: Key('bookmark-$i'),
+          icon: on ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+          tooltip: on ? 'Remove bookmark' : 'Bookmark',
+          onTap: widget.onBookmark,
+        ),
+      if (widget.message.stats case final stats? when !stats.isEmpty) _statsButton(context, stats),
+    ];
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -1044,25 +1316,13 @@ class _MessageWithActionsState extends State<_MessageWithActions> {
           widget.child,
           SizedBox(
             height: _MessageWithActions.room,
-            child: shown
+            child: shown || versions
                 ? Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _button(
-                        context,
-                        key: Key('copy-$i'),
-                        icon: _copied ? Icons.check_rounded : Icons.copy_rounded,
-                        tooltip: _copied ? 'Copied' : 'Copy',
-                        onTap: _copy,
-                      ),
-                      if (widget.bookmarked case final on?)
-                        _button(
-                          context,
-                          key: Key('bookmark-$i'),
-                          icon: on ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-                          tooltip: on ? 'Remove bookmark' : 'Bookmark',
-                          onTap: widget.onBookmark,
-                        ),
+                      if (versions && !mine) _versions(context, mine: false),
+                      if (shown) ...buttons,
+                      if (versions && mine) _versions(context, mine: true),
                     ],
                   )
                 : null,
@@ -1168,7 +1428,7 @@ class _BookmarkRailState extends State<_BookmarkRail> {
                     for (final ch in widget.bookmarks)
                       InkWell(
                         key: Key('bookmark-row-${ch.index}'),
-                        hoverColor: c.selected,
+                        hoverColor: c.rowHover,
                         onTap: () {
                           setState(() => _open = false);
                           widget.onJump(ch.index);
@@ -1239,12 +1499,17 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
   late String _draft;
   static final _cursors = <String, TextSelection>{};
 
+  /// The box holds the text of the message being edited, not a draft: what is typed is not kept as the draft, which
+  /// is still there when the editing ends.
+  var _editing = false;
+
   @override
   void initState() {
     super.initState();
     _shown = this;
     final chats = ref.read(chatsProvider);
     _load(draftKey(chats.openId, chats.kind));
+    if (chats.editing != null && chats.editing!.chatId == chats.openId) _loadEdit();
     _text.addListener(_typed);
   }
 
@@ -1257,10 +1522,29 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
     super.dispose();
   }
 
-  /// Every change of the text (or the cursor) is kept as the draft.
+  /// Every change of the text (or the cursor) is kept as the draft (while a message is edited, as the text of the
+  /// edit).
   void _typed() {
+    if (_editing) {
+      ref.read(chatsProvider.notifier).editText = _text.text;
+      return;
+    }
     ref.read(draftsProvider.notifier).set(_draft, _text.text);
     _cursors[_draft] = _text.selection;
+  }
+
+  /// Puts the text of the message being edited in the box, the cursor at its end.
+  void _loadEdit() {
+    _editing = true;
+    final text = ref.read(chatsProvider.notifier).editText ?? '';
+    _text.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
+  }
+
+  /// The editing is over (sent or cancelled): the draft that was in the box comes back.
+  void _endEdit() {
+    _editing = false;
+    final chats = ref.read(chatsProvider);
+    _load(draftKey(chats.openId, chats.kind));
   }
 
   /// Puts draft [key] in the box, the cursor where it was left (else at the end).
@@ -1275,15 +1559,47 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
   }
 
   void _send() {
-    final model = ref.read(pickedModelProvider);
+    final model = ref.read(shownModelProvider);
     final chats = ref.read(chatsProvider);
     final text = _text.text;
-    if (model == null || chats.replyingId != null || text.trim().isEmpty) return;
+    if (model == null || chats.replyingId != null || ref.read(benchmarkProvider).running) return;
+    if (chats.editing != null && chats.editing!.chatId == chats.openId) {
+      // The new version of the message being edited (the box returns to its draft once it is sent).
+      if (text.trim().isNotEmpty) ref.read(chatsProvider.notifier).sendEdit(text, model.file);
+      _focus.requestFocus();
+      return;
+    }
+    if (text.trim().isEmpty) {
+      // An empty box and a queue on hold: Enter starts the queue again.
+      if (ref.read(queueProvider)[chats.openId]?.hold != null) ref.read(chatsProvider.notifier).sendQueued(model.file);
+      return;
+    }
     // (An opened chat whose messages are still on their way cannot take a message yet: the text stays.)
     if (chats.openId != null && chats.open == null) return;
     // Emptied first, so the draft it came from (a new chat's, which becomes this chat) is gone too.
     _text.clear();
     ref.read(chatsProvider.notifier).send(text, model.file);
+    _focus.requestFocus();
+  }
+
+  /// Ctrl+Enter: during this chat's reply, the message waits for its turn; otherwise it is sent as with Enter.
+  void _sendOrQueue() {
+    final chats = ref.read(chatsProvider);
+    final id = chats.openId;
+    if (id == null || chats.replyingId != id || chats.editing != null) return _send();
+    final text = _text.text.trim();
+    if (text.isEmpty) return;
+    _text.clear();
+    ref.read(queueProvider.notifier).add(id, text);
+    _focus.requestFocus();
+  }
+
+  /// A waiting message clicked: it comes back to the box to be changed (after anything already typed there).
+  void _editQueued(String chatId, QueuedMessage message) {
+    ref.read(queueProvider.notifier).remove(chatId, message.id);
+    final typed = _text.text;
+    _text.text = typed.trim().isEmpty ? message.text : '$typed\n${message.text}';
+    _text.selection = TextSelection.collapsed(offset: _text.text.length);
     _focus.requestFocus();
   }
 
@@ -1293,27 +1609,92 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
     // Opening another chat (or a new one) puts the cursor back in the box, with that chat's draft.
     ref.listen(chatsProvider.select((s) => s.openId), (_, _) => _focus.requestFocus());
     ref.listen(chatsProvider.select((s) => draftKey(s.openId, s.kind)), (_, key) => _load(key));
-    final model = ref.watch(pickedModelProvider);
+    // A message to edit comes into the box; when the editing ends, the draft comes back.
+    ref.listen(chatsProvider.select((s) => s.editing), (before, now) {
+      if (now != null && (before == null || before.node != now.node || before.chatId != now.chatId)) {
+        _loadEdit();
+        _focus.requestFocus();
+      } else if (now == null && before != null && _editing) {
+        _endEdit();
+      }
+    });
+    final model = ref.watch(shownModelProvider);
     final chats = ref.watch(chatsProvider);
     final replyingHere = chats.replyingId != null && chats.replyingId == chats.openId;
     final replyingElsewhere = chats.replyingId != null && !replyingHere;
 
+    final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
+    // Why Send cannot be pressed now: the engine is busy with something else.
+    final String? busy = _sendBlock(chats, benchmarking, hereToo: false);
     final String? hint = model == null
         ? 'Download a model from the Store to start chatting.'
+        : benchmarking
+        ? 'A benchmark is running.'
         : replyingElsewhere
         ? 'Wait for the reply in "${chats.byId(chats.replyingId)?.title}" to finish.'
         : null;
 
+    final failure = chats.replyingId == null && chats.failure?.chatId == chats.openId ? chats.failure : null;
+    final canThink = model != null && model.model.thinking != ModelThinking.none;
+    final queue = ref.watch(queueProvider)[chats.openId];
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (failure != null) _EngineFailureCard(failure),
+        if (chats.openId != null && queue != null)
+          _QueueRows(
+            chatId: chats.openId!,
+            queue: queue,
+            canSend: model != null && chats.replyingId == null && !benchmarking,
+            onSendNext: () => ref.read(chatsProvider.notifier).sendQueued(model!.file),
+            onEdit: (message) => _editQueued(chats.openId!, message),
+          ),
+        if (canThink)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ThinkingToggle(canChoose: model.model.thinking == ModelThinking.optional),
+          ),
         if (hint != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              hint,
-              key: const Key('box-hint'),
-              style: TextStyle(fontSize: 13, color: c.textMuted),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  hint,
+                  key: const Key('box-hint'),
+                  style: TextStyle(fontSize: 13, color: c.textMuted),
+                ),
+                if (benchmarking) ...[
+                  const SizedBox(width: 6),
+                  AppButton(
+                    key: const Key('to-benchmark'),
+                    label: 'Open it',
+                    dense: true,
+                    onTap: () {
+                      ref.read(engineTabProvider.notifier).show(benchmark: true);
+                      ref.read(sectionProvider.notifier).select(Section.engine);
+                    },
+                  ),
+                ],
+              ],
+            ),
+          ),
+        if (chats.editing != null && chats.editing!.chatId == chats.openId)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Editing message · ', key: const Key('editing-note'), style: TextStyle(fontSize: 13, color: c.textMuted)),
+                AppButton(
+                  key: const Key('edit-cancel'),
+                  label: 'Cancel',
+                  dense: true,
+                  onTap: () => ref.read(chatsProvider.notifier).cancelEdit(),
+                ),
+              ],
             ),
           ),
         LookBox(
@@ -1342,8 +1723,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
                 child: CallbackShortcuts(
                   bindings: {
                     const SingleActivator(LogicalKeyboardKey.enter): _send,
-                    // Ctrl+Enter does nothing here (kept for later; it would start a new line otherwise).
-                    const SingleActivator(LogicalKeyboardKey.enter, control: true): () {},
+                    const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendOrQueue,
                   },
                   child: TextField(
                     controller: _text,
@@ -1365,22 +1745,21 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
               ),
               const SizedBox(width: 8),
               replyingHere
-                  ? _RoundButton(
+                  ? AppIconButton(
                       key: const Key('stop'),
                       tooltip: 'Stop',
                       icon: Icons.stop_rounded,
-                      fill: Colors.transparent,
-                      iconColor: c.text,
-                      border: c.inputBorder,
+                      look: IconButtonLook.outlined,
+                      round: true,
                       onTap: () => ref.read(chatsProvider.notifier).stop(),
                     )
-                  : _RoundButton(
+                  : AppIconButton(
                       key: const Key('send'),
-                      tooltip: 'Send',
+                      tooltip: busy ?? 'Send',
                       icon: Icons.arrow_upward,
-                      fill: hint == null ? c.text : c.switchTrack,
-                      iconColor: hint == null ? c.page : c.textMuted,
-                      onTap: _send,
+                      look: IconButtonLook.main,
+                      round: true,
+                      onTap: busy == null && hint == null ? _send : null,
                     ),
             ],
           ),
@@ -1390,36 +1769,176 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
   }
 }
 
-class _RoundButton extends StatelessWidget {
-  const _RoundButton({
-    super.key,
-    required this.tooltip,
-    required this.icon,
-    required this.fill,
-    required this.iconColor,
-    required this.onTap,
-    this.border,
+/// The messages waiting for their turn, one line each: X removes one, a click brings it back to the box, dragging
+/// changes the order. On hold, a small line says so and offers Send next.
+class _QueueRows extends ConsumerWidget {
+  const _QueueRows({
+    required this.chatId,
+    required this.queue,
+    required this.canSend,
+    required this.onSendNext,
+    required this.onEdit,
   });
 
-  final String tooltip;
-  final IconData icon;
-  final Color fill;
-  final Color iconColor;
-  final Color? border;
+  final String chatId;
+  final ChatQueue queue;
+  final bool canSend;
+  final VoidCallback onSendNext;
+  final void Function(QueuedMessage) onEdit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final notifier = ref.read(queueProvider.notifier);
+    final messages = queue.messages;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (queue.hold != null)
+            Row(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Text('On hold', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+                ),
+                const Spacer(),
+                AppButton(
+                  key: const Key('queue-send-next'),
+                  label: 'Send next',
+                  dense: true,
+                  onTap: canSend ? onSendNext : null,
+                ),
+              ],
+            ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 172),
+            child: ReorderableList(
+              shrinkWrap: true,
+              itemCount: messages.length,
+              onReorderItem: (from, to) => notifier.move(chatId, from, to),
+              proxyDecorator: (child, _, _) => Material(type: MaterialType.transparency, child: child),
+              itemBuilder: (context, i) => ReorderableDragStartListener(
+                key: ValueKey(messages[i].id),
+                index: i,
+                enabled: messages.length > 1,
+                child: _QueueRow(
+                  message: messages[i],
+                  onTap: () => onEdit(messages[i]),
+                  onRemove: () => notifier.remove(chatId, messages[i].id),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QueueRow extends StatelessWidget {
+  const _QueueRow({required this.message, required this.onTap, required this.onRemove});
+
+  final QueuedMessage message;
   final VoidCallback onTap;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: fill,
-        shape: CircleBorder(side: border == null ? BorderSide.none : BorderSide(color: border!)),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: SizedBox(width: 34, height: 34, child: Icon(icon, size: 18, color: iconColor)),
+    final c = context.colors;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        key: Key('queued-${message.id}'),
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+          decoration: BoxDecoration(
+            color: c.inputFill,
+            border: Border.all(color: c.inputBorder),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  message.text.replaceAll('\n', ' '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13.5, color: c.textSecondary),
+                ),
+              ),
+              const SizedBox(width: 6),
+              AppIconButton(
+                key: Key('queued-remove-${message.id}'),
+                tooltip: 'Remove',
+                icon: Icons.close,
+                round: true,
+                muted: true,
+                size: 24,
+                iconSize: 14,
+                tooltipWait: const Duration(milliseconds: 1500),
+                onTap: onRemove,
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// The engine could not write the reply: what happened, its last lines of output, and Try again.
+class _EngineFailureCard extends ConsumerWidget {
+  const _EngineFailureCard(this.failure);
+
+  final ReplyFailure failure;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    // (Writing the reply again starts the engine, which a benchmark has.)
+    final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
+    return Container(
+      key: const Key('engine-failure'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 10, 8, 8),
+      decoration: BoxDecoration(
+        color: c.inputFill,
+        border: Border.all(color: c.inputBorder),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: SelectableText(failure.message, style: TextStyle(fontSize: 14, height: 1.4, color: c.text))),
+              AppButton(
+                key: const Key('engine-try-again'),
+                label: 'Try again',
+                onTap: benchmarking ? null : () => ref.read(chatsProvider.notifier).retry(),
+              ),
+            ],
+          ),
+          if (failure.log.isNotEmpty)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 130),
+              child: SingleChildScrollView(
+                reverse: true,
+                child: SelectableText(
+                  failure.log.join('\n'),
+                  style: TextStyle(fontSize: 12, height: 1.4, color: c.textMuted, fontFamily: 'monospace'),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

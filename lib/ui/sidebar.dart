@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -14,7 +15,9 @@ import '../state/search.dart';
 import '../state/section.dart';
 import '../state/today.dart';
 import '../theme.dart';
+import 'buttons.dart';
 import 'chat_list.dart';
+import 'clicky.dart';
 import 'look.dart';
 import 'marked_text.dart';
 import 'title_bar.dart';
@@ -179,6 +182,13 @@ class _FullBody extends ConsumerWidget {
           onTap: () => select(Section.store),
         ),
         _Row(
+          key: const Key('engine'),
+          icon: Icons.memory_outlined,
+          label: 'Engine',
+          selected: section == Section.engine,
+          onTap: () => select(Section.engine),
+        ),
+        _Row(
           icon: Icons.settings_outlined,
           label: 'Settings',
           selected: section == Section.settings,
@@ -250,6 +260,13 @@ class _RailBody extends ConsumerWidget {
           onTap: () => select(Section.store),
         ),
         _IconAction(
+          key: const Key('engine'),
+          icon: Icons.memory_outlined,
+          tooltip: 'Engine',
+          selected: section == Section.engine,
+          onTap: () => select(Section.engine),
+        ),
+        _IconAction(
           icon: Icons.settings_outlined,
           tooltip: 'Settings',
           selected: section == Section.settings,
@@ -277,20 +294,13 @@ class _IconAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = context.colors;
-    return Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 400),
-      child: Material(
-        color: selected ? c.selected : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          hoverColor: c.selected,
-          onTap: onTap,
-          child: SizedBox(width: 36, height: 36, child: Icon(icon, size: 18, color: selected ? c.text : c.sideText)),
-        ),
-      ),
+    return AppIconButton(
+      icon: icon,
+      tooltip: tooltip,
+      onTap: onTap,
+      size: 36,
+      chosen: selected,
+      color: context.colors.sideText,
     );
   }
 }
@@ -360,16 +370,14 @@ class _SearchBoxState extends ConsumerState<_SearchBox> {
                 ),
               ),
             ),
-            Tooltip(
-              message: 'Close search',
-              waitDuration: const Duration(milliseconds: 400),
-              child: InkWell(
-                key: const Key('search-close'),
-                borderRadius: BorderRadius.circular(6),
-                hoverColor: c.selected,
-                onTap: close,
-                child: SizedBox(width: 30, height: 30, child: Icon(Icons.close, size: 16, color: c.textSecondary)),
-              ),
+            AppIconButton(
+              key: const Key('search-close'),
+              icon: Icons.close,
+              tooltip: 'Close search',
+              onTap: close,
+              size: 30,
+              iconSize: 16,
+              radius: 6,
             ),
             const SizedBox(width: 2),
           ],
@@ -429,13 +437,13 @@ List<({String id, void Function() open})> sidebarOrder(WidgetRef ref) {
 void openHit(WidgetRef ref, ChatHit hit) {
   final chats = ref.read(chatsProvider);
   ref.read(sectionProvider.notifier).select(Section.of(chats.byId(hit.chatId)?.kind ?? chats.kind));
-  ref.read(chatsProvider.notifier).open(hit.chatId);
   final find = ref.read(findProvider.notifier);
-  final index = hit.messageIndex;
-  if (index == null) {
+  final node = hit.messageIndex;
+  if (node == null) {
+    ref.read(chatsProvider.notifier).open(hit.chatId);
     find.close();
   } else {
-    find.show(chatId: hit.chatId, query: SearchQuery.parse(ref.read(searchProvider).text), messageIndex: index);
+    unawaited(find.showHit(chatId: hit.chatId, query: SearchQuery.parse(ref.read(searchProvider).text), node: node));
   }
 }
 
@@ -520,12 +528,13 @@ class _HitRow extends ConsumerWidget {
     final lineStyle = TextStyle(fontSize: 12.5, color: c.sideMuted);
 
     return Material(
-      color: selected ? c.selected : Colors.transparent,
+      color: selected ? c.rowSelected : Colors.transparent,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         key: Key('hit-${hit.chatId}'),
         borderRadius: BorderRadius.circular(8),
-        hoverColor: c.selected,
+        hoverColor: selected ? c.rowSelected : c.rowHover,
+        highlightColor: c.rowPressed,
         onTap: () => openHit(ref, hit),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
@@ -586,20 +595,19 @@ class _SectionSwitch extends StatelessWidget {
     Widget half(Section s, String label) {
       final on = section == s;
       return Expanded(
-        child: GestureDetector(
+        child: Clicky(
           key: Key('section-${s.name}'),
+          radius: 6,
+          selected: on,
           onTap: () => onSelect(s),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: Container(
-              height: 30,
-              alignment: Alignment.center,
-              color: Colors.transparent,
-              child: AnimatedDefaultTextStyle(
-                duration: _slide,
-                style: TextStyle(fontSize: 13, color: on ? c.text : c.sideText),
-                child: Text(label),
-              ),
+          child: Container(
+            height: 30,
+            alignment: Alignment.center,
+            color: Colors.transparent,
+            child: AnimatedDefaultTextStyle(
+              duration: _slide,
+              style: TextStyle(fontSize: 13, color: on ? c.text : c.sideText),
+              child: Text(label),
             ),
           ),
         ),
@@ -650,11 +658,12 @@ class _Row extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     return Material(
-      color: selected ? c.selected : Colors.transparent,
+      color: selected ? c.rowSelected : Colors.transparent,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
-        hoverColor: c.selected,
+        hoverColor: selected ? c.rowSelected : c.rowHover,
+        highlightColor: c.rowPressed,
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),

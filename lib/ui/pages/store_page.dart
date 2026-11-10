@@ -5,6 +5,7 @@ import '../../data/models.dart';
 import '../../state/library.dart';
 import '../../state/providers.dart';
 import '../../theme.dart';
+import '../buttons.dart';
 
 /// The Store: selected models, grouped by company / lab.
 class StorePage extends ConsumerWidget {
@@ -137,17 +138,7 @@ class _FileRow extends ConsumerWidget {
         _TextAction(label: 'Cancel', onTap: () => notifier.cancel(file.id)),
       ]);
     } else {
-      action = OutlinedButton.icon(
-        onPressed: () => notifier.download(file),
-        icon: const Icon(Icons.download, size: 16),
-        label: const Text('Download'),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: c.text,
-          side: BorderSide(color: c.inputBorder),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          visualDensity: VisualDensity.compact,
-        ),
-      );
+      action = AppButton(label: 'Download', icon: Icons.download, dense: true, onTap: () => notifier.download(file));
     }
 
     return Padding(
@@ -170,15 +161,5 @@ class _TextAction extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
-    return TextButton(
-      onPressed: onTap,
-      style: TextButton.styleFrom(
-        foregroundColor: context.colors.textSecondary,
-        visualDensity: VisualDensity.compact,
-        textStyle: const TextStyle(fontSize: 13),
-      ),
-      child: Text(label),
-    );
-  }
+  Widget build(BuildContext context) => AppButton(label: label, dense: true, onTap: onTap);
 }

@@ -170,7 +170,22 @@ class DummyBackend implements Backend {
   static Future<String> story() => rootBundle.loadString('assets/dummy/story.txt');
 
   @override
-  Stream<String> reply({required String chatId, required ModelFile model, required List<ChatMessage> messages}) async* {
+  Stream<ReplyEvent> reply({
+    required String chatId,
+    required ModelFile model,
+    required List<ChatMessage> messages,
+    required EngineRun run,
+    bool thinking = false,
+    int? maxTokens,
+  }) => _write(messages).map(ReplyText.new);
+
+  @override
+  Map<int, String> autoCommands(ModelFile file) => const {defaultContextLength: '-c $defaultContextLength'};
+
+  @override
+  int maxContext(ModelFile file) => defaultContextLength;
+
+  Stream<String> _write(List<ChatMessage> messages) async* {
     final asked = messages.lastWhere((m) => m.role == Role.user, orElse: () => const ChatMessage(Role.user, '')).text;
     final text = _asksForStory(asked) ? (await story()).trim() : fixedReply ?? commonReply(asked) ?? _pick(messages);
     final tokens = splitTokens(text);

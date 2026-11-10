@@ -16,6 +16,7 @@ import '../state/folds.dart';
 import '../state/section.dart';
 import '../state/today.dart';
 import '../theme.dart';
+import 'buttons.dart';
 import 'menu_panel.dart';
 
 /// Saved chats: the pinned ones first, in the user's order, then all of them (the pinned ones too) under the day they
@@ -254,7 +255,8 @@ class _ChatListState extends ConsumerState<ChatList> {
         InkWell(
           key: const Key('archive-back'),
           borderRadius: BorderRadius.circular(6),
-          hoverColor: c.text.withValues(alpha: 0.04),
+          hoverColor: c.rowHover,
+          highlightColor: c.rowPressed,
           onTap: () => ref.read(archiveViewProvider.notifier).close(state.kind),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(4, 10, 8, 6),
@@ -299,7 +301,8 @@ class _ChatListState extends ConsumerState<ChatList> {
           child: InkWell(
             key: Key('heading-${g.heading}'),
             borderRadius: BorderRadius.circular(6),
-            hoverColor: c.text.withValues(alpha: 0.04),
+            hoverColor: c.rowHover,
+            highlightColor: c.rowPressed,
             onTap: () => ref.read(foldsProvider.notifier).toggle(state.kind, g.fold, shownFolds),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
@@ -768,11 +771,12 @@ class _ChatRowState extends ConsumerState<ChatRow> {
 
     final showMenuButton = _hovered || _menuOpen;
     final row = Material(
-      color: widget.selected || _menuOpen ? c.selected : Colors.transparent,
+      color: widget.selected || _menuOpen ? c.rowSelected : Colors.transparent,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
-        hoverColor: c.selected,
+        hoverColor: widget.selected || _menuOpen ? c.rowSelected : c.rowHover,
+        highlightColor: c.rowPressed,
         onTap: _open,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
@@ -797,6 +801,7 @@ class _ChatRowState extends ConsumerState<ChatRow> {
                       child: InkWell(
                         key: Key('chat-menu-${widget.chat.id}'),
                         borderRadius: BorderRadius.circular(4),
+                        hoverColor: c.rowPressed,
                         onTap: _toggleMenuFromButton,
                         child: Icon(Icons.more_horiz, size: 18, color: c.textSecondary),
                       ),
@@ -828,7 +833,7 @@ class _ChatRowState extends ConsumerState<ChatRow> {
       minimumSize: const Size(168, 34),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-    ).copyWith(overlayColor: WidgetStatePropertyAll(c.selected));
+    ).copyWith(overlayColor: WidgetStatePropertyAll(c.rowHover));
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -1038,30 +1043,11 @@ class _DeleteBoxState extends State<_DeleteBox> {
   final _delete = FocusNode(debugLabel: 'delete');
 
   @override
-  void initState() {
-    super.initState();
-    // The ring follows the choice.
-    _cancel.addListener(_changed);
-    _delete.addListener(_changed);
-  }
-
-  void _changed() => setState(() {});
-
-  @override
   void dispose() {
     _cancel.dispose();
     _delete.dispose();
     super.dispose();
   }
-
-  /// A ring around the chosen button, a little outside it.
-  Widget _ring(FocusNode node, Color color, Widget button) => DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(11),
-          border: Border.all(color: node.hasFocus ? color : Colors.transparent, width: 2),
-        ),
-        child: Padding(padding: const EdgeInsets.all(2), child: button),
-      );
 
   @override
   Widget build(BuildContext context) {
@@ -1083,33 +1069,22 @@ class _DeleteBoxState extends State<_DeleteBox> {
         ),
         actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         actions: [
-          _ring(
-            _cancel,
-            c.textSecondary,
-            TextButton(
-              key: const Key('delete-cancel'),
-              focusNode: _cancel,
-              onPressed: () => Navigator.pop(context, false),
-              style: TextButton.styleFrom(foregroundColor: c.textSecondary),
-              child: const Text('Cancel'),
-            ),
+          // The ring shows which one Enter chooses.
+          AppButton(
+            key: const Key('delete-cancel'),
+            label: 'Cancel',
+            focusNode: _cancel,
+            ringAlways: true,
+            onTap: () => Navigator.pop(context, false),
           ),
-          _ring(
-            _delete,
-            c.danger,
-            FilledButton(
-              key: const Key('delete-confirm'),
-              focusNode: _delete,
-              autofocus: true,
-              onPressed: () => Navigator.pop(context, true),
-              style: FilledButton.styleFrom(
-                backgroundColor: c.danger,
-                // The light red on dark needs dark text.
-                foregroundColor: Theme.of(context).brightness == Brightness.dark ? c.page : Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              child: const Text('Delete'),
-            ),
+          MainButton(
+            key: const Key('delete-confirm'),
+            label: 'Delete',
+            danger: true,
+            focusNode: _delete,
+            autofocus: true,
+            ringAlways: true,
+            onTap: () => Navigator.pop(context, true),
           ),
         ],
       ),

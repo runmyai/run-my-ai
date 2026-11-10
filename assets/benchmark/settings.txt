@@ -1,0 +1,423 @@
+# Settings
+
+Each mechanism is a flag. Most are off by default, so plain TokenWing behaves like llama.cpp; the autotuner sets the values for your machine and model. `--help` prints the same text, and the rest of llama.cpp's settings.
+
+## Model and context
+
+| Flag | What it does |
+|---|---|
+| `-c, --ctx-size N` | size of the prompt context (default: 0, 0 = loaded from model) (env: LLAMA_ARG_CTX_SIZE) |
+| `-n, --predict, --n-predict N` | number of tokens to predict (default: -1, -1 = infinity) (env: LLAMA_ARG_N_PREDICT) |
+| `--swa-full` | use full-size SWA cache (default: false) [(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055) (env: LLAMA_ARG_SWA_FULL) |
+| `-fa, --flash-attn [on\|off\|auto]` | set Flash Attention use ('on', 'off', or 'auto', default: 'auto') (env: LLAMA_ARG_FLASH_ATTN) |
+| `-ctk, --cache-type-k TYPE` | KV cache data type for K allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1 (default: f16) (env: LLAMA_ARG_CACHE_TYPE_K) |
+| `-ctv, --cache-type-v TYPE` | KV cache data type for V allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1 (default: f16) (env: LLAMA_ARG_CACHE_TYPE_V) |
+| `-np, --parallel N` | number of server slots (default: -1, -1 = auto) (env: LLAMA_ARG_N_PARALLEL) |
+| `-m, --model FNAME` | model path to load (env: LLAMA_ARG_MODEL) |
+| `--host HOST` | IP addresses to listen on, comma-separated, or UNIX socket paths ending in .sock; with multiple TCP addresses, :: binds IPv6 only; overlapping addresses result in undefined behavior (default: 127.0.0.1) (env: LLAMA_ARG_HOST) |
+| `--port PORT` | port to listen (default: 8080) (env: LLAMA_ARG_PORT) |
+| `--api-key KEY` | API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none) (env: LLAMA_API_KEY) |
+| `--api-key-file FNAME` | path to file containing API keys, one per line; lines starting with a hash are treated as comments (default: none) (env: LLAMA_ARG_API_KEY_FILE) |
+
+## The experts file and pools
+
+| Flag | What it does |
+|---|---|
+| `--moe-stream PATH` | stream the routed MoE experts from the repacked sidecar described by PATH (the "<sidecar>.json" of tokenwing-tools/experts/expert_repack.py) into per-layer slot pools in RAM instead of reading them from the model file. The word `model` streams from the model file itself, which then has to be a TokenWing model file (tokenwing-tools/experts/make_model_file.py: the same GGUF with every tensor on a 4096-byte boundary, checksums of sample experts, and optional data appended after the last tensor), so one file is all there is; any other file is refused with one line. A read of an expert is then one request per projection (gate, up, down), each at its own place in the file |
+| `--moe-stream-slots N` | expert slots per MoE layer for --moe-stream, must be >= 3*moe_expert_used and <= the number of experts a layer has (default: as many as the RAM budget pays for, see --moe-stream-ram) |
+| `--moe-stream-plan-only` | print the plan of --moe-stream (slots, pool RAM, streamed layers) and stop, loading nothing |
+
+## RAM
+
+| Flag | What it does |
+|---|---|
+| `--moe-stream-hugepages 0\|1` | allocate the expert pools 2 MiB-aligned and madvise(MADV_HUGEPAGE) them, so that a 3.13 MB expert slice spans 2 page-table entries instead of about 765 4 KiB ones (default: 0 = off, since no MoE measurement of THP exists) |
+| `--moe-stream-pin 0\|1` | register the expert pools with the CUDA driver (cudaHostRegister) so that RAM->VRAM copies run at full speed and the pool cannot be swapped (default: 0 = off; needs a CUDA context, and the registration of a 20 GiB pool takes seconds) |
+| `--moe-stream-nonpool-measured 0\|1` | 1 = the memory held back outside the expert pools comes from this run's own needs: the KV cache, the host compute buffers and the rest of the process are measured in the run and kept in a record next to the sidecar (<sidecar>.nonpool.txt, or <model>.gguf.nonpool.txt next to the model file with --moe-stream model; one line per set of settings); the next start with the same settings sizes the pools from it. Without a record: the fixed reserve. A start that needs more than planned gives back slots, one line (default: 0) |
+| `--moe-stream-nonpool-growth SIZE` | with --moe-stream-nonpool-measured 1: bytes held back on top of the record (default: 128MiB) |
+| `--moe-stream-ram SIZE` | RAM budget for the --moe-stream expert pools, e.g. 20GiB; the slots per MoE layer follow from it. It is a cap: the pools never take more than what the machine can spare (see --moe-stream-ram-free), and --moe-stream-slots wins over both |
+| `--moe-stream-ram-free SIZE` | RAM to keep free for everything else, so the expert pools are sized from what the machine can spare: MemAvailable - this - the weights that stay in RAM. A negative value keeps no margin (default: 2.5GiB) |
+| `--moe-stream-other-rest SIZE` | llama-server with --moe-stream: the memory the rest of the process uses next to the pools, the weights in RAM and the server's snapshots (the KV cache, the compute buffers, the CUDA host allocations), as measured on one machine and model; what the 1.51GiB non-pool reserve has left above it holds the server's snapshots and its --cache-disk restore buffer, and only what does not fit costs slots (default: 0 = 1093MiB, measured with Ling-3.0-flash at -c 16384 -np 1) |
+
+## Prediction
+
+| Flag | What it does |
+|---|---|
+| `--moe-stream-pred-shared 0\|1` | predict the next layer's experts from the residual plus the *shared* expert's output of this layer, i.e. run the next router on what the residual will be minus the routed part (Colibri's idea; default 0 = off because it makes the prediction wait for the shared expert, which is device work the layer already issued) |
+| `--moe-stream-prefetch 0\|1` | prefetch the experts that the next layer's router predicts (default: 1) |
+| `--moe-stream-prefetch-m M` | experts predicted per token for the next MoE layer (default: 0 = the model's experts per token, e.g. 8 on Ling, 6 on Flint) |
+| `--moe-stream-prefetch-lead N` | MoE layers of lead for the expert prefetcher: 1 predicts the next layer only (default), 2 also guesses the layer after it now and corrects that guess at the next layer |
+| `--moe-stream-prefetch-m2 M` | experts the correction of a two-layer-lead guess covers (default: 0, the same as --moe-stream-prefetch-m; measured 0.855 recall at 16/12 against 0.760 at 8/8) |
+| `--moe-stream-early-order BOOL` | make this layer's expert ids depend on the early-guess op, so the guess is issued before the layer's own expert work instead of whenever the scheduler finds it ready (default: false; the dependency is exact - a zero added to the ids - so the output does not change) |
+| `--moe-stream-needed-early 0\|1` | with --moe-stream-plan 1, a decode word's 1-ahead guess is handed to a helper thread that makes its waiting-list entries (skipped when the guessed layer has already started); the first part of putting the needed reads first and the shared expert and the guess on the GPU during the CPU experts (default: 0). Needs --moe-stream-plan 1 |
+| `--moe-stream-guess-top K` | with --moe-stream-plan 1, a decode word's 1-ahead guess puts its first K ranks on the waiting list: ranks 1..k (the model's pick count) first, then k+1..K, read in the drive's spare time like every list entry; K must be >= k and <= 32; prompt ubatches keep --moe-stream-prefetch-m (default: 0 = off, the guess width is --moe-stream-prefetch-m). Needs --moe-stream-plan 1 |
+| `--moe-stream-lookahead N` | each streamed layer also guesses the streamed layers 2..N ahead (the recorder's lead-d guess: the target's router on this layer's guess input); the waiting list keeps votes and the latest rank per entry and is re-sorted once per layer (live before dropped, top k before extra ranks, nearest target, more votes, better rank) (default: 2, recommended; 1 = the 1-ahead guess only, max 8). N > 1 needs --moe-stream-plan 1 and --moe-stream-drop-stale 1: without them the default falls back to 1 by itself and a value you give is switched off with one line; only decode calls of one token use it (other call shapes keep the 1-ahead guess); refused at load on an architecture whose graph does not build the far guesses |
+| `--moe-stream-guess-pace B` | with --moe-stream-lookahead N > 1, a far guess (2 or more layers ahead) adds at most B new waiting-list entries for its target; its other names still vote (default: 1; unused at N = 1) |
+| `--moe-stream-guess-combined 0\|1` | with --moe-stream-lookahead N > 1, a layer's N guesses in one step - one norm, one multiply by the N targets' gains, the N router products in one op (each row by the same matmul code as a separate guess), one gating, one top-k with a bias per row - bit-identical to the separate ops (default: 0 = the separate ops) |
+| `--moe-stream-wordstart D` | in a decode word of one token, the last D layers before the first streamed layer (VRAM MoE layers, or dense layers) each guess the streamed layers 1..N ahead of them (N = --moe-stream-lookahead), as a streamed layer guesses; one CPU op after the last of them adds the guesses to the waiting list in the order the layers ran. D above the number of layers before the first streamed one is clamped. Needs --moe-stream-plan 1 and --moe-stream-drop-stale 1 (default: 0 = off) |
+| `--moe-stream-chance-model FILE` | probability table (JSON) for the 1-ahead guess: read every candidate not in RAM whose probability is at least --moe-stream-read-threshold, best first, instead of the top --moe-stream-prefetch-m (default: off) |
+| `--moe-stream-read-threshold P` | with --moe-stream-chance-model: the probability a 1-ahead candidate needs to be read (default: 0.3) |
+| `--moe-stream-correction FNAME` | the trained correction file of the router-trick guess (tokenwing-tools/correction/make_correction.py, built for Ling 3.0 Flash). For each (layer, lead) pair in the file the guess is made with W' = W_X*g_X + Bt instead of W_X (same product, same cost); the matrices are allocated on the routers' own devices at model load, so a later --moe-stream-vram-free sees them as used VRAM. Needs --moe-stream-pred-shared 1. The model's router tensors may be F32, BF16 or F16 (BF16 and F16 are converted to F32 at load); the selection bias is hashed into the file's model check whenever the model has it and is required only for `bailingmoe3`. A damaged file, another model or quant, or a setting it does not fit = the plain guess and one line saying why, never an abort. The word `model` takes the correction appended to a TokenWing model file (make_model_file.py --correction); a model file without one gives the plain guess and one line (default: unset = the plain guess) |
+| `--moe-stream-guess-skip-full 0\|1` | 1 = with --moe-stream: a reply word's combined guess skips the target layers that hold every expert in RAM (all READY; checked at every call's start, so a layer that loses an expert - a prompt's give-back, an eviction - is guessed again from the next word). The same text; the guess's own CPU work saved where layers are full. CPU-only machines; a GPU machine's guess is unchanged (its skip is --moe-stream-guess-skip-full-gpu) (default: 0) |
+| `--moe-stream-guess-skip-full-gpu 0\|1` | 1 = with --moe-stream-guess-skip-full 1 on a GPU machine: the GPU's combined guess (its router rows) and its top-k skip the target layers that hold every expert in RAM; the engine copies the 'full' bytes to the GPU at each call's start, the kernels read them there (a CUDA GPU; elsewhere nothing changes). The same text (default: 0) |
+
+## SSD reads
+
+| Flag | What it does |
+|---|---|
+| `--moe-stream-io-threads N` | number of threads that read the expert sidecar for --moe-stream (default: 8) |
+| `--moe-stream-overlap 0\|1` | compute a layer's experts whose bytes have already landed while the missing ones are still being read: remap() returns after issuing the reads and ggml's mul_mat_id waits per slot, in a second pass over the experts, so the resident work hides under the read. Lossless - the same columns are computed by the same matmuls - but it moves a wait into the CPU backend, so it is off by default until it is measured |
+| `--moe-stream-chunk KiB` | split every demand read of an expert into chunks of this many bytes, so that the I/O threads serve one read in parallel. With --moe-stream model a chunk is a piece of one projection (gate, up or down) and never crosses into the next, and 0 still means one request per projection (default: 0 = one read per expert) |
+| `--moe-stream-chunk-prefetch KiB` | the same for a prefetch read, which is not on the critical path (default: 0 = one read per expert) |
+| `--moe-stream-demand-last BOOL` | let a queued prefetched read overtake a demand read (default: false, i.e. a demand read, which the compute is waiting for, always overtakes a prefetch) |
+| `--moe-stream-prefetch-inflight N` | cap the guessed reads in flight at once (default: 0, no cap). Measured on one drive that a needed read takes 0.76 ms on an idle drive and ~4.7 ms with eight reads queued, so a wide early guess can make the stall worse than no guess; a needed read never waits for this cap |
+| `--moe-stream-io-wake read\|chunk` | how many I/O threads a queued read wakes: one per read (default) or one per chunk, so the chunks of a guess run in parallel |
+| `--moe-stream-plan 0\|1` | 1 = a decode word's 1-ahead guess puts its experts on a waiting list, and an I/O thread takes a RAM slot for one (and queues its read) only when it has nothing else to read (late binding); the list is empty at every word's end (default: 0 = the plain path, the guess's reads are queued at once). Not with --moe-stream-prefetch-lead > 1, -prefetch-inflight, -early-order, -demand-last, -oracle or -chance-model / -read-threshold |
+| `--moe-stream-drop-stale 0\|1` | with --moe-stream-plan 1, when a layer starts, its waiting-list entries it did not pick are removed (never read, never take a slot), and its started guess reads it did not pick lose their pieces not yet read (the slot is freed); pieces already being read finish (default: 0 = they are read anyway). Needs --moe-stream-plan 1 |
+| `--moe-stream-behind-backlog B` | with --moe-stream-plan 1 and --moe-stream-behind-rank, the drive counts as behind while B or more reads (needed reads and started guess reads, whole reads, waiting or in service) are not finished; while behind, a reader binds only waiting-list entries ranked R or better (the others wait on the list) (default: 0 = off). Needs --moe-stream-plan 1 |
+| `--moe-stream-behind-rank R` | with --moe-stream-behind-backlog: while the drive is behind, waiting-list entries whose rank in their guess (1 = best) is above R wait (default: 0 = off). Needs --moe-stream-plan 1 |
+| `--moe-stream-proj-ready 0\|1` | each RAM slot has a ready flag per projection (gate, up, down), and a needed read is issued as two requests, gate+up first, then down: the expert matmul starts an expert's gate and up as soon as they land, while its down is still being read. Same bytes, same text. Needs --moe-stream-overlap 1 (default: 0 = one flag per slot) |
+| `--moe-stream-guess-inflight G` | with --moe-stream-plan 1, while no needed read is in service, a reader starts a guess piece or binds a list entry only while fewer than G guess pieces are in service (default: 0 = no limit). Needs --moe-stream-plan 1 |
+| `--moe-stream-promote BOOL` | a needed expert whose guess read has chunks still queued moves them to the needed-read queue (default: false) |
+| `--moe-stream-guess-cap N` | while a needed read is queued or running, at most N guess chunks are read at the same time (default: -1 = no cap) |
+| `--moe-stream-guess-cap-refill BOOL` | with --moe-stream-guess-cap: a finished guess chunk wakes a sleeping I/O thread for the freed place while needed reads are in flight (default: false; untested) |
+
+## What stays in RAM
+
+| Flag | What it does |
+|---|---|
+| `--moe-stream-policy NAME` | how a layer's pool evicts: 'lru' (default), 'lfu' (the expert used most often, with every frequency halved every 64 accesses so the score tracks recent use) or 'slru' (a hit promotes a slot out of the probation segment, and victims come from probation first) or 'decay' (the lowest decayed use count, see --moe-stream-evict-halflife; a landed guess nobody used is worth 0, a guess for a layer that has not run yet in this word is kept; decode only, prompts keep lru) |
+| `--moe-stream-protect-named 0\|1` | with --moe-stream-plan 1, while a streamed layer has not started in this decode word, a READY expert that a guess made this word for it named (any distance, any rank) is not a guess read's victim (a bind, at the list or at the pick); a needed read ignores the rule (default: 0 = off) |
+| `--moe-stream-evict-halflife W` | with --moe-stream-policy decay: decode words after which a use counts half (default: 64) |
+| `--moe-stream-evict-credit C` | with --moe-stream-policy decay: value added to an expert the 1-ahead guess ranked in its top 16 but the layer did not choose (default: 0) |
+| `--moe-stream-prompt-end first-use\|recency` | wave order of a prompt's last ubatch: first-use (default) or recency (the experts the end of the prompt used most go last, so they stay in RAM for the reply) |
+| `--moe-stream-prompt-end-halflife T` | with --moe-stream-prompt-end recency: tokens before the end of the prompt after which a use counts half (default: 128) |
+| `--moe-stream-prompt-values BOOL` | with --moe-stream-policy decay: a prompt's expert uses count as decode words would (each use weighs 2^(-tokens to the end / --moe-stream-evict-halflife)), so the reply starts with values from the end of the prompt (default: false) |
+| `--moe-stream-idle-load 0\|1` | 1 = idle-time loading: after the model is loaded, and after every request once no call has come for --moe-stream-idle-pause, EMPTY RAM slots are filled with the most-used experts of the usage table (--moe-stream-usage-file), at the lowest read priority; it never evicts an expert, and a request stops it at once. The table is counted live (picks per expert per layer) and saved next to the sidecar by an atomic replace; the first start reads <table>-seed (counted from recordings) when the table does not exist yet. Not with elastic RAM (default: 0) |
+| `--moe-stream-usage-file FNAME` | the usage table of --moe-stream-idle-load ("tokenwing usage v1"; default: next to the sidecar, <sidecar>.usage.json; its seed is the same name with -seed before .json; with --moe-stream model the default is <model>.gguf.usage.json next to the model file, and with no seed file the usage seed appended to the model file is the seed). Keep it on the internal drive the model streams from |
+| `--moe-stream-idle-pause MS` | with --moe-stream-idle-load 1, no call for this many milliseconds = idle (default: 500) |
+| `--moe-stream-probation BOOL` | make a prefetched slot that nobody used the first eviction victim (default: false, i.e. uncovered prefetches are protected from eviction) |
+
+## VRAM
+
+| Flag | What it does |
+|---|---|
+| `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload) use --list-devices to see a list of available devices (env: LLAMA_ARG_DEVICE) |
+| `-cmoe, --cpu-moe` | keep all Mixture of Experts (MoE) weights in the CPU (env: LLAMA_ARG_CPU_MOE) |
+| `-ncmoe, --n-cpu-moe N` | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU (env: LLAMA_ARG_N_CPU_MOE) |
+| `-ngl, --gpu-layers, --n-gpu-layers N` | max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto) (env: LLAMA_ARG_N_GPU_LAYERS) |
+| `-sm, --split-mode {none,layer,row,tensor}` | how to split the model across multiple GPUs, one of: - none: use one GPU only - layer (default): split layers and KV across GPUs (pipelined) - row: split weight across GPUs by rows (parallelized) - tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL) (env: LLAMA_ARG_SPLIT_MODE) |
+| `-ts, --tensor-split N0,N1,N2,...` | fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1 (env: LLAMA_ARG_TENSOR_SPLIT) |
+| `-fit, --fit [on\|off]` | whether to adjust unset arguments to fit in device memory ('on' or 'off', default: 'on') (env: LLAMA_ARG_FIT) |
+| `-fitt, --fit-target MiB0,MiB1,MiB2,...` | target margin per device for --fit, comma-separated list of values, single value is broadcast across all devices, default: 1024 (env: LLAMA_ARG_FIT_TARGET) |
+| `-fitc, --fit-ctx N` | minimum ctx size that can be set by --fit option, default: 4096 (env: LLAMA_ARG_FIT_CTX) |
+| `--moe-stream-gpu-layers N` | keep the routed experts of N whole MoE layers on the GPU instead of streaming them: they are loaded from the model file and that layer's MoE runs entirely on the GPU, at the cost of one layer's worth of experts (1.494 GiB per layer on Ling-3.0-flash). A negative value fits as many layers as the free VRAM takes (default: -1, which is 4 layers on a 12 GB card at -c 4096; 0 streams every layer) |
+| `--moe-stream-gpu-layers-list LIST` | comma-separated MoE layer indices to keep on the GPU instead of streaming them, e.g. "5,17,38" (takes precedence over --moe-stream-gpu-layers) |
+| `--moe-stream-vram-reserve SIZE` | VRAM to keep free for the KV cache, the compute buffers and the driver when --moe-stream-gpu-layers is negative, so the auto-fit leaves room for them (default: 3.15GiB - the 2GiB measured at 4k ctx plus 1.15GiB that the fit used to over-count, so the placement stays the measured one; raise it for a large -c or -ub) |
+| `--moe-stream-gpu-layers-mode MODE` | which layers --moe-stream-gpu-layers (negative) keeps on the GPU: 'hot' takes the ones a census measured as reading the most, 'last' takes the deepest ones. 'hot' is the default: it is worth 9 % more decode than 'last', and its KLD against no whole layer at all is 0.073, inside the 0.1528 that stock itself pays for putting the routed experts on the host instead of the GPU (tiny, measured) - both orders are rounding of the same weights, not a change of the model. 'hot' uses Ling-3.0-flash's layer ranking (43 blocks); for another model it falls back to shallowest-first and says so on stderr. With --moe-stream model the order is the file <model>.gguf.layer-order.json next to the model file, else the layer order appended to the model file |
+| `--moe-stream-vram-experts N` | keep the first N experts of every streamed MoE layer's ranked list (--moe-stream-vram-experts-file) in VRAM: the GPU computes their pairs, the CPU the rest, and the SSD code never reads them. One VRAM pool for all layers plus n_expert_used all-zero slices, allocated after the KV cache and the compute buffers; the run stops if it does not fit with --moe-stream-vram-experts-margin left. Changes the rounding of those experts (GPU math) (default: 0 = off) |
+| `--moe-stream-vram-experts-file FNAME` | the ranked expert list per MoE layer for --moe-stream-vram-experts (JSON, format "tokenwing vram-experts v1", made by tokenwing-tools/experts/make_vram_list.py). The word `model` takes the list appended to a TokenWing model file (make_model_file.py --vram-list). Each entry is `[expert, score]` or a bare expert id. By default every layer gets the same number of places (the first N of its list). If the file's `counted` text contains the word `non-uniform`, the whole list of every layer is kept and the places of the pool (N per layer on average) are split between the layers by score instead: every layer gets at least one, the rest go to the highest scores across all layers (a tie goes to the lower rank, then the lower layer). Entries without an integer score count as 0. The log prints the places each layer got (default: none) |
+| `--moe-stream-vram-experts-margin SIZE` | VRAM that must still be free after the VRAM expert pool and the compute buffers, e.g. 512MiB; the run stops otherwise and names the largest N that fits (default: 512MiB) |
+| `--moe-stream-vram-free SIZE` | size the VRAM experts pool from the free VRAM instead of a pinned N: N per streamed layer = the largest count that still leaves this much VRAM free at the END state (after a full prompt), e.g. 200MiB. The fit takes the free VRAM after the KV cache and the compute buffers, minus the pool, minus --moe-stream-vram-growth (what the CUDA runtime still adds lazily after that check). With --moe-stream-vram-experts N as well, N is a cap. The experts come from the list (--moe-stream-vram-experts-file, 64 per layer). The run prints the fit and, once, the real end state (default: unset = off, the pinned N and --moe-stream-vram-experts-margin decide) |
+| `--moe-stream-vram-scratch SIZE` | with --moe-stream-vram-free: the size the CUDA backend's op scratch pool is mapped at before the load-time check, so the check sees the biggest temporary buffer of a prompt batch (0 = not mapped, the pool then grows over the first long prompts and the growth reserve covers it; default: ubatch x hidden size x 8 bytes, a calibration on Ling-3.0-flash, not a derivation - other models set this value; printed at start-up) |
+| `--moe-stream-vram-growth SIZE` | with --moe-stream-vram-free: the VRAM the CUDA runtime still adds after the load-time check (op scratch buffers of the biggest prompt batch, CUDA graph instances), kept free in addition to the end-state value. The cuBLAS handle and workspace are created before the check, so they are not in it (default: derived from the ubatch size, printed at start-up) |
+| `--moe-stream-vram-follow 0\|1` | with --moe-stream-vram-experts N, the VRAM expert pool moves with the text: while a reply is written, every --moe-stream-vram-follow-tick words up to --moe-stream-vram-follow-swaps of the most-picked experts not held replace the least-picked held ones (AI-der's rule), copied from their RAM slot on a second GPU stream (default: 0 = the VRAM experts stay put) |
+| `--moe-stream-vram-follow-tick N` | a tick (the swaps) every N reply words (default: 8) |
+| `--moe-stream-vram-follow-swaps N` | at most N swaps per tick (default: 64) |
+| `--moe-stream-vram-follow-recent N` | the recent pick count (the rank) is halved every N reply words (default: 256) |
+| `--moe-stream-vram-follow-longterm N` | the long-term pick count (the tie-break) is halved every N reply words (default: 1024) |
+| `--moe-stream-vram-follow-ratio R` | a swap needs the incoming expert's recent count > floor(R x the leaving one's) + --moe-stream-vram-follow-margin (default: 1.25 = AI-der's cold + cold/4) |
+| `--moe-stream-vram-follow-margin N` | the margin of the swap rule (default: 4) |
+| `--moe-stream-vram-follow-pinned 0\|1` | the uploader copies through a pinned bounce buffer; 0 = straight from the RAM slot (default: 1) |
+| `--moe-stream-vram-copyback 0\|1` | with --moe-stream-vram-follow 1, an expert that leaves VRAM follow's set is copied back GPU -> RAM into its layer's pool (no SSD read) when the pool has an empty slot or the expert's keep value is above the pool's lowest one, and the picks of held experts count in the pool's keep value (default: 0 = the leaving expert is dropped) |
+
+## GPU work
+
+| Flag | What it does |
+|---|---|
+| `--moe-stream-gpu-waves N` | run the expert matmuls of a ubatch that needs expert waves on the GPU when it has at least N tokens (default: 512, below it the matmuls of a wave graph stay on the host). A wave matmul's result is [n_ff, k, tokens], so a ubatch of 32 tokens is already above the offload threshold of the CUDA backend and GGML_OP_OFFLOAD_MIN_BATCH does not have to be set |
+| `--moe-stream-gpu-wave-skip-zero 0\|1` | 1 = a GPU prompt matmul over expert waves (the scheduler's per-wave copy) or the VRAM pool's prompt pass skips the pairs that point at the all-zero slices and writes 0 in their output rows (what those slices give), on CUDA; the multi-token form of --moe-stream-gpu-skip-zero (default: 0) |
+| `--moe-stream-vram-parallel 0\|1` | with --moe-stream-vram-experts (with or without --moe-stream-vram-follow) and --moe-stream-needed-early 1, the VRAM pool's device pass of a one-token decode call runs in each layer's GPU launch right after "router done" - during the CPU experts - with its ids from a per-layer table in VRAM; prompts and other calls keep the plain order. Off with one start-up line when needed-early's GPU form is not active (default: 0 = the device pass after the CPU experts) |
+| `--moe-stream-async-h2d 0\|1` | with --moe-stream on one GPU (no pipeline parallelism), a CPU split's output that lies in the GPU's pinned host buffer goes to the next GPU split as an async host -> device copy on the GPU's stream, without the host waiting for the GPU (default: 0 = a synchronous copy, as before) |
+| `--moe-stream-gpu-skip-zero 0\|1` | with --moe-stream-vram-experts: the GPU's one-token expert matmul writes 0 for the pairs that name one of the VRAM pool's all-zero slices instead of reading them (exactly the same output, less GPU memory traffic) (default: 0) |
+| `--moe-stream-fused-route 0\|1` | the expert selection of every router and every 1-ahead guess (selection bias, expert groups, top k) as one op (one GPU kernel) instead of the argsort chain (~11 kernels); same experts in the same order, so the same output (default: 0) |
+| `--moe-stream-conv-silu 0\|1` | Ling (bailingmoe3) KDA layers: apply the conv's SiLU before the reshape instead of after it, so the CUDA backend runs conv + SiLU as one kernel (its existing fusion); the same function on the same values (default: 0) |
+| `--moe-stream-gpu-share-q8 0\|1` | CUDA: matvecs (one to eight rows) that read exactly the same input bytes in one graph compute share one q8_1 copy of the input instead of quantizing it again each (e.g. 6 per Ling KDA layer -> 1); the same bits. Process-wide (default: 0) |
+
+## CPU work
+
+| Flag | What it does |
+|---|---|
+| `-t, --threads N` | number of CPU threads to use during generation (default: -1) (env: LLAMA_ARG_THREADS) |
+| `-tb, --threads-batch N` | number of threads to use during batch and prompt processing (default: same as --threads) |
+| `--repack, -nr, --no-repack` | whether to enable weight repacking (default: enabled) (env: LLAMA_ARG_REPACK) |
+| `--moe-stream-cpu-skip-zero 0\|1` | a ubatch that runs in waves on the CPU gives every (token, expert) pair outside the wave one of the pool's all-zero slices; with 1 the CPU expert matmul writes 0 for those pairs instead of computing them (exactly the same output, less work). Not with --moe-stream-cpu-repack (default: 0) |
+| `--moe-stream-cpu-x4 0\|1\|2` | the CPU expert matmul on plain MXFP4 pools: 0 = one row per call (ggml's kernel), 1 = a 4-row AVX-512 VNNI kernel with 256-bit registers, 2 = the same with 512-bit registers; exactly the same output; x86 only (default: 0; 1 was the faster one on the CPU measured) |
+| `--moe-stream-cpu-x4-prefetch next\|none\|N` | software prefetch of the --moe-stream-cpu-x4 kernel: next = the same block of the next 4-row group, none, or N = N blocks of 17 bytes ahead in the row (default: next; without it the 4-row kernel is slower than one row per call) |
+| `--moe-stream-cpu-fuse 0\|1` | 1 = for one token, the CPU runs the MoE gate matmul, up matmul and SwiGLU as one step (activation quantized once, one chunk queue over all experts); exactly the same output (default: 0) |
+| `--moe-stream-cpu-dispatch 0\|1` | 1 = for one token, the CPU's expert matmul (mul_mat_id) splits its work as ik_llama.cpp does: one chunk queue over all its experts, one long row range per thread and expert, ready experts first; exactly the same output (default: 0) |
+| `--moe-stream-cpu-pieces N` | for one token, the CPU's expert steps (the fused gate/up step of --moe-stream-cpu-fuse 1 and the split of --moe-stream-cpu-dispatch 1) cut each expert into N work pieces per thread instead of 1 (16-row boundaries); the threads take pieces as they finish, so the step's last piece is shorter and fewer threads wait for the slowest; exactly the same output (default: 1) |
+| `--moe-stream-cpu-conv1 0\|1` | 1 = for one token, the CPU's expert steps (as --moe-stream-cpu-pieces) convert the token's activation row to the kernel's format on one thread instead of a slice per thread (upstream #29308: no cache line written by two cores); exactly the same output (default: 0) |
+| `--moe-stream-cpu-weighted-sum 0\|1` | 1 = with --moe-stream: in a layer whose MoE tail runs on the CPU (-ngl 0, a CPU-only machine, the layers -ngl N leaves on the CPU), the routing-weight multiply and the sum over the chosen experts are one CPU op instead of a mul and n-1 adds (one barrier instead of n); exactly the same output. Not in: GPU layers, the last CPU layer before a GPU layer (its sum runs on the GPU), a layer with the VRAM experts pass, a layer whose experts are not in host memory (e.g. a whole VRAM layer), and a prompt batch a GPU backend would take by op offload. The start-up line says how many layers fuse (default: 0) |
+| `--moe-stream-cpu-iqk N` | N > 0 = with --moe-stream: the CPU's picked-expert matmul (MUL_MAT_ID) in calls of 32+ tokens uses ik_llama.cpp's kernels (x86, AVX2 or AVX-512) for each expert that gets N or more rows (Q8_0 experts: max(8, N/4)), for Q4_K, Q5_K, IQ4_XS, IQ3_S and Q8_0 weights; every other expert, format or machine keeps the plain path. Replies are not touched. Rounding-level differences (default: 0 = off) |
+| `--moe-stream-cpu-mmid-merge 0\|1` | 1 = with --moe-stream: the CPU's tiled picked-expert matmul (MUL_MAT_ID, prompts) runs a thread's consecutive 64-row weight groups of an expert as one window of up to 256 rows, so that expert's activation rows are unpacked once per thread instead of once per group. The same bits (each value is summed in the same order); any CPU (default: 0) |
+| `--moe-stream-cpu-fuse-small MASK` | with --moe-stream: fewer small CPU steps, the same results. A sum of: 1 = a reply's router chain (sigmoid, top-k, get_rows, sum_rows, clamp, div) on one thread with one wait instead of one per step; 2 = each guess's chain (sigmoid, top-k, cont) the same; 64 = consecutive one-row matmuls on the same input (Q / K / V, the shared expert's gate / up) with one input conversion and two waits. Only steps that run on the CPU; GPU work is untouched (default: 0) |
+| `--moe-stream-cpu-fa 0\|1\|2` | with --moe-stream: CPU flash attention with a q8_0 K and V cache. 0 = as before; 1 = prompts take the tiled path (each K / V tile converted to f32 once) and a one-row call with 512+ cached tokens splits the cache over the threads, the q heads that share a KV head reading each K / V row together, each row's range cut to its unmasked columns (rounding-level against 0); 2 = ik_llama.cpp's kernel (not built: falls back to 0 with one line) (default: 0) |
+| `--moe-stream-cpu-q8-tiled N` | with --moe-stream: q8_0 weights (attention, shared experts, dense layers, output head) take the CPU's tiled matmul from N activation rows up (1 = from 12 rows, measured on one machine; 2 or more = from N rows, at least the tiled path's own 8) - prompts - with Q8_K activations and a float scale per 32 values (rounding-level against the Q8_0 path). One row (replies) keeps the default kernel. x86 with AVX2 or AVX-512 VNNI; q8_0 experts (MUL_MAT_ID) stay on their own path (default: 0 = off) |
+| `--moe-stream-cpu-topk 0\|1` | 1 = with --moe-stream on a machine with no GPU device: the router's and the guesses' top-k pick reads each row once and keeps the k largest (largest first) instead of sorting all experts - the same ids in the same order; a row with a NaN or with two equal values among its k+1 largest is sorted as before. A GPU machine's graphs are unchanged (default: 0) |
+| `--moe-stream-cpu-down-scale 0\|1` | 1 = with --moe-stream: skip the down projection's input scale step of mistral4 / mellum / flint (#30861: the input divided by a power of two and the output multiplied back, a guard for GPU kernels' f16 sums) in the layers where it is exact: the down matmul runs on the CPU (no GPU device, or a call under the GPU offload size, never a GPU wave) and its weights' CPU kernel quantizes the input with a float block scale (Q8_K: the K-quant and IQ formats; a q8_0 down keeps the step). The same output while every row's max \|x\| <= 2^22. Test only: MOE_STREAM_TEST_DOWN_SCALE_COUNT=1 counts the rows the step would have scaled (default: 0) |
+| `--moe-stream-cpu-state-inplace 0\|1` | 1 = with --moe-stream: in a linear-attention layer (Gated DeltaNet / KDA) on the CPU device (-ngl 0, a CPU-only machine, the layers -ngl N leaves on the CPU), the delta step reads the recurrent state straight from its cache slot and writes the new state straight back (no copy of the state before and after the step), for one sequence per batch and no snapshot slots; and a GET_ROWS with fewer rows than threads is copied by all threads. Exactly the same output. The start-up line lists the layers (default: 0) |
+| `--moe-stream-cpu-small-ops 0\|1` | 1 = with --moe-stream: on the CPU, the grouped expert pick (--moe-stream-fused-route's op) takes the top k from the kept groups only (when two of the best scores are equal it sorts everything, as before), and CONCAT with fewer planes than threads is split over the threads. Exactly the same output (default: 0) |
+| `--moe-stream-cpu-repack BOOL` | keep the expert pools in llama.cpp's repacked CPU layout, which lets the expert MUL_MAT_ID use the repacked kernels: measured 2.2x on the expert matmul (0.187 -> 0.084 ms for 8 experts and one token) at the cost of converting every read on an I/O thread (0.11-0.26 ms per expert). Off by default, and only for decode: with a repacked pool a ubatch that needs waves (n_tokens >= 512 and more distinct experts than the pool has slots) names only ~20 distinct experts per ubatch-layer instead of ~390 and the text after the prompt is garbage. The 3x prefill that made this look attractive was that broken path, so it is not a speedup yet |
+
+## Prompts
+
+| Flag | What it does |
+|---|---|
+| `-b, --batch-size N` | logical maximum batch size (default: 2048) (env: LLAMA_ARG_BATCH) |
+| `-ub, --ubatch-size N` | physical maximum batch size (default: 512) (env: LLAMA_ARG_UBATCH) |
+| `--moe-stream-wave-plan 0\|1` | 1 = a ubatch that runs in waves gets its waves from a plan built once at the first wave: the experts already in RAM first (so none is evicted before its wave), then the misses; each expert in one wave, every pair in exactly one wave (in a prompt's last ubatch: ascending recency, so the last wave keeps the most recent). 0 = the plain waves by first-use rank (default: 0) |
+| `--moe-stream-wave-victim 0\|1` | 1 = in a ubatch that runs in waves, a slot keeps its wave mark until the call's last wave, so a later wave takes the experts an earlier wave of the call already used as victims first (by default the marks are cleared at every wave, so that rule never fires). 0 = off (default: 0) |
+| `--moe-stream-read-ahead 0\|1` | 1 = read-ahead in big prompt calls (calls of at least --moe-stream-read-ahead-min tokens, which use most of every layer's experts): while layer L's expert stage runs, the most-used experts of the next streamed layer (the usage table of --moe-stream-usage-file, up to a wave's width) are read into that layer's own EMPTY slots at a guess's priority, below layer L's needed reads; that layer then finds them in RAM. Needs --moe-stream-wave-plan 1; a --moe-stream-window call does this itself (default: 0) |
+| `--moe-stream-read-ahead-min N` | --moe-stream-read-ahead only in calls of at least N tokens (default: 4096) |
+| `--moe-stream-window 0\|1` | 1 = in a layer-major prompt call of at least --moe-stream-read-ahead-min tokens whose layers need more than one wave, the RAM pools are one window over the layers (the same total): while a layer computes, the next streamed layers' most-used experts (the usage table) are read into room taken from finished layers, empty slots and - in a full RAM - the layers farthest ahead, below the running layer's needed reads; a finished layer keeps its share's worth of the call's experts by the prompt-end weight, set for the reply. Needs --moe-stream-layer-major 1 and --moe-stream-wave-plan 1; not with --moe-stream-elastic / --moe-stream-shares / --moe-stream-hugepages / --moe-stream-pin (default: 0) |
+| `--moe-stream-window-keep F` | with --moe-stream-window 1, a finished layer keeps F x its share during the call (0 < F <= 1) and the rest is read back after the prompt, below the reply's own reads (default: 1) |
+| `--moe-stream-prompt-defer 0\|1` | 1 = a prompt call whose expert matmuls run on the CPU (CPU-only, and on a GPU machine the CPU waves under --moe-stream-gpu-waves) leaves the wait for its reads to mul_mat_id, which computes the experts already in RAM while the rest land (as one-word calls do); never a matmul the GPU runs. Needs --moe-stream-overlap 1 (default: 0) |
+| `--moe-stream-prompt-split 0\|1` | 1 = in a prompt call whose expert matmuls run on the CPU (under --moe-stream-gpu-waves), the GPU computes the VRAM-held experts' pairs beside the CPU split (the router's ids, input and guess handed to the CPU through a pinned slot), not after it - the multi-token form of --moe-stream-vram-parallel. Needs --moe-stream-vram-parallel 1, --moe-stream-needed-early 1 and --moe-stream-gpu-waves (default: 0) |
+| `--moe-stream-prompt-split-places N` | with --moe-stream-prompt-split 1, the VRAM tail places a prompt call borrows (the lowest-value experts' places; two halves, the next layer's guessed experts copied into one while the other is computed), given back at the call's end (default: 128) |
+| `--moe-stream-max-waves N` | cap the expert waves a ubatch and layer is split into (default: 0, the bound that is always enough). Every wave beyond the one the experts need still runs its expert matmuls, on all-zero weights, so a cap that is too small costs speed and one that is too large costs more speed. A ubatch that needs more waves than the cap is an error. |
+| `--moe-stream-layer-major 0\|1` | 1 = a prompt call of 2 or more ubatches runs layer by layer: every ubatch through one layer, then every ubatch through the next (the hidden state kept between them, the attention memory applied once and replayed), and each streamed layer's experts run once for the whole call, so each expert is read about once per call. The engine raises -b to the context size (see --moe-stream-layer-major-batch) so a whole prompt arrives in one call. Runs only where the model has a layer range (Ling-3.0), without MTP snapshot slots and with one sequence per call; otherwise the plain path. Default 0 = off |
+| `--moe-stream-layer-major-batch N` | with --moe-stream-layer-major 1 the engine raises -b to the context size; N > 0 caps that raise at N tokens per call (a larger -b given by the user stays). A call's own tensors take (2 x n_embd + 2 x top-k) x 4 bytes per token (Ling-3.0-flash: 20.1 KiB, 321 MiB at 16k): in the VRAM pool's tail with --moe-stream-vram-free (places that hold experts between prompts), else a buffer of their own while the prompt runs. Default 0 = no cap |
+| `--moe-stream-vram-end-fill N` | with --moe-stream-vram-free's pool tail (a GPU-wave prompt empties it): 1 = refill the tail's free places at the end of the call that ends a prompt, best first by that call's prompt-end weights (its last tokens' experts; only experts READY in RAM, never an SSD read), instead of at the first reply word by VRAM follow's counts; 2 = also one VRAM follow tick over the per-layer VRAM places with the same weights. Default 0 = off |
+| `--moe-stream-copy-ahead 0\|1\|2\|3` | with --moe-stream-vram-free's pool tail, GPU prompts copy the next wave's / layer's experts into the tail while this wave computes, and a prompt whose experts all fit one wave (every expert in RAM) takes the engine's own copy (tail waves) instead of the scheduler's whole-pool copy. Two sets of copy places: each step (the next wave or the next layer) copies into the other set while this one computes; one set: the next step's experts go into the places this wave's gate / up matmuls have finished with (a GPU mark tells the copier; needs needed-early's GPU form). 1 = two sets when one set costs at most a quarter of the GPU pool's room, else one; 2 = one set; 3 = two sets. It switches itself off, with one line, where it cannot run. Default 0 = off |
+| `--moe-stream-vram-lend-prompt 0\|1` | with --moe-stream-vram-free's GPU expert pool and --moe-stream-vram-follow, a prompt call's GPU compute buffer (ggml's own plan) lives in lent places of the pool; the real compute buffer holds the reply graphs and short prompt calls (see --moe-stream-vram-lend-short), so the pool holds more experts (refilled after the prompt). A tensor bigger than every lendable piece stays in the real buffer. Off by itself with a pinned --moe-stream-vram-experts N. Default 0 = off |
+| `--moe-stream-vram-lend-short N` | with --moe-stream-vram-lend-prompt 1: prompt calls of at most N tokens (a short follow-up message) run in the real compute buffer, which is sized at start for such a call at the full context (measured); longer calls lend their plan from the VRAM pool. Default 64 |
+
+## Saved chats
+
+| Flag | What it does |
+|---|---|
+| `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 2)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293) (env: LLAMA_ARG_CTX_CHECKPOINTS) |
+| `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, 0 for decision models, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391) (env: LLAMA_ARG_CACHE_RAM) |
+| `--cache-disk DIR` | keep the chat states on disk in DIR (one file per saved state, written after each reply, before the next request is taken): a request with an X-Conversation-Id header restores its chat's state, a request without one the saved state sharing the longest beginning (the RAM prompt cache's rule). A state saved under another model file or other settings, or damaged (checksum), is refused. Files are owner-only. POST /cache-disk/erase (the chat in X-Conversation-Id) and POST /cache-disk/clear delete saved states. A directory that cannot be written stops the server. Works with --cache-ram 0 (default: none = off) (env: LLAMA_ARG_CACHE_DISK) |
+| `--cache-disk-gb N` | size limit of the --cache-disk directory in GB (fractions allowed); the entry written longest ago is deleted first, a state larger than the limit is not written (default: 8) (env: LLAMA_ARG_CACHE_DISK_GB) |
+| `--cache-disk-checkpoints N` | with --cache-disk, keep each chat's (X-Conversation-Id) "start of message" context snapshots as files of that directory, at most N per chat (the oldest first): after each reply the snapshot made at the last user message's start is written (the SSD is idle then), and a request that goes back further than the snapshots in RAM (e.g. an edited older message) restarts from the newest one instead of re-reading the chat. Counted in --cache-disk-gb; deleted with the chat (erase, clear, the size limit). 0 = off (default: 0) (env: LLAMA_ARG_CACHE_DISK_CHECKPOINTS) |
+
+## Measuring and debugging
+
+| Flag | What it does |
+|---|---|
+| `--moe-stream-log PATH` | write a per-token miss log of --moe-stream to PATH |
+| `--moe-stream-pred-recall 0\|1` | count recall@8 of the layer-ahead expert guess: the guessed top-8 of layer L+1 is scored against L+1's real top-8 when L+1's remap op runs, per layer and per phase, printed by print_stats. It only counts, so it does not change the run. Default off |
+| `--moe-stream-pred-scores PREFIX` | write the layer-ahead guess's router scores for ALL experts of every generated word and MoE layer to PREFIX.f32 ([n_words, n_layer, n_expert] float32, sigmoid(W.h_hat) + bias, the group mask NOT applied) plus PREFIX.json and PREFIX.rows.i32. Default off; it only copies scores the graph already computes, so it does not change the run |
+| `--moe-stream-pred-input PREFIX` | record the vector the next layer's router is run on - with --moe-stream-pred-shared 1 the normed residual plus this layer's shared expert output, which is what the engine's guess actually sees - for 1 generated word in --moe-stream-pred-input-every, every streamed layer, plus that layer's guess and the predicted layer's real experts, as PREFIX.{vec.f32,guess.i32,real.i32,rows.i64,json}. It only copies vectors the graph already computes, so it does not change the run. Default off |
+| `--moe-stream-pred-input-every N` | with --moe-stream-pred-input: record 1 generated word in N (default 8). N = 1 records every generated word, which is what a run that compares against --moe-stream-pred-recall wants |
+| `--moe-stream-record DIR` | write the side-by-side recording of every decode word and streamed layer into DIR: the experts the router chose with their weights and whether each was in RAM, the raw router logits of the guesses 1-4 layers ahead (all 512 experts), which experts of the next four layers were in RAM, and timestamps. It only copies and counts - nothing extra is read, moved or evicted, and the text is unchanged. Default off |
+| `--moe-stream-record-words N` | with --moe-stream-record: keep at most N decode words (default 1024, ~0.33 MiB of RAM per word on Flash); later words are counted as dropped in meta.json |
+| `--moe-stream-plan-bind-early 0\|1` | TEST ONLY: with --moe-stream-plan 1, every list entry takes its slot and queues its read the moment it is added - the plain path's timing through the waiting-list code, for the identity check (default: 0) |
+| `--moe-stream-plan-old-order 0\|1` | TEST ONLY: with --moe-stream-lookahead N > 1, the waiting list's old order (one class, no live / dropped; a started read always finishes first) (default: 0) |
+| `--moe-stream-plan-extra-near 0\|1` | TEST ONLY: with --moe-stream-lookahead N > 1, order A - a target's extra ranks (k+1..K) right after its top k, before farther targets' entries (default: 0 = order B, every target's top k before any extra rank) |
+| `--moe-stream-slot-check 0\|1` | 1 = an expert of a MoE layer that has no RAM slot when its matmul runs stops the run with a message (layer, expert, token) instead of silently adding 0; in a ubatch that runs in waves, every (token, expert) pair must get a slot exactly once over the waves. 0 = off, for an emergency only (default: 1) |
+| `--moe-stream-vram-follow-fixed 0\|1` | test only: every decided swap is switched at the next call start, copying there (from the RAM slot, or the sidecar), so the held set depends on the text only (default: 0) |
+| `--moe-stream-verify BOOL` | byte-compare one filled expert slot of every streamed layer, and one expert of a whole layer kept in VRAM, against the model file at the first token; a mismatch ends the run with the layer, the projection and the byte. 0 = off, 1 (the default) = every layer, N = the first N layers. It costs one expert read and one memcmp per layer. With --moe-stream model the slot is compared with the model file once its last piece has landed, and the first, the middle and the last expert of each checked layer (gate, up and down) are also read from the model file and their FNV-1a 64-bit sums compared with the ones stored in the file; the run ends naming the layer, the expert and the projection |
+| `--moe-stream-oracle TRACE_PREFIX` | replay the experts of a llama-moe-trace of the same prompt instead of predicting them (perfect prefetch, for measuring the ceiling) |
+| `--moe-stream-oracle-lead N` | how many MoE layers the oracle looks ahead, in MoE layers (default: 1); N = n_moe_layers is one whole token ahead |
+
+## Elastic RAM
+
+Off by default. Run My AI doesn't use it.
+
+| Flag | What it does |
+|---|---|
+| `--moe-stream-elastic 0\|1` | 1 = elastic RAM: the expert pools give RAM back the moment the kernel's memory-pressure signal (PSI) says another program needs it (the least valuable experts are dropped, their pages returned), and take RAM back at a reply's end or a new request when at least --moe-stream-elastic-opts growmin is free, down to --moe-stream-ram-margin; never above the process's memory cgroup limit; tunables in --moe-stream-elastic-opts (default: 0) |
+| `--moe-stream-ram-margin SIZE` | with --moe-stream-elastic 1: RAM the engine leaves free when it takes RAM back (default: 500MiB) |
+| `--moe-stream-elastic-opts K=V,...` | elastic RAM tunables: step=SIZE given back per pressure event (512MiB), growmin=SIZE free RAM needed before taking back (1GiB), cool=SECONDS after a give-back before taking back (60), stall=US of memory stall in 2 s that fires the signal (100000), ceiling=N the most slots a layer's pool can ever hold (address space only; default: what all RAM holds) |
+| `--moe-stream-shares 0\|1` | 1 = slot shares per layer that adapt: one slot at a time (1 % steps) moves from the layer that would miss it least to the one where one more slot saves the most SSD reads (ghost lists of evicted experts), on long averages, with floors, ceilings and cool-downs; decode words only; tunables in --moe-stream-share-opts (default: 0) |
+| `--moe-stream-share-file FNAME` | with --moe-stream-shares 1: the starting split, one line 'slots <model layer> <slots>' per layer (default: equal shares) |
+| `--moe-stream-share-opts K=V,...` | slot-share tunables: step=PCT of the giving layer per move (1), every=N decode words between checks (64), gap=X the gain over the loss a move needs (1.5), hits=N ghost hits needed (32), cool=N words before the same pair moves again (512), half=N words half-life of the history (256), floor=PCT / ceil=PCT of the equal share (25 / 300), min=N slots per layer below which the feature is off (24) |
+
+Its test-only environment variables: `MOE_STREAM_TEST_DISCARD`, `MOE_STREAM_TEST_DISCARD_NOLOCK`, `MOE_STREAM_TEST_ELASTIC_CHECK`, `MOE_STREAM_TEST_FAKE_ALARM`, `MOE_STREAM_TEST_FAKE_SQUEEZE`, `MOE_STREAM_TEST_FAKE_SQUEEZE_A0`, `MOE_STREAM_TEST_FAKE_SWAP`, `MOE_STREAM_TEST_FREE_PINNED`, `MOE_STREAM_TEST_GIVE_IGNORE_LEVEL`, `MOE_STREAM_TEST_GIVE_NOREASON`, `MOE_STREAM_TEST_GIVE_ONE_LAYER`, `MOE_STREAM_TEST_GIVE_OVERSIZE`, `MOE_STREAM_TEST_IGNORE_ALARM`, `MOE_STREAM_TEST_KEEP_SKIP`, `MOE_STREAM_TEST_LOOK_LOG`, `MOE_STREAM_TEST_LOWNEED_SKIP`, `MOE_STREAM_TEST_LOWONLY_SKIP`, `MOE_STREAM_TEST_MADVISE_FAIL`, `MOE_STREAM_TEST_NO_SWAP`, `MOE_STREAM_TEST_PACE_OFF`, `MOE_STREAM_TEST_PENDING_IGNORE`, `MOE_STREAM_TEST_PSI_OFF`, `MOE_STREAM_TEST_SELF_DISCARD`, `MOE_STREAM_TEST_SHARE_FLOOR_BREAK`, `MOE_STREAM_TEST_SHARE_FORCE`, `MOE_STREAM_TEST_SHARE_LOG`, `MOE_STREAM_TEST_SHARE_LOWFIRST`, `MOE_STREAM_TEST_SHRINK_INUSE`, `MOE_STREAM_TEST_THP_ALWAYS`, `MOE_STREAM_TEST_THP_KEEP`, `MOE_STREAM_TEST_UNLOCK_EVERY`, `MOE_STREAM_TEST_WIDE_FAIL`, `MOE_STREAM_TEST_ZERO_ALWAYS`.
+
+## Environment variables
+
+These are read once at start-up. The ones under "Test only" exist for tests: most make a failure happen on purpose, to prove a check catches it. Never leave one set for a real run.
+
+### Behaviour
+
+| Variable | What it does |
+|---|---|
+| `GGML_CUDA_ALLREDUCE` | Chooses the CUDA backend's all-reduce for multi-GPU runs: nccl, internal or none (unset means nccl on Linux and internal elsewhere, and any other value logs a warning and uses none). |
+| `GGML_CUDA_AR_BF16_THRESHOLD` | Sets the size in bytes from which the CUDA all-reduce sends F32 tensors through a BF16 round-trip (default 1, so every F32 input; 0 turns the round-trip off). |
+| `GGML_CUDA_AR_COPY_CHUNK_BYTES` | Forces a fixed chunk size in bytes for the CUDA all-reduce's copies (0 or unset picks it per call, and values below 262144 are raised to 262144). |
+| `GGML_CUDA_AR_COPY_THRESHOLD` | Sets the tensor size in bytes from which the CUDA all-reduce uses its copy-engine path instead of the chunked kernel path (default 1 MiB; 0 never uses the copy engine). |
+| `GGML_CUDA_COPY_KERNEL` | Sets the largest size in bytes of a small same-type device copy that the CUDA backend runs as a kernel with an early start instead of a memcpy node (default 0 = off). |
+| `GGML_CUDA_CUBLAS_COMPUTE_TYPE` | Overrides the compute type of the CUDA cuBLAS matmuls with f32 (or fp32), f16 (or fp16) or bf16, where auto or unset keeps the requested type and any other value logs a warning. |
+| `GGML_CUDA_DISABLE_FUSION` | When set to a non-zero number, turns off the CUDA backend's fused-op paths. |
+| `GGML_CUDA_DISABLE_GRAPHS` | When set to any value, turns CUDA graphs off. |
+| `GGML_CUDA_ENABLE_UNIFIED_MEMORY` | When set to a non-zero number, the CUDA backend allocates device buffers with cudaMallocManaged and reports memory like a unified-memory system. |
+| `GGML_CUDA_FUSE_AMAX` | When set to a non-zero number, the chain of ops that scales the down projection's input (ABS to DIV) runs as one CUDA kernel. |
+| `GGML_CUDA_FUSE_NORM_QUANT` | When set to a non-zero number, a one-row RMS_NORM plus MUL that feeds a matvec also writes the q8_1 copy of its output for that matvec. |
+| `GGML_CUDA_GRAPH_CHUNK_SIZE` | Sets how many ggml nodes go into one CUDA graph chunk (default 512; 0 captures the whole ggml graph as one CUDA graph). |
+| `GGML_CUDA_GRAPH_OPT` | When set to 1, the CUDA backend reorders graph nodes so that independent branches between a fork and a join run concurrently on separate streams. |
+| `GGML_CUDA_MMQ_PREC` | Overrides the precision the CUDA quantized matmul (MMQ) uses for its activations with q4 or q8, where auto or unset keeps what the graph requests. |
+| `GGML_CUDA_MOE_MARK_IDS` | When set to a non-zero number, the router mark kernel copies the top-k expert ids itself, so no separate ids copy runs. |
+| `GGML_CUDA_NO_PINNED` | When set to a non-zero number, the CUDA backend does not allocate pinned host memory. |
+| `GGML_CUDA_P2P` | When set to any value, the CUDA backend enables peer-to-peer access between the GPUs at start-up. |
+| `GGML_CUDA_PDL` | Set to 0 to turn off programmatic dependent launch for the CUDA kernels that support it; unset or any other number leaves it on. |
+| `GGML_CUDA_POOL1D_ROW` | When set to a non-zero number, a MAX pool over whole rows runs one warp per row. |
+| `GGML_CUDA_REGISTER_HOST` | When set to a non-zero number, the CUDA backend pins caller-owned host buffers with cudaHostRegister (portable, read-only); unset or 0 leaves them unpinned. |
+| `GGML_OP_OFFLOAD_MIN_BATCH` | Sets the number of rows from which the scheduler moves a MUL_MAT_ID matmul to the GPU (default 32), and the streaming engine reads the same value to decide whether a call's expert matmuls stay on the host. |
+| `MOE_STREAM_FIT_MIB_PER_TOKEN` | Sets the extra VRAM margin in MiB per token of the physical batch (-ub) that the whole-layer fit keeps on top of --moe-stream-vram-reserve (default 0.5; 0 gives a constant margin). |
+| `MOE_STREAM_PROMPT_END_ALL` | When set to a non-zero number, the prompt-end wave order applies to every layer-major prompt call that has an output, not only to calls shorter than the batch size (-b). |
+| `MOE_STREAM_READ_RETRIES` | Sets how many times a failed sidecar read is retried (default 3). |
+| `MOE_STREAM_READ_RETRY_US` | Sets the wait in microseconds before each retry of a failed sidecar read (default 20). |
+
+### Measuring
+
+| Variable | What it does |
+|---|---|
+| `GGML_ALLOC_DUMP_TOP` | Prints, at every graph reserve, the N largest tensors the allocator placed and the same allocations grouped by name without the layer number, where N is the value (at most 32; 0 or unset prints nothing). |
+| `GGML_COUNT_SPLITS` | When set to any value, prints the number of graph splits and cross-backend inputs of the scheduler's graph each time its shape changes. |
+| `GGML_CUDA_GRAPH_DEBUG` | When set to a non-zero number, logs debug messages about CUDA graph reuse and about graphs disabled because of an unsupported node. |
+| `GGML_CUDA_MEM_LOG` | When set to any value, prints the free VRAM before and after every lazy allocation of the CUDA backend: the cuBLAS handle and workspace, a growth of the memory pool and a CUDA graph instantiation. |
+| `GGML_CUDA_PROFILE` | When set to a non-zero number, times every op on the GPU with CUDA events and prints the sums per op, node name, weight type, token class and weight size class at exit, with CUDA graphs off while it is on. |
+| `GGML_CUDA_PROFILE_EVERY` | With GGML_CUDA_PROFILE, also prints the per-op GPU table every N graph computes, where N is the value (0 or unset prints at exit only). |
+| `GGML_MOE_CPU_TIMERS` | When set to a non-zero number, the CPU expert step keeps timers and counters that the engine prints on their own line at exit. |
+| `GGML_PROFILE` | When set to a non-zero number, counts graphs, splits, cross-backend inputs, copies, blocking syncs and CUDA graph captures and replays and times host and device compute, and prints the totals at exit. |
+| `GGML_PROFILE_HANDOFF` | When set to a non-zero number, times the CPU to GPU hand-off on the host clock and prints lines that start with handoff: and a per-word summary. |
+| `GGML_TRACE` | Writes a Chrome/Perfetto trace of the engine's timeline (scheduler splits, waits, copies and GPU pieces) to the file whose path is the value. |
+| `GGML_TRACE_MAX_MB` | Caps the size in MiB of the GGML_TRACE file (default 512), after which later events are dropped. |
+| `MOE_DECODE_KLD_BASE` | Names a logits file saved by an earlier llama-moe-decode-batch run with the same forced words, so the tool compares each call's logits with it and reports the KL divergence (the same as its --kld-base option). |
+| `MOE_DECODE_SAVE_LOGITS` | Names the file llama-moe-decode-batch writes the logits of every call to (the same as its --save-logits option). |
+| `MOE_STREAM_CHECK_WAVES` | When set to a non-zero number, the statistics at exit also say how many multi-wave layer ubatches were checked for every (token, expert) pair getting a slot exactly once; the check itself always runs. |
+| `MOE_STREAM_LAND_HIST` | When set to any value, the statistics at exit also give the 10th, 50th and 90th percentile and the mean of the time from issuing a read to its landing for reads that were waited on. |
+| `MOE_STREAM_LEAD2_COST` | When 1, each layer also computes the router of the layer two ahead on its guess input (top 16 and scores) and leaves the result unused, so the device cost of a two-ahead guess can be measured on its own. |
+| `MOE_STREAM_PROFILE_TOKENS` | When set to any value, prints a moe profile line after every call with its token count, its time split (host, device, copies, syncs, remap op, stall) and the waiting-list and guess counters. |
+| `MOE_STREAM_QUIET_RESERVE` | When set to any value, the engine does not print what the graph reserve asked for per backend next to what the run uses. |
+| `MOE_STREAM_STATS_TABLE` | When set to any value, or when the file /tmp/moe_stream_stats_table exists, the statistics at exit also print a per-layer table of hits, misses, reads and stall for prompts and for replies. |
+| `MOE_STREAM_TEST_FUSE_TRACE` | When set to any value, prints for the first 400 one-token MoE matmuls whether the fused CPU step ran and what follows it if not. |
+| `MOE_STREAM_TEST_LM_READS` | When 1, prints the reads per streamed layer of each layer-major call. |
+| `MOE_STREAM_TEST_MASK_TIMER` | When 1, times the KV cache mask fill and prints the total at exit. |
+| `MOE_STREAM_TEST_PER_LAYER` | When 1, the statistics at exit also print per streamed layer the prompt counters held_at_first_gather, tailw_waves, tailw_copied, misses, reads, hits, vram_hits, distinct, calls and tokens. |
+| `MOE_STREAM_TEST_PE_LOG` | When 1, prints a line each time the end of a prompt is marked. |
+| `MOE_STREAM_TEST_REC_RLOGITS` | With --moe-stream-record, 1 also records the real router logits of every streamed layer. |
+| `MOE_STREAM_TEST_REQ_TIMES` | When 1, prints one stderr line "TT <us> <tag> <arg>" per step of a request, and llama-server prints its own steps the same way. |
+| `MOE_STREAM_TEST_RG_LOG` | When 1, prints a line per prompt call with its memory need and how many slots per layer were given back for it. |
+| `MOE_STREAM_TEST_VF_TICK_TIMERS` | When 1, prints one line per reply word with the end of the call and the scheduler waits of the VRAM-follow tick. |
+| `MOE_STREAM_TEST_WAVE_VICTIM` | When 1, the statistics at exit print the wave-victim line, which counts victims taken from slots an earlier wave of the same call used, even without --moe-stream-wave-victim. |
+| `MOE_STREAM_TEST_WINDOW_ENDSTATE` | When above 0, counts the RAM end state of every prompt against the experts its recency-weighted use ranks highest and against the experts the first reply words use, where a value above 1 sets how many reply words are counted (default 64) and nothing the engine does changes. |
+| `MOE_STREAM_TEST_WINDOW_ENDSTATE_DUMP` | With MOE_STREAM_TEST_WINDOW_ENDSTATE, writes the end states as lists to the file named by the value: per layer the experts in RAM and in VRAM and the prompt's weights, plus every reply word's picks. |
+| `MOE_STREAM_TEST_WINDOW_LOG` | When 1, prints a line at each window layer start. |
+
+### Test only
+
+| Variable | What it does |
+|---|---|
+| `GGML_CUDA_DEVICES` | Makes the CUDA backend report this many devices instead of the physical count, which emulates a multi-GPU machine on fewer GPUs. |
+| `GGML_CUDA_SHARE_Q8_1_TEST_NO_DROP` | When 1, shared q8_1 input copies are kept when a node writes into their bytes, which makes the sharing wrong on purpose. |
+| `GGML_CUDA_TEST_GRAPH_EVICT_TIME` | When set to a non-zero number, CUDA graphs are evicted after 10 seconds without use instead of after 4096 graph computes without use. |
+| `GGML_CUDA_TEST_NO_CONCAT_LC` | When set to a non-zero number, the concat kernel behind the linear-attention conv-state snapshot copy does not send the early-start signal to that copy (only matters with GGML_CUDA_COPY_KERNEL above 0). |
+| `GGML_CUDA_TEST_PDL_HOLD_US` | Makes the concat kernel behind the linear-attention conv-state snapshot copy wait this many microseconds before it writes, so a copy that does not wait for it reads unfinished data. |
+| `GGML_CUDA_TEST_PDL_NOSYNC` | When set to copy, the copy kernel reads without waiting for the kernel before it. |
+| `MOE_STREAM_READ_FAIL_ONCE` | Makes the Nth read of the process (counted from 1) fail its first attempt, so the retry path runs without a broken disk. |
+| `MOE_STREAM_RESERVE_OP_OFFLOAD` | When set to any value, the graph reserve follows the context's op_offload setting alone instead of also leaving out the offload reserve when expert waves run on the host. |
+| `MOE_STREAM_TEST_AHEAD` | When 1, every wave op of a multi-wave call keeps the next wave's READY experts, without the copy ahead. |
+| `MOE_STREAM_TEST_AUX_CPUS` | Pins the engine's own threads (the SSD readers, the guess helper and the VRAM-follow uploader) to the CPUs in the range a-b given as the value, on Linux only. |
+| `MOE_STREAM_TEST_CA_ABORT` | Makes the first N prompt calls with tail waves stop part-way, right after the middle streamed layer's gather, through an abort callback, to test copy-ahead's fallback. |
+| `MOE_STREAM_TEST_CA_NO_FOLLOW` | When 1, copy-ahead makes no follow-up copies. |
+| `MOE_STREAM_TEST_CA_SKIP_MARK` | Names a layer whose copy-ahead "gate/up done" mark never runs, so copy-ahead has to fall back (only with --moe-stream-copy-ahead above 0). |
+| `MOE_STREAM_TEST_COMMIT_FAIL` | Makes every Nth slot commit fail, where N is the value, to exercise the fallback for a slot that cannot be committed. |
+| `MOE_STREAM_TEST_COMMIT_FAIL_PART` | Sets at which projection (0, 1 or 2) the refusal of MOE_STREAM_TEST_COMMIT_FAIL comes. |
+| `MOE_STREAM_TEST_COPY_AHEAD_CHECK` | With 1, every place copy-ahead filled early is read back and compared with its RAM slot, and with 2 a sampled read-back that keeps the timing runs instead. |
+| `MOE_STREAM_TEST_COPY_AHEAD_NOWAIT` | When 1, copy-ahead does not wait for the uploader, which is the control run for MOE_STREAM_TEST_COPY_AHEAD_CHECK. |
+| `MOE_STREAM_TEST_DOWN_DELAY_US` | With --moe-stream-proj-ready 1, makes the down request of every split needed read wait this many microseconds on its I/O thread before it reads, so gate and up can compute first. |
+| `MOE_STREAM_TEST_DOWN_SCALE_COUNT` | When 1, the layers that skip the down projection's input scale step count the rows it would have scaled (max \|x\| above 1024) and the rows above the exact limit (max \|x\| above 2^22), reading the input and changing nothing. |
+| `MOE_STREAM_TEST_DROP_SLOT` | Makes the slot check see one pair as slot-less without changing the computation: 1 is a pair of the first one-wave decode call, 2 a pair of the first multi-wave ubatch, 3 a pair of a one-wave decode call that has a VRAM-held expert. |
+| `MOE_STREAM_TEST_E4_DENSE` | When 1, --moe-stream takes the model for a dense one and the run goes on as plain llama.cpp with one line saying so. |
+| `MOE_STREAM_TEST_E6_PROBE` | When 1, the backend probe for the combined guess step fails for every layer, so each layer keeps one guess op per target. |
+| `MOE_STREAM_TEST_FUSED_CHECK` | When 1, the graph also builds the separate op chain beside the fused expert selection (--moe-stream-fused-route) and a check op compares the ids of both. |
+| `MOE_STREAM_TEST_GSF_CHECK` | When 1, every call start compares the cached full-layer answer of --moe-stream-guess-skip-full with a rescan and stops the run on a difference. |
+| `MOE_STREAM_TEST_GSF_RESCAN` | When 1, --moe-stream-guess-skip-full looks at every layer again at every call instead of using its cached answer. |
+| `MOE_STREAM_TEST_GUESS_CHECK` | With --moe-stream-guess-combined and --moe-stream-lookahead 2 or more, 1 builds the separate guesses beside the combined step and compares the score, probability and id rows bit for bit at every layer and word, and 2 flips one low bit of one combined score in the check's copy so the run must stop. |
+| `MOE_STREAM_TEST_GUESS_EMPTY_AT` | Given as W:L, makes layer L lose one expert at reply word W if the layer is full (or, with MOE_STREAM_TEST_GUESS_FULL_ALL, stop counting as full), to test --moe-stream-guess-skip-full. |
+| `MOE_STREAM_TEST_GUESS_FULL_ALL` | When 1, every streamed layer counts as full for --moe-stream-guess-skip-full. |
+| `MOE_STREAM_TEST_HELPER_DELAY_US` | With --moe-stream-needed-early 1, makes the guess helper thread sleep this many microseconds after taking a slot, so guesses arrive late and the text must not change. |
+| `MOE_STREAM_TEST_IDLE_STAMP_OLD` | With --moe-stream-idle-load 1, gives idle loads the older last-use stamps (use counter minus 1 minus the rank at the issue) instead of stamps that stay older than every used slot of the layer. |
+| `MOE_STREAM_TEST_IG_ORDER` | When 1, prints once per graph build, for every op A of the in-graph needed-early form, the graph positions of its op B, of the nodes only op B's guess input needs, of the shared expert and of the nodes that read op B. |
+| `MOE_STREAM_TEST_KDA_EARLY` | When 1, a needed-early decode graph keeps the older order in which the linear-attention (KDA) layers' conv-snapshot copies and next-layer state fetch run on the serial path around the CPU piece instead of in the GPU window of the MoE layer in between. |
+| `MOE_STREAM_TEST_LA_BAD_ORDER` | Sorts the waiting list with one key of its order inverted so the order check must count violations, where 1 is target, 2 live, 3 extra, 4 votes and 5 rank (needs --moe-stream-lookahead 2 or more). |
+| `MOE_STREAM_TEST_LEND_LEND_FAIL` | When 1, VRAM lending for prompts fails to lend, so the call uses the real compute buffer. |
+| `MOE_STREAM_TEST_LEND_LOW` | Multiplies the lent-memory estimate of --moe-stream-vram-lend-prompt by this factor (default 1, at least 0.01), so the retry's check can be exercised. |
+| `MOE_STREAM_TEST_LEND_NO_GROW` | When 1, the retry after a failed lent-buffer plan skips its first step, which grows the call's real compute buffer. |
+| `MOE_STREAM_TEST_LEND_OFF` | When 1, VRAM lending for prompts is off and prompt graphs plan into the real compute buffer. |
+| `MOE_STREAM_TEST_LIST_DUMP` | With --moe-stream-lookahead 2 or more, prints the waiting list after every sort for the decode words W to W+2, where W is the value, and runs the order check on every reader's bind and every hand-out of a queued guess piece. |
+| `MOE_STREAM_TEST_LM_DUMP` | When 1, prints after each layer group of a layer-major call, per ubatch piece, the count of non-finite values, the maximum and the root mean square of the hidden state. |
+| `MOE_STREAM_TEST_LM_GROUP` | Sets how many streamed layers one expert graph covers in a layer-major call, and a value above 0 also turns layer-major on. |
+| `MOE_STREAM_TEST_LM_LAST_GROUP` | When 1, the last layer of a layer-major call keeps running per ubatch instead of as one expert graph that reads its experts once per call. |
+| `MOE_STREAM_TEST_LM_NOREPLAY` | When 1, a later layer group of a layer-major call applies the memory context again instead of replaying the first application, which is the control that must fail. |
+| `MOE_STREAM_TEST_LM_NO_CELLS_REC` | When 1, a call of two or more ubatches on a cache that reuses cells does not keep each ubatch's cell records for the layer-major replay. |
+| `MOE_STREAM_TEST_LM_NO_MASK_REC` | When 1, a layer-major replay fills each ubatch's KQ mask again instead of copying the bytes the context already filled. |
+| `MOE_STREAM_TEST_NONPOOL_EXTRA` | Adds this many bytes to what --moe-stream-nonpool-measured records as the run's own memory need, to test a start that needs more than planned. |
+| `MOE_STREAM_TEST_NO_CAP` | When 1, the engine ignores the process's own memory cap (the tightest cgroup limit) when it sizes the pools. |
+| `MOE_STREAM_TEST_NO_EAGER_CUBLAS` | When 1, the cuBLAS handles are created lazily instead of at the VRAM pool's load-time check. |
+| `MOE_STREAM_TEST_NO_FREE_SLOT` | Names a layer whose first expert pick finds no free slot, to exercise the no-free-slot fallback. |
+| `MOE_STREAM_TEST_NO_KEEP_RAM` | When 1, a VRAM-held expert never keeps a RAM slot, even when every streamed layer holds all its experts in RAM. |
+| `MOE_STREAM_TEST_NO_TAIL` | When 1, the VRAM pool's tail is not set up for GPU prompt waves. |
+| `MOE_STREAM_TEST_NO_ZERO_TABLE` | When 1, the table of the pools' all-zero slices is not registered with the CUDA backend. |
+| `MOE_STREAM_TEST_ORACLE_LIST` | When 1, --moe-stream-oracle feeds its experts to the waiting list, which needs --moe-stream-plan 1, --moe-stream-needed-early 1 and --moe-stream-lookahead 2 or more. |
+| `MOE_STREAM_TEST_PIN_CHECK` | When 1, every remap op checks that no layer outside the pin list holds a mark. |
+| `MOE_STREAM_TEST_PIN_SKIP` | Drops the Nth note from the pin list, where N is the value, as the failure test of MOE_STREAM_TEST_PIN_CHECK. |
+| `MOE_STREAM_TEST_PRESET_COPY` | Set to 0 to stop the scheduler hook from giving GPU-wave pool copies a target in the tail. |
+| `MOE_STREAM_TEST_PROJ_CHECK` | With --moe-stream-proj-ready 1, 1 checks the per-projection flags against every slot's state at each decode layer start, and 2 also skips clearing the flags of a dropped or re-read slot so the check must stop the run. |
+| `MOE_STREAM_TEST_PROMPT_RESERVE_RESERVE_ABOVE` | Makes a prompt reserve of more rows than the value fail, outside the trial reserves of the VRAM pool sizing. |
+| `MOE_STREAM_TEST_PROMPT_RESERVE_TRIAL_FAIL` | Makes the Nth trial reserve of the VRAM pool sizing fail, where N is the value. |
+| `MOE_STREAM_TEST_PROMPT_SPLIT` | Turns on the pieces of --moe-stream-prompt-split for a test, where 1 counts and 2 also keeps the top 16 experts of the next layer for its wave 0. |
+| `MOE_STREAM_TEST_PROMPT_SPLIT_BORROW` | Makes each prompt call borrow this many tail places at its first op, as --moe-stream-prompt-split does. |
+| `MOE_STREAM_TEST_PROMPT_SPLIT_LM_FAIL` | Makes the memory report that it cannot go back to the first ubatch in a layer-major call, to test the fallback: 1 in the first layer-major call, 2 in the first one that does not start at position 0. |
+| `MOE_STREAM_TEST_RA_NO_ONEWAVE` | When 1, read-ahead (--moe-stream-read-ahead) does not run in one-wave calls. |
+| `MOE_STREAM_TEST_RG_GIVE` | Makes every prompt call give back this many routed-expert slots per layer in all, so the call runs with more waves than at start. |
+| `MOE_STREAM_TEST_RG_OFF` | When 1, prompt calls do not give routed-expert slots back for their own memory. |
+| `MOE_STREAM_TEST_SKIP_EVENT` | Names a layer whose GPU producer never runs, so the call-counter check must stop the run at the first decode word: N or g:N skips the guess producer, r:N the router producer and w:V the guess producer of word-start source V. |
+| `MOE_STREAM_TEST_STATE_SKIP` | Names a layer index whose in-place linear-attention state step skips its state write (with --moe-stream-cpu-state-inplace), as a failure test. |
+| `MOE_STREAM_TEST_TAIL_WAVE_W` | Sets the wave width of tail-wave graphs to this value when it is above 0. |
+| `MOE_STREAM_TEST_TOKEN_TABLE_RAM` | When 1, the word table (token_embd) is read into RAM at load instead of being mapped from the file. |
+| `MOE_STREAM_TEST_UNIFORM_N` | When 1, the VRAM expert pool holds the same number of experts in every layer instead of being sized place by place. |
+| `MOE_STREAM_TEST_VF_CB_HOLD_US` | Makes the VRAM-follow uploader hold a due copy-back until the next call has started and this many microseconds more. |
+| `MOE_STREAM_TEST_VF_CB_STALE` | Makes the Nth VRAM-follow copy-back skip its host copy, so the slot keeps its old bytes and the read-back check must stop the run. |
+| `MOE_STREAM_TEST_VF_DELAY_SWITCH` | Sets how many call starts a VRAM-follow swap waits before its switch may happen. |
+| `MOE_STREAM_TEST_VF_DEVICE_WAIT` | When 1, the VRAM-follow tick keeps the device-wide wait instead of waiting on a GPU event. |
+| `MOE_STREAM_TEST_VF_EARLY_EVENT` | When 1, VRAM follow records its tick event at the start of the tick word instead of at its end, as the failure test of the event wait. |
+| `MOE_STREAM_TEST_VF_HOOK_ON` | When 1 without --moe-stream-vram-follow, every victim choice runs the VRAM-follow version of pick_victim with all marks zero, so nothing changes. |
+| `MOE_STREAM_TEST_VF_IGNORE_MARK` | When 1, a VRAM-follow swap does not mark its source RAM slot, so the slot can be taken during the copy, as the failure test of the mark. |
+| `MOE_STREAM_TEST_VF_NO_TICK` | When 1, VRAM follow never runs its tick, so no swap is decided. |
+| `MOE_STREAM_TEST_VF_OLD_ORDER` | When 1, VRAM follow runs in its older order: a swap waits at least one call start before it switches, the tick keeps the device-wide wait and the copy-back is not used. |
+| `MOE_STREAM_TEST_VF_OLD_WAVES` | When 1 with VRAM follow, waves are counted with the older bound that excludes the pool's N experts, to show the coverage check stopping. |
+| `MOE_STREAM_TEST_VF_PLACE_CHECK` | Queues N microseconds of GPU delay on the compute stream at each VRAM-follow event tick, where N is the value, then reads the first freed place, and the next call start compares it with the leaving expert's bytes and stops the run on a difference. |
+| `MOE_STREAM_TEST_VF_SLOW_COPY_US` | Makes the VRAM-follow uploader sleep this many microseconds before each copy. |
+| `MOE_STREAM_TEST_VF_SLOW_READ_US` | Makes every guess read sleep this many microseconds on its I/O thread before it starts. |
+| `MOE_STREAM_TEST_VF_SYNC_COPY` | When 1, VRAM follow copies synchronously on the calling thread and the tick keeps the device-wide wait. |
+| `MOE_STREAM_TEST_VF_VERIFY` | Checks VRAM follow's places against their sources, where 1 checks every switched place and 2 also checks 16 held places per call start in rotation. |
+| `MOE_STREAM_TEST_VP_STALE_TABLE` | With --moe-stream-vram-parallel 1, skips the Nth incoming row write of the VRAM table, where N is the value, so the table check must stop the run. |
+| `MOE_STREAM_TEST_VX_CAP_TOTAL` | Caps the total number of places in the VRAM expert pool at this value, so an exact gate can run with one more place in some layers. |
+| `MOE_STREAM_TEST_VX_LOOP_BIAS_MIB` | Pretends the second reserve of the pool-sizing loop left this many MiB less, to exercise the loop's shrink steps, its exhaustion and its cannot-go-lower end. |
+| `MOE_STREAM_TEST_VX_LOOP_FAIL_ABOVE_LO` | When 1, every pool-sizing trial above the largest count that already passed fails like a failed allocation, so the last trial can fail with a verified count behind it. |
+| `MOE_STREAM_TEST_WAVE_ROWS` | When 1, per-pair index rows are built and compared with the slot ids in every wave of --moe-stream-wave-plan without being used. |
+| `MOE_STREAM_TEST_WAVE_SLACK` | Caps each wave of --moe-stream-wave-plan at the average number of pairs plus this many (without it there is no cap). |
+| `MOE_STREAM_TEST_WEIGHTS_EARLY` | When 1, the routing-weights chain of a needed-early GPU-producer decode graph with --moe-stream-fused-route is expanded in front of the router mark, as before, instead of after the mark and the guess in the GPU window. |
+| `MOE_STREAM_TEST_WINDOW_CHECK` | When 1, --moe-stream-window checks its slot budget at each move of room between layers. |
+| `MOE_STREAM_TEST_WINDOW_COMPACT` | When 1, the window compacts at the end of a pass even without a GPU. |
+| `MOE_STREAM_TEST_WINDOW_END_OFF` | When 1, a window pass ends with 3 slots of room in the wrong layer. |
+| `MOE_STREAM_TEST_WINDOW_KEEP` | Chooses the rule by which a finished window layer picks the experts it keeps: pe (default, the prompt's uses weighted by recency), recency (the latest pick) or count. |
+| `MOE_STREAM_TEST_WINDOW_KEEP_TAKE` | When 1, the read-ahead of the last window layers may take kept experts. |
+| `MOE_STREAM_TEST_WINDOW_NO_PAGE_MOVE` | When 1, room moves between window layers by returning pages (the next read gets fresh ones) instead of moving the pages. |
+| `MOE_STREAM_TEST_WINDOW_NO_TAKEBACK` | When 1, a window layer's start takes no room back. |
+| `MOE_STREAM_TEST_WINDOW_REFILL` | When 1, turns on the read-back of a finished window layer's kept experts that its waves evicted, which is off by default. |
+| `MOE_STREAM_TEST_WINDOW_SHORT` | Makes a starting window layer give its room away down to this many slots, to check that its waves still cover. |
+| `MOE_STREAM_TEST_WIN_CLOBBER` | When 1, a finished layer's slots are overwritten and emptied in a layer-major call. |
+| `MOE_STREAM_TEST_WIN_GATHER` | When 1, the tail waves' gather is turned on even without the window or copy-ahead. |
+| `MOE_STREAM_TEST_WIN_NOGATHER` | When 1, the tail waves' gather is turned off. |
+| `MOE_STREAM_TEST_WIN_TAIL_MOVE` | When 1, no slot keeps its number in the tail waves, which takes the free-place path. |
+| `MOE_STREAM_TEST_WS_BAD_COUNTER` | With --moe-stream-needed-early 1 and --moe-stream-wordstart above 0, 1 makes the first word-start source post a wrong call counter, so the counter check must stop the run. |
+| `MOE_STREAM_TEST_WS_INELIGIBLE` | Names a word-start source layer V that counts as not eligible, so all sources keep the word-start op, and the run aborts if it needs --moe-stream-needed-early 1, --moe-stream-wordstart above 0 and the GPU producer and they are not there. |
+| `MOE_STREAM_TEST_ZERO_WRITE` | When 1, each pool is allocated normally and its all-zero block is written at start and counted in the RAM plan, instead of being left unwritten. |
+| `MOE_STREAM_VRAM_TEST_EMPTY` | When 1, the VRAM expert pool and its device pass exist but hold no expert, so every device id names a zero slice and the output must equal the run without --moe-stream-vram-experts. |

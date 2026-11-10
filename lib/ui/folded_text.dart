@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../theme.dart';
+import 'clicky.dart';
 
 /// A sent message's text: longer than [lines] lines, it shows only its first [lines] (the last one fading out),
 /// with an arrow under it that opens it to its full length (growing downwards) and folds it again.
@@ -79,10 +80,11 @@ class FoldedText extends StatelessWidget {
           Tooltip(
             message: open ? 'Show less' : 'Show more',
             waitDuration: const Duration(milliseconds: 400),
-            child: InkWell(
+            excludeFromSemantics: true,
+            child: Clicky(
               key: arrowKey,
-              customBorder: const CircleBorder(),
-              hoverColor: c.text.withValues(alpha: 0.06),
+              radius: 13,
+              label: open ? 'Show less' : 'Show more',
               onTap: onToggle,
               child: SizedBox(
                 width: 26,

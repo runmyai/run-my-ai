@@ -35,6 +35,9 @@ Future<void> setUpWindow(Storage storage) async {
     await windowManager.setTitleBarStyle(TitleBarStyle.hidden, windowButtonVisibility: true);
   }
   await windowManager.setMinimumSize(minWindowSize);
+  // The window's close button does not close it by itself: it asks first while a reply or a benchmark is running
+  // (lib/ui/close_guard.dart).
+  await windowManager.setPreventClose(true);
   // Windows and macOS take the app icon from the build; Linux gets it here (desktops that read a window's own icon).
   if (Platform.isLinux) {
     final icon = '${File(Platform.resolvedExecutable).parent.path}/data/flutter_assets/assets/app-icon/app-icon-256.png';

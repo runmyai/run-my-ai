@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'backend/backend.dart';
-import 'backend/dummy_backend.dart';
+import 'backend/engine_backend.dart';
 import 'data/chat_store.dart';
 import 'data/storage.dart';
 import 'dev/screenshot.dart';
@@ -12,6 +12,7 @@ import 'state/section.dart';
 import 'system/appearance.dart';
 import 'system/chime.dart';
 import 'theme.dart';
+import 'ui/close_guard.dart';
 import 'ui/shell.dart';
 import 'ui/title_bar.dart';
 import 'window/app_window.dart';
@@ -27,7 +28,7 @@ Future<void> main() async {
     _ => null,
   };
   runApp(
-    appWith(storage: storage, chatStore: chatStore, backend: DummyBackend(), section: section, themeMode: themeMode),
+    appWith(storage: storage, chatStore: chatStore, backend: EngineBackend(storage), section: section, themeMode: themeMode),
   );
   scheduleScreenshot();
 }
@@ -93,7 +94,7 @@ class RunMyAiApp extends ConsumerWidget {
             child: WindowShape(child: child!),
           );
         },
-        home: const Shell(),
+        home: const CloseGuard(child: Shell()),
       ),
     );
   }

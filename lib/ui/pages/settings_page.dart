@@ -3,17 +3,38 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../backend/engine_backend.dart';
 import '../../state/motion.dart';
 import '../../state/prefs.dart';
 import '../../system/chime.dart';
 import '../../theme.dart';
+import '../buttons.dart';
 import '../menu_panel.dart';
+import 'about_page.dart';
 
 /// Settings: the theme (two menus: Run My AI, Silk or Plain, then Light or Dark - Plain's are Dusk and Espresso), saved; Reply motion, two buttons to show the difference
 /// smoothing makes (Smooth, as replies normally move, and Raw, with none), until the app is restarted; and the
-/// sound when a reply finishes.
-class SettingsPage extends ConsumerWidget {
+/// sound when a reply finishes. A button at the bottom opens About in place of the settings.
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  var _about = false;
+
+  @override
+  Widget build(BuildContext context) => _about
+      ? AboutPage(key: const Key('about-page'), onBack: () => setState(() => _about = false))
+      : _SettingsList(onAbout: () => setState(() => _about = true));
+}
+
+class _SettingsList extends ConsumerWidget {
+  const _SettingsList({required this.onAbout});
+
+  final VoidCallback onAbout;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -92,7 +113,186 @@ class SettingsPage extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 28),
+        Text(
+          'Generation speed',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'How the speed under a reply looks.',
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          children: [
+            _Choice(
+              id: 'speed-normal',
+              label: 'Normal',
+              chosen: !prefs.speedHighlighted,
+              onTap: () => notifier.setSpeedHighlighted(false),
+            ),
+            _Choice(
+              id: 'speed-highlighted',
+              label: 'Highlighted',
+              chosen: prefs.speedHighlighted,
+              onTap: () => notifier.setSpeedHighlighted(true),
+            ),
+          ],
+        ),
+        const SizedBox(height: 28),
         const _Sound(),
+        const SizedBox(height: 28),
+        const _StateLimit(),
+        const SizedBox(height: 28),
+        const _EngineFolder(),
+        const SizedBox(height: 28),
+        Text(
+          'About',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+        ),
+        const SizedBox(height: 2),
+        Text('Versions, credits and licences.', style: TextStyle(fontSize: 13, color: c.textSecondary)),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: AppButton(
+            key: const Key('about-link'),
+            label: 'About Run My AI',
+            trailingIcon: Icons.chevron_right,
+            onTap: onAbout,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The most the chats' saved states may take on the disk. A change applies the next time the engine starts.
+class _StateLimit extends ConsumerStatefulWidget {
+  const _StateLimit();
+
+  @override
+  ConsumerState<_StateLimit> createState() => _StateLimitState();
+}
+
+class _StateLimitState extends ConsumerState<_StateLimit> {
+  late final _text = TextEditingController(text: _show(ref.read(prefsProvider).stateLimitGiB));
+
+  static String _show(double gib) => gib == gib.roundToDouble() ? '${gib.round()}' : '$gib';
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Saved chats',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'How much disk space chats may use to continue quickly. When it is full the oldest are removed; your chats themselves are never touched.',
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            SizedBox(
+              width: 100,
+              child: TextField(
+                key: const Key('state-limit'),
+                controller: _text,
+                onChanged: (text) {
+                  final gib = double.tryParse(text.trim());
+                  if (gib != null && gib > 0) ref.read(prefsProvider.notifier).setStateLimit(gib);
+                },
+                style: TextStyle(fontSize: 13, color: c.text),
+                cursorColor: c.text,
+                decoration: InputDecoration(
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: c.inputBorder),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: c.text.withValues(alpha: 0.35)),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// The folder the engine is in. A change applies the next time the engine starts.
+class _EngineFolder extends ConsumerStatefulWidget {
+  const _EngineFolder();
+
+  @override
+  ConsumerState<_EngineFolder> createState() => _EngineFolderState();
+}
+
+class _EngineFolderState extends ConsumerState<_EngineFolder> {
+  late final _text = TextEditingController(
+    text: ref.read(prefsProvider).engineFolder ?? EngineBackend.defaultEngineFolder,
+  );
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Engine folder',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'Where the engine is. A change applies the next time it starts.',
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          key: const Key('engine-folder'),
+          controller: _text,
+          onChanged: ref.read(prefsProvider.notifier).setEngineFolder,
+          style: TextStyle(fontSize: 13, color: c.text),
+          cursorColor: c.text,
+          decoration: InputDecoration(
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: c.inputBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: c.text.withValues(alpha: 0.35)),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -242,28 +442,13 @@ class _Menu extends StatelessWidget {
           ],
         ),
       ],
-      builder: (context, menu, _) => GestureDetector(
+      builder: (context, menu, _) => OptionPill(
         key: Key(id),
+        label: label,
+        chosen: menu.isOpen,
+        trailingIcon: Icons.keyboard_arrow_down,
+        padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
         onTap: () => menu.isOpen ? menu.close() : menu.open(),
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
-            decoration: BoxDecoration(
-              color: menu.isOpen ? c.selected : Colors.transparent,
-              border: Border.all(color: c.inputBorder),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(label, style: TextStyle(fontSize: 13, color: c.text)),
-                const SizedBox(width: 6),
-                Icon(Icons.keyboard_arrow_down, size: 16, color: c.textMuted),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -279,22 +464,12 @@ class _Choice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = context.colors;
-    return GestureDetector(
+    return OptionPill(
       key: Key(id),
+      label: label,
+      chosen: chosen,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
       onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-          decoration: BoxDecoration(
-            color: chosen ? c.selected : Colors.transparent,
-            border: Border.all(color: chosen ? c.text.withValues(alpha: 0.35) : c.inputBorder),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(label, style: TextStyle(fontSize: 13, color: chosen ? c.text : c.textSecondary)),
-        ),
-      ),
     );
   }
 }

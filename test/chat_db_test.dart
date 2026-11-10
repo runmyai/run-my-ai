@@ -184,4 +184,29 @@ void main() {
     expect([for (final m in db.messages('a')) m.bookmark], [false, false, false]);
     db.close();
   });
+
+  test('a reply saved again as it grows replaces the one before, with its words in the index', () async {
+    final db = ChatDb.inMemory();
+    db.createChat(ChatInfo(id: 'a', title: 'Alpha', createdAt: DateTime(2026), updatedAt: DateTime(2026)));
+    db.addMessage('a', 0, const ChatMessage(Role.user, 'question'));
+    db.addMessage('a', 1, const ChatMessage(Role.assistant, 'zebra', thinking: 'hm', thinkingMillis: 40, stopped: true));
+    db.addMessage('a', 1, const ChatMessage(Role.assistant, 'giraffe crossing', thinking: 'hm', thinkingMillis: 40));
+    final saved = db.messages('a');
+    expect(saved.map((m) => m.text), ['question', 'giraffe crossing']);
+    expect((saved[1].stopped, saved[1].thinking, saved[1].thinkingMillis), (false, 'hm', 40));
+    expect(await db.search(SearchQuery.parse('zebra')), isEmpty, reason: 'the old words are gone');
+    expect((await db.search(SearchQuery.parse('giraffe')))!.map((h) => h.chatId), ['a']);
+    db.close();
+  });
+
+  test('a reply stopped while it thought is saved with its thought, marked stopped', () {
+    final db = ChatDb.inMemory();
+    db.createChat(ChatInfo(id: 'a', title: 'Alpha', createdAt: DateTime(2026), updatedAt: DateTime(2026)));
+    db.addMessage('a', 0, const ChatMessage(Role.user, 'question'));
+    db.addMessage('a', 1, const ChatMessage(Role.assistant, '', thinking: 'let me see', thinkingMillis: 1200, stopped: true));
+    final back = db.messages('a')[1];
+    expect((back.text, back.thinking, back.thinkingMillis, back.stopped), ('', 'let me see', 1200, true));
+    expect(db.messages('a')[0].stopped, isFalse);
+    db.close();
+  });
 }

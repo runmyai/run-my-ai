@@ -220,7 +220,7 @@ class _CaptionButtonState extends State<_CaptionButton> {
       background = _pressed ? _closeRedPressed : _closeRed;
       icon = Colors.white;
     } else {
-      background = _pressed ? c.switchOn : (_hover ? c.selected : Colors.transparent);
+      background = _pressed ? c.rowPressed : (_hover ? c.rowHover : Colors.transparent);
       icon = _hover || _pressed ? c.text : c.textSecondary;
     }
     return Tooltip(

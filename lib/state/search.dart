@@ -116,7 +116,7 @@ class FindState {
   final String chatId;
   final SearchQuery query;
 
-  /// The match on screen now (an index into the chat's messages).
+  /// The match on screen now (an index into the messages shown).
   final int messageIndex;
 }
 
@@ -132,6 +132,14 @@ class FindNotifier extends Notifier<FindState?> {
 
   void show({required String chatId, required SearchQuery query, required int messageIndex}) =>
       state = FindState(chatId: chatId, query: query, messageIndex: messageIndex);
+
+  /// Opens the chat of a search result on the version that holds message [node] (the result's message number: it may
+  /// be in a version other than the one the chat was left on) and shows its matches there.
+  Future<void> showHit({required String chatId, required SearchQuery query, required int node}) async {
+    final index = await ref.read(chatsProvider.notifier).openAt(chatId, node);
+    if (!ref.mounted) return;
+    state = index == null ? null : FindState(chatId: chatId, query: query, messageIndex: index);
+  }
 
   /// Moves to the next match ([step] 1) or the one before ([step] -1), going round at the ends.
   void move(int step) {

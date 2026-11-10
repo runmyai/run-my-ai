@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:sqlite3/sqlite3.dart';
 
 import '../search/chat_search.dart';
 import 'models.dart';
+import 'reply_stats.dart';
 
 /// The chats, saved in one SQLite database (chats.db in the app's data folder), with a word index for search.
 ///
@@ -13,10 +15,20 @@ import 'models.dart';
 ///   chats          id, a number (num), title, created / updated (milliseconds), pin (place among the pinned, or null),
 ///                  kind (0 = the Chat section, 1 = Code), sort (its place among its day's chats after the user
 ///                  dragged it; null = by when it was last used)
-///   messages       one row per message: who wrote it, the text, and whether it is a bookmark (1, or NULL). Its
-///                  row number says where it is: the chat's
-///                  number times 2^20 plus its place in the chat. So a chat's messages are one range of numbers,
-///                  in order, and a number from the word index tells its chat and place with nothing looked up.
+///   messages       one row per message, of every version: who wrote it, the text, whether it is a bookmark (1, or
+///                  NULL) and whether the reply did not get to its end (stopped: 1, or NULL). Its row number says
+///                  which chat and which message it is: the chat's number times 2^20 plus the message's own number
+///                  (the order the messages were made in, the versions of a message included). So a chat's messages
+///                  are one range of numbers, and a number from the word index tells its chat and message with
+///                  nothing looked up.
+///                  The messages of a chat form a tree: parent is the message it follows (NULL: it starts the chat),
+///                  sel the follower shown (NULL: the newest; chats.sel does the same for the first messages) and
+///                  conv the conversation id the engine keeps its saved state under (NULL: the chat's own id). A
+///                  message with several followers (an edited message, a reply written again) has versions; the
+///                  version shown at each place makes the path the chat opens on. A reply also has stats: how it
+///                  went (speed, tokens, time ...) as one JSON text, shown on the card under it.
+///   benchmarks     one row per benchmark run, newest last: the run's details and its shrunk graphs as one JSON text.
+///                  Only the newest ChatDb.maxBenchmarks runs are kept.
 ///   messages_fts   the word index: for each message, its words as the search splits them. It keeps no copy of
 ///                  the text (contentless) and only which messages hold which words (detail=none, the smallest
 ///                  kind): the search checks the order and closeness of the words itself. It also keeps every
@@ -143,6 +155,52 @@ class ChatDb {
       }
       _db.userVersion = 7;
     }
+    // Version 8: a reply can hold what the model thought before it, and for how long.
+    if (_db.userVersion < 8) {
+      _db.execute('ALTER TABLE messages ADD COLUMN thinking TEXT');
+      _db.execute('ALTER TABLE messages ADD COLUMN thinking_ms INTEGER');
+      _db.userVersion = 8;
+    }
+    // Version 9: each chat remembers its model and context length.
+    if (_db.userVersion < 9) {
+      _db.execute('ALTER TABLE chats ADD COLUMN model TEXT');
+      _db.execute('ALTER TABLE chats ADD COLUMN context INTEGER');
+      _db.userVersion = 9;
+    }
+    // Version 10: the history of benchmark runs, newest last; each run's details as one JSON text.
+    if (_db.userVersion < 10) {
+      _db.execute('CREATE TABLE IF NOT EXISTS benchmarks (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL)');
+      _db.userVersion = 10;
+    }
+    // Version 11: a reply that did not get to its end is marked (1; NULL = not one).
+    if (_db.userVersion < 11) {
+      _db.execute('ALTER TABLE messages ADD COLUMN stopped INTEGER');
+      _db.userVersion = 11;
+    }
+    // Version 12: a message can have several versions, each with its own later messages (see the tables above). A
+    // chat saved before is one path: each message follows the one before it, so what it shows does not change.
+    if (_db.userVersion < 12) {
+      _inTransaction(() {
+        _db.execute('''
+          ALTER TABLE messages ADD COLUMN parent INTEGER;
+          ALTER TABLE messages ADD COLUMN sel INTEGER;
+          ALTER TABLE messages ADD COLUMN conv TEXT;
+          ALTER TABLE chats ADD COLUMN sel INTEGER;
+          -- Lists the branches (every conversation id) without reading the messages' texts.
+          CREATE INDEX messages_conv ON messages (conv) WHERE conv IS NOT NULL;
+          CREATE TEMP TABLE before (id INTEGER PRIMARY KEY, prev INTEGER);
+          INSERT INTO before SELECT id, LAG(id) OVER (PARTITION BY id >> $_placeBits ORDER BY id) FROM messages;
+          UPDATE messages SET parent = (SELECT prev FROM before WHERE before.id = messages.id);
+          DROP TABLE before;
+        ''');
+        _db.userVersion = 12;
+      });
+    }
+    // Version 13: how a reply went (its stats as one JSON text, what the card under the reply shows).
+    if (_db.userVersion < 13) {
+      _db.execute('ALTER TABLE messages ADD COLUMN stats TEXT');
+      _db.userVersion = 13;
+    }
   }
 
   void close() {
@@ -155,7 +213,7 @@ class ChatDb {
   /// All chats (of both sections), the most recently used first.
   List<ChatInfo> chats() => [
         for (final r in _db.select(
-            'SELECT id, title, created, updated, kind, sort, archived FROM chats ORDER BY updated DESC, id DESC'))
+            'SELECT id, title, created, updated, kind, sort, archived, model, context FROM chats ORDER BY updated DESC, id DESC'))
           ChatInfo(
             id: r['id'] as String,
             title: r['title'] as String,
@@ -164,20 +222,135 @@ class ChatDb {
             kind: ChatKind.values[r['kind'] as int],
             sort: (r['sort'] as num?)?.toDouble(),
             archivedAt: r['archived'] == null ? null : DateTime.fromMillisecondsSinceEpoch(r['archived'] as int),
+            modelId: r['model'] as String?,
+            contextLength: r['context'] as int?,
           ),
       ];
 
   /// The pinned chats' ids (of both sections), in the user's order.
   List<String> pins() => [for (final r in _db.select('SELECT id FROM chats WHERE pin IS NOT NULL ORDER BY pin')) r['id'] as String];
 
-  List<ChatMessage> messages(String chatId) {
+  /// The messages shown: the path through the chat's versions (see [path]).
+  List<ChatMessage> messages(String chatId) => path(chatId).messages;
+
+  /// The key of "before the first message" among the messages' followers.
+  static const _start = -1;
+
+  /// The parent to give [addMessage] for a message that starts the chat.
+  static const noParent = -1;
+
+  /// The messages of the chat as shown, and the number its next message gets. At each place the version shown is
+  /// the one last chosen there (by the user, or by a message made there: see [select]); a place never chosen shows
+  /// its newest version. Each message says which version it is and how many there are.
+  ChatPath path(String chatId) {
     final num = _num[chatId];
-    if (num == null) return const [];
-    return [
-      for (final r in _db.select(
-          'SELECT role, text, bookmark FROM messages WHERE id BETWEEN ? AND ? ORDER BY id', [_first(num), _last(num)]))
-        ChatMessage(Role.values[r['role'] as int], r['text'] as String, bookmark: r['bookmark'] != null),
-    ];
+    if (num == null) return const ChatPath([], 0);
+    // The shape of the tree first, without any text: each message's versions of the next one (oldest first), and
+    // which of them was chosen.
+    final followers = <int, List<int>>{};
+    final chosen = <int, int>{};
+    var next = 0;
+    for (final r in _db.select(
+        'SELECT id, parent, sel FROM messages WHERE id BETWEEN ? AND ? ORDER BY id', [_first(num), _last(num)])) {
+      final id = r['id'] as int;
+      (followers[r['parent'] as int? ?? _start] ??= []).add(id);
+      if (r['sel'] case final int sel) chosen[id] = sel;
+      next = max(next, (id & _placeMask) + 1);
+    }
+    if (_db.select('SELECT sel FROM chats WHERE id = ?', [chatId]).firstOrNull?['sel'] case final int sel) {
+      chosen[_start] = sel;
+    }
+    final shown = <(int, int, int)>[]; // id, version, versions
+    var at = _start;
+    for (var versions = followers[at]; versions != null && shown.length <= _placeMask; versions = followers[at]) {
+      final pick = versions.contains(chosen[at]) ? chosen[at]! : versions.last;
+      shown.add((pick, versions.indexOf(pick), versions.length));
+      at = pick;
+    }
+    final read = _db.prepare(
+        'SELECT role, text, bookmark, thinking, thinking_ms, stopped, conv, stats FROM messages WHERE id = ?');
+    try {
+      return ChatPath([
+        for (final (id, version, versions) in shown)
+          if (read.select([id]).firstOrNull case final r?)
+            ChatMessage(
+              Role.values[r['role'] as int],
+              r['text'] as String,
+              bookmark: r['bookmark'] != null,
+              thinking: r['thinking'] as String? ?? '',
+              thinkingMillis: r['thinking_ms'] as int?,
+              stopped: r['stopped'] != null,
+              node: id & _placeMask,
+              version: version,
+              versions: versions,
+              conv: r['conv'] as String?,
+              stats: _readStats(r['stats'] as String?),
+            ),
+      ], next);
+    } finally {
+      read.close();
+    }
+  }
+
+  /// Makes message [node] the version shown at its place, and every message it follows the version shown at theirs,
+  /// so the chat opens on the path that holds it.
+  void select(String chatId, int node) => _inTransaction(() {
+        final num = _num[chatId];
+        if (num == null) return;
+        final parentOf = _db.prepare('SELECT parent FROM messages WHERE id = ?');
+        try {
+          var id = _first(num) | node;
+          for (var steps = 0; steps <= _placeMask; steps++) {
+            final row = parentOf.select([id]).firstOrNull;
+            if (row == null) return;
+            final parent = row['parent'] as int?;
+            if (parent == null) {
+              _db.execute('UPDATE chats SET sel = ? WHERE id = ?', [id, chatId]);
+              return;
+            }
+            _db.execute('UPDATE messages SET sel = ? WHERE id = ?', [id, parent]);
+            id = parent;
+          }
+        } finally {
+          parentOf.close();
+        }
+      });
+
+  /// Shows the version of message [node] that is [step] places after it (before it, for a negative step), as far as
+  /// there is one, and returns the chat's path then.
+  ChatPath flip(String chatId, int node, int step) {
+    final num = _num[chatId];
+    if (num != null) {
+      final id = _first(num) | node;
+      final parent = _db.select('SELECT parent FROM messages WHERE id = ?', [id]).firstOrNull?['parent'] as int?;
+      final versions = [
+        for (final r in parent == null
+            ? _db.select('SELECT id FROM messages WHERE parent IS NULL AND id BETWEEN ? AND ? ORDER BY id',
+                [_first(num), _last(num)])
+            : _db.select('SELECT id FROM messages WHERE parent = ? ORDER BY id', [parent]))
+          r['id'] as int,
+      ];
+      final at = versions.indexOf(id);
+      if (at >= 0) select(chatId, versions[(at + step).clamp(0, versions.length - 1)] & _placeMask);
+    }
+    return path(chatId);
+  }
+
+  /// The chat's path with message [node] on it (see [select]).
+  ChatPath pathTo(String chatId, int node) {
+    select(chatId, node);
+    return path(chatId);
+  }
+
+  /// The conversation ids of the chats' branches (every id but a chat's own that its messages are saved under), by
+  /// chat id.
+  Map<String, List<String>> branches() {
+    final chatOf = {for (final e in _num.entries) e.value: e.key};
+    final found = <String, List<String>>{};
+    for (final r in _db.select('SELECT DISTINCT id >> $_placeBits AS num, conv FROM messages WHERE conv IS NOT NULL')) {
+      if (chatOf[r['num'] as int] case final chat?) (found[chat] ??= []).add(r['conv'] as String);
+    }
+    return found;
   }
 
   // ---- Changes ---------------------------------------------------------------------------------------------------
@@ -192,16 +365,90 @@ class ChatDb {
     _num[chat.id] = num;
   }
 
-  /// Adds a message at place [pos] of the chat, and its words to the index.
-  void addMessage(String chatId, int pos, ChatMessage message) => _inTransaction(() => _addMessage(chatId, pos, message));
+  /// Saves message number [pos] of the chat, and its words in the index. A new message follows message [parent]
+  /// ([noParent]: it starts the chat) and becomes the version shown there; left out, it follows the one before it in
+  /// number, the way a chat that is one line of messages is saved. A number that already holds a message (a reply
+  /// saved again as it grows) gets the new text, with the old one's words gone from the index.
+  void addMessage(String chatId, int pos, ChatMessage message, {int? parent}) =>
+      _inTransaction(() => _addMessage(chatId, pos, message, parent: parent));
 
-  void _addMessage(String chatId, int pos, ChatMessage message) {
+  void _addMessage(String chatId, int pos, ChatMessage message, {int? parent}) {
     final num = _num[chatId];
     if (num == null || pos > _placeMask) return;
     final id = _first(num) | pos;
-    _db.execute('INSERT INTO messages (id, role, text) VALUES (?, ?, ?)', [id, message.role.index, message.text]);
+    final thinking = message.thinking.isEmpty ? null : message.thinking;
+    final stopped = message.stopped ? 1 : null;
+    final stats = message.stats == null || message.stats!.isEmpty ? null : jsonEncode(message.stats!.toJson());
+    _db.execute('DELETE FROM messages_fts WHERE rowid = ?', [id]);
+    if (_db.select('SELECT 1 FROM messages WHERE id = ?', [id]).isNotEmpty) {
+      // (The stats stay as they are when the message comes without them: a reply is saved again as it grows.)
+      _db.execute(
+          'UPDATE messages SET role = ?, text = ?, thinking = ?, thinking_ms = ?, stopped = ?, stats = COALESCE(?, stats) WHERE id = ?',
+          [message.role.index, message.text, thinking, message.thinkingMillis, stopped, stats, id]);
+    } else {
+      final after = parent == noParent || (parent == null && pos == 0) ? null : _first(num) | (parent ?? pos - 1);
+      _db.execute(
+          'INSERT INTO messages (id, role, text, thinking, thinking_ms, stopped, parent, conv, stats) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, message.role.index, message.text, thinking, message.thinkingMillis, stopped, after, message.conv, stats]);
+      // The new message is the version shown at its place.
+      if (after == null) {
+        _db.execute('UPDATE chats SET sel = ? WHERE id = ?', [id, chatId]);
+      } else {
+        _db.execute('UPDATE messages SET sel = ? WHERE id = ?', [id, after]);
+      }
+    }
     _db.execute('INSERT INTO messages_fts (rowid, words) VALUES (?, ?)', [id, searchWords(message.text)]);
   }
+
+  /// Saves a benchmark run's details, keeping only the newest [keep] runs; returns the new run's id.
+  int addBenchmark(String data, {int keep = maxBenchmarks}) {
+    _db.execute('INSERT INTO benchmarks (data) VALUES (?)', [data]);
+    final id = _db.lastInsertRowId;
+    _db.execute('DELETE FROM benchmarks WHERE id NOT IN (SELECT id FROM benchmarks ORDER BY id DESC LIMIT ?)', [keep]);
+    return id;
+  }
+
+  void deleteBenchmark(int id) => _db.execute('DELETE FROM benchmarks WHERE id = ?', [id]);
+
+  /// Every benchmark run's id and details, the newest first.
+  List<(int, String)> benchmarks() => [
+    for (final r in _db.select('SELECT id, data FROM benchmarks ORDER BY id DESC')) (r['id'] as int, r['data'] as String),
+  ];
+
+  /// How many benchmark runs are kept (each with its graphs).
+  static const maxBenchmarks = 60;
+
+  static ReplyStats? _readStats(String? json) {
+    if (json == null) return null;
+    try {
+      return ReplyStats.fromJson((jsonDecode(json) as Map).cast<String, Object?>());
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// The model file and context length the chat uses.
+  void setChoices(String chatId, String? modelId, int? contextLength) =>
+      _db.execute('UPDATE chats SET model = ?, context = ? WHERE id = ?', [modelId, contextLength, chatId]);
+
+  /// Removes message [node] of the chat and any message after it, with their words in the index.
+  void removeMessage(String chatId, int node) => _inTransaction(() {
+        final num = _num[chatId];
+        if (num == null) return;
+        final followers = <int, List<int>>{};
+        for (final r in _db.select(
+            'SELECT id, parent FROM messages WHERE id BETWEEN ? AND ? AND parent IS NOT NULL', [_first(num), _last(num)])) {
+          (followers[r['parent'] as int] ??= []).add(r['id'] as int);
+        }
+        final gone = [_first(num) | node];
+        for (var i = 0; i < gone.length; i++) {
+          gone.addAll(followers[gone[i]] ?? const []);
+        }
+        for (final id in gone) {
+          _db.execute('DELETE FROM messages_fts WHERE rowid = ?', [id]);
+          _db.execute('DELETE FROM messages WHERE id = ?', [id]);
+        }
+      });
 
   /// A new message: the chat's time changes and it leaves any place it was dragged to (the top of Today).
   void setUpdated(String chatId, DateTime updatedAt) =>

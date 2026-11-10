@@ -96,7 +96,9 @@ class ChatHit {
   /// The matching words in the chat's title.
   final List<Span> titleSpans;
 
-  /// The message that matches best (shown under the title and jumped to), or null when only the title matches.
+  /// The message that matches best (shown under the title and jumped to), or null when only the title matches. In a
+  /// search of the database it is the message's number in its chat ([ChatMessage.node]), which names the message in
+  /// whichever version it is; for a chat that was never edited that is its place among the messages.
   final int? messageIndex;
   final Role? messageRole;
 

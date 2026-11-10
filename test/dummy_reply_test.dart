@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:runmyai/backend/backend.dart';
 import 'package:runmyai/backend/dummy_backend.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/state/motion.dart';
@@ -163,7 +164,8 @@ void main() {
     final backend = DummyBackend(tokensPerSecond: 400, fixedReply: text, random: Random(2));
     final clock = Stopwatch()..start();
     final pieces = await backend
-        .reply(chatId: 'c', model: DummyBackend.catalog.first.files.first, messages: const [ChatMessage(Role.user, 'hi')])
+        .reply(chatId: 'c', model: DummyBackend.catalog.first.files.first, messages: const [ChatMessage(Role.user, 'hi')], run: const EngineRun(flags: '', contextLength: 4096))
+        .map((e) => (e as ReplyText).text)
         .toList();
     final seconds = clock.elapsed.inMicroseconds / 1e6;
     expect(pieces.join(), text);
