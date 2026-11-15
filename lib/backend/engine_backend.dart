@@ -43,6 +43,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// Where the chats' saved states and snapshots are kept: one file per state, next to the models.
   static const stateFolder = '$_root/traces/run-my-ai-states';
 
+  String get _activeStateFolder =>
+      Directory(_root).existsSync() ? stateFolder : '${_storage.dir.path}${Platform.pathSeparator}states';
+
   /// How many "start of message" snapshots each chat keeps.
   static const _snapshots = 4;
 
@@ -166,7 +169,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   Future<void> eraseChatState(String chatId) async {
     final engine = _engine;
     if (engine != null && engine.running && await _eraseThrough(engine, chatId)) return;
-    deleteChatStates(stateFolder, chatId);
+    deleteChatStates(_activeStateFolder, chatId);
   }
 
   @override
@@ -667,8 +670,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   Future<EngineProcess> _start(_LocalModel local, EngineRun run) async {
     final prefs = _storage.readPrefs();
     final folder = prefs.engineFolder ?? defaultEngineFolder;
-    Directory(stateFolder).createSync(recursive: true);
-    final program = '$folder/llama-server';
+    final states = _activeStateFolder;
+    Directory(states).createSync(recursive: true);
+    final program = '$folder/llama-server${Platform.isWindows ? '.exe' : ''}';
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
     if (!File(local.path).existsSync()) throw EngineFailure('The model file is not on this computer: ${local.path}');
     final flags = EngineFlags.parse(run.flags);
@@ -683,7 +687,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           local.path,
           ...flags.arguments,
           '--cache-disk',
-          stateFolder,
+          states,
           '--cache-disk-gb',
           '${prefs.stateLimitGiB}',
           '--cache-disk-checkpoints',
@@ -699,6 +703,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         startedWith: startedWith(run),
         environment: flags.environment,
         workingDirectory: folder,
+        memoryCapBytes: Platform.isWindows && run.memoryCapGiB != null ? (run.memoryCapGiB! * 1073741824).round() : null,
         onOutput: _logChanged.changed,
       );
       _lastEngine = engine;
