@@ -21,6 +21,11 @@ import 'package:runmyai/state/chats.dart';
 import 'package:runmyai/state/profiles.dart';
 import 'package:runmyai/state/providers.dart';
 
+/// A stand-in engine that runs until it is stopped. Windows has no /bin/sh, so there it is PowerShell sleeping.
+const _sleeper = ['/bin/sh', '-c', 'exec sleep 300'];
+const _sleeperWindows = ['powershell', '-NoProfile', '-Command', 'Start-Sleep -Seconds 300'];
+List<String> get _longRunning => Platform.isWindows ? _sleeperWindows : _sleeper;
+
 /// First a reply that fails partway, then one that works.
 class _FlakyBackend implements Backend {
   var calls = 0;
@@ -201,26 +206,31 @@ void main() {
   });
 
   group('the engine closes with the app', () {
-    Future<EngineProcess> start(String script) =>
-        EngineProcess.start(command: ['/bin/sh', '-c', script], modelId: 'm', port: 1);
+    // [script] for /bin/sh; [windows] the same behaviour as a command line for Windows, which has no /bin/sh.
+    Future<EngineProcess> start(String script, List<String> windows) => EngineProcess.start(
+      command: Platform.isWindows ? windows : ['/bin/sh', '-c', script],
+      modelId: 'm',
+      port: 1,
+    );
 
     test('its pipe closing stops it (what happens when the app ends in any way)', () async {
-      final engine = await start('exec sleep 300');
+      final engine = await start('exec sleep 300', _sleeperWindows);
       await Future<void>.delayed(const Duration(milliseconds: 200));
       expect(engine.running, isTrue);
       await engine.stop().timeout(const Duration(seconds: 4));
       expect(engine.running, isFalse);
     });
 
+    // Windows has no polite stop to ignore (stop ends the process there), so the stand-in only has to run until stopped.
     test('one that ignores the polite stop is stopped by force', () async {
-      final engine = await start("trap '' TERM; while :; do sleep 1; done");
+      final engine = await start("trap '' TERM; while :; do sleep 1; done", _sleeperWindows);
       await Future<void>.delayed(const Duration(milliseconds: 300));
       await engine.stop().timeout(const Duration(seconds: 9));
       expect(engine.running, isFalse);
     }, timeout: const Timeout(Duration(seconds: 15)));
 
     test('its exit code and output come through', () async {
-      final engine = await start('echo hello; echo oops >&2; exit 7');
+      final engine = await start('echo hello; echo oops >&2; exit 7', ['cmd', '/c', 'echo hello& (echo oops)1>&2& exit /b 7']);
       expect(await engine.exited, 7);
       await Future<void>.delayed(const Duration(milliseconds: 100));
       expect(engine.log, containsAll(['hello', 'oops']));
@@ -228,7 +238,7 @@ void main() {
     });
 
     test('waiting for one that ends says it stopped, with its last lines', () async {
-      final engine = await start('echo bad flag; exit 1');
+      final engine = await start('echo bad flag; exit 1', ['cmd', '/c', 'echo bad flag& exit /b 1']);
       await expectLater(
         engine.waitUntilReady(),
         throwsA(isA<EngineFailure>().having((e) => e.log, 'log', contains('bad flag'))),
@@ -238,7 +248,7 @@ void main() {
 
   group('which engine a chat may use', () {
     Future<EngineProcess> start(EngineRun run) => EngineProcess.start(
-      command: ['/bin/sh', '-c', 'exec sleep 300'],
+      command: _longRunning,
       modelId: 'm',
       contextLength: run.contextLength,
       port: 1,
@@ -272,8 +282,13 @@ void main() {
     addTearDown(() => dir.deleteSync(recursive: true));
     // An engine that never becomes ready.
     final folder = Directory('${dir.path}/engine')..createSync();
-    final program = File('${folder.path}/llama-server')..writeAsStringSync('#!/bin/sh\nexec sleep 300\n');
-    await Process.run('chmod', ['+x', program.path]);
+    if (Platform.isWindows) {
+      // Windows runs llama-server.exe: a copy of cmd.exe, which ignores the engine's arguments and waits on its open input.
+      File('${Platform.environment['SystemRoot']}\\System32\\cmd.exe').copySync('${folder.path}\\llama-server.exe');
+    } else {
+      final program = File('${folder.path}/llama-server')..writeAsStringSync('#!/bin/sh\nexec sleep 300\n');
+      await Process.run('chmod', ['+x', program.path]);
+    }
     final storage = Storage(dir)..writePrefs(PrefsData(engineFolder: folder.path));
     final backend = EngineBackend(storage);
     final file = (await backend.loadCatalog()).first.files.first;
