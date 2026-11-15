@@ -11,8 +11,8 @@ import '../clicky.dart';
 import 'live_graphs.dart';
 import 'result_view.dart';
 
-/// One past run as a compact row: the model, profile, context, prompt, reply speed, date and a mark when it was
-/// disturbed. A click opens its full result with the graphs it was made with; the row also has Copy flags and Delete.
+/// One past run as a compact row: the model, profile, context, prompt, reply speed and date. A click opens its full
+/// result with the graphs it was made with; the row also has Copy flags and Delete.
 class HistoryRow extends StatefulWidget {
   const HistoryRow({super.key, required this.result, required this.others, required this.onDelete});
 
@@ -87,13 +87,6 @@ class _HistoryRowState extends State<HistoryRow> {
                             style: TextStyle(fontSize: 13, color: c.textSecondary),
                           ),
                         ),
-                        if (r.disturbed.isNotEmpty) ...[
-                          const SizedBox(width: 8),
-                          Tooltip(
-                            message: r.disturbed.join('\n'),
-                            child: Text('Disturbed', style: TextStyle(fontSize: 12, color: c.danger)),
-                          ),
-                        ],
                         const SizedBox(width: 12),
                         Text(date, style: TextStyle(fontSize: 12.5, color: c.textMuted)),
                         const SizedBox(width: 12),

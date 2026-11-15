@@ -32,10 +32,13 @@ const guessKinds = <(String, String, List<String>)>[
   ('gMissed', 'Missed', ['reply.guesses.missed', 'guesses.missed', 'guess.missed', 'guesses_missed']),
   ('gWasted', 'Wasted', ['reply.guesses.wasted', 'guesses.wasted', 'guess.wasted', 'guesses_wasted']),
   ('gCancelled', 'Cancelled', ['reply.guesses.cancelled', 'guesses.cancelled', 'guess.cancelled', 'guesses_cancelled']),
+  ('gIssued', 'Issued', ['reply.guesses.issued', 'guesses.issued', 'guess.issued', 'guesses_issued']),
 ];
 
-/// The parts a word's time is cut into, as the engine times them (milliseconds per word): the first four add up to the
-/// word's time; the graphics card's kernels run beside the CPU's work and are not part of that sum.
+/// The parts a token's time is cut into, as the engine times them (milliseconds per token): they add up to the token's
+/// time; the graphics card's kernels run beside the CPU's work and are not part of that sum. The hand-off between the
+/// CPU and the GPU is mostly the CPU waiting for the GPU to finish; where the engine also gives the copies' own time
+/// it is split into the copies and the waiting.
 const _timeParts = <(String, List<String>)>[
   ('SSD wait', ['time_per_word.ssd_wait_ms', 'reply.stall_ms_per_token', 'stall_ms_per_token']),
   ('CPU', ['time_per_word.cpu_ms', 'reply.cpu_ms_per_token', 'cpu_ms_per_token']),
@@ -44,7 +47,23 @@ const _timeParts = <(String, List<String>)>[
   ('GPU', ['time_per_word.gpu_ms', 'reply.gpu_ms_per_token', 'gpu_ms_per_token']),
 ];
 
-/// The part of the word's time that runs beside the others (not added to the word).
+const _handoffCopies = ['time_per_word.handoff_copies_ms', 'reply.handoff_copies_ms_per_token', 'handoff_copies_ms_per_token'];
+
+/// Splits the 'CPU-GPU sync' part into 'CPU→GPU copies' and the rest, when [copies] is known; older runs and
+/// engines without the copies' own time keep the one part.
+Map<String, double> _splitHandoff(Map<String, double> parts, double? copies) {
+  final waiting = parts['CPU-GPU sync'];
+  if (waiting == null || copies == null || copies < 0 || copies > waiting) return parts;
+  final out = <String, double>{};
+  for (final e in parts.entries) {
+    if (e.key == 'CPU-GPU sync') out['CPU→GPU copies'] = copies;
+    out[e.key] = e.value;
+  }
+  out['CPU-GPU sync'] = waiting - copies;
+  return out;
+}
+
+/// The part of the token's time that runs beside the others (not added to the token).
 const timeBesideParts = {'GPU'};
 
 /// One reading of the engine's counters (they count from when the model was loaded) and gauges.
@@ -83,6 +102,12 @@ class EngineSnapshot {
     count('cpuMs', ['time_per_word.total_ms.cpu', 'time.cpu_ms', 'cpu_ms', 'reply.cpu_ms']);
     count('gpuMs', ['time_per_word.total_ms.gpu', 'time.gpu_ms', 'gpu_ms', 'reply.gpu_ms']);
     count('handoffMs', ['time_per_word.total_ms.handoff', 'time.handoff_ms', 'handoff_ms', 'reply.handoff_ms']);
+    count('handoffCopiesMs', [
+      'time_per_word.total_ms.handoff_copies',
+      'time.handoff_copies_ms',
+      'handoff_copies_ms',
+      'reply.handoff_copies_ms',
+    ]);
     for (final (id, _, names) in guessKinds) {
       count(id, names);
     }
@@ -128,7 +153,7 @@ class EngineSnapshot {
   double? _product(String a, String b) => gauges[a] == null || gauges[b] == null ? null : gauges[a]! * gauges[b]!;
 }
 
-/// One layer's numbers: its `reply` part when it has one (the words only), else its own top level.
+/// One layer's numbers: its `reply` part when it has one (the tokens only), else its own top level.
 Map<String, double> _layerCounters(Map<String, Object?> layer) {
   final reply = layer['reply'] is Map ? (layer['reply']! as Map).cast<String, Object?>() : null;
   final out = <String, double>{};
@@ -143,11 +168,11 @@ Map<String, double> _layerCounters(Map<String, Object?> layer) {
   return out;
 }
 
-/// Turns the engine's running counters into values per word and shares, from one reading to the next.
+/// Turns the engine's running counters into values per token and shares, from one reading to the next.
 class EngineStatsTracker {
   EngineSnapshot? _before;
 
-  /// The series values for this reading; empty ones (no words written since the reading before) are left out.
+  /// The series values for this reading; empty ones (no tokens written since the reading before) are left out.
   Map<String, double?> add(EngineSnapshot now) {
     final before = _before;
     _before = now;
@@ -158,11 +183,11 @@ class EngineStatsTracker {
     if (now.vramExperts != null) out['eng.expVram'] = now.vramExperts;
     if (before == null) return out;
     double delta(String id) => (now.counters[id] ?? 0) - (before.counters[id] ?? 0);
-    final words = delta('tokens');
-    if (words > 0) {
-      if (now.counters.containsKey('stall')) out['eng.stall'] = delta('stall') / words;
-      if (now.counters.containsKey('reads')) out['eng.reads'] = delta('reads') / words;
-      if (now.counters.containsKey('swaps')) out['eng.swaps'] = delta('swaps') / words;
+    final tokens = delta('tokens');
+    if (tokens > 0) {
+      if (now.counters.containsKey('stall')) out['eng.stall'] = delta('stall') / tokens;
+      if (now.counters.containsKey('reads')) out['eng.reads'] = delta('reads') / tokens;
+      if (now.counters.containsKey('swaps')) out['eng.swaps'] = delta('swaps') / tokens;
     }
     final streamed = delta('hits') + delta('misses');
     if (streamed > 0) out['eng.ramHit'] = 100 * delta('hits') / streamed;
@@ -181,30 +206,33 @@ class EngineStatsTracker {
   }
 }
 
-/// How the time of a word divides between the parts the engine measures, in milliseconds per word (`SSD wait`, `CPU`,
-/// `CPU-GPU sync`, `Other`, and the `GPU`'s kernels beside them), from the final response's `timings.moe_stream`; empty when
-/// it gives none.
+/// How the time of a token divides between the parts the engine measures, in milliseconds per token (`SSD wait`, `CPU`,
+/// the hand-off to the GPU, `Other`, and the `GPU`'s kernels beside them), from the final response's `timings.moe_stream`;
+/// empty when it gives none.
 Map<String, double> timeParts(Map<String, Object?> moeStream) {
-  return {for (final (label, names) in _timeParts) label: ?pickNumber(moeStream, names)};
+  final parts = <String, double>{for (final (label, names) in _timeParts) label: ?pickNumber(moeStream, names)};
+  final waiting = parts['CPU-GPU sync'];
+  return _splitHandoff(parts, waiting == null ? null : pickNumber(moeStream, _handoffCopies));
 }
 
-/// The same split worked out from two readings of the counters (one at the first word, one at the last), for an engine
+/// The same split worked out from two readings of the counters (one at the first token, one at the last), for an engine
 /// that gives its times as running counters; empty when they have none.
 Map<String, double> timePartsBetween(EngineSnapshot start, EngineSnapshot end) {
-  final words = (end.counters['tokens'] ?? 0) - (start.counters['tokens'] ?? 0);
-  if (words <= 0) return const {};
+  final tokens = (end.counters['tokens'] ?? 0) - (start.counters['tokens'] ?? 0);
+  if (tokens <= 0) return const {};
   double? part(String id) =>
-      end.counters.containsKey(id) ? ((end.counters[id] ?? 0) - (start.counters[id] ?? 0)) / words : null;
-  return {
+      end.counters.containsKey(id) ? ((end.counters[id] ?? 0) - (start.counters[id] ?? 0)) / tokens : null;
+  final parts = {
     for (final (label, id) in const [('SSD wait', 'stall'), ('CPU', 'cpuMs'), ('GPU', 'gpuMs'), ('CPU-GPU sync', 'handoffMs')])
       label: ?part(id),
   };
+  return _splitHandoff(parts, part('handoffCopiesMs'));
 }
 
 /// What is counted per layer (the rest of a layer's entry, such as its place, is a fact and stays as it is).
 const _countedPerLayer = {'hits', 'misses', 'vram_hits', 'stall_ms'};
 
-/// Each layer's numbers over the reply: the counters at the end less those at the first word, with the share of
+/// Each layer's numbers over the reply: the counters at the end less those at the first token, with the share of
 /// expert uses found in RAM. Empty when the engine does not give them per layer.
 List<Map<String, double>> layersBetween(EngineSnapshot start, EngineSnapshot end) {
   if (end.layers.isEmpty) return const [];

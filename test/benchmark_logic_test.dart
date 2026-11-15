@@ -1,6 +1,6 @@
 // The logic behind the Benchmark tab, with no window and no engine: the series of readings, percentiles, the rules that
-// mark a run as disturbed, the engine's counters, the memory layout, comparing runs, the long prompts, and the history
-// in the database.
+// mark a run as disturbed, the engine's counters, the numbers of all the turns of a run together, the memory layout,
+// comparing runs, the long prompts, and the history in the database.
 // Run: flutter test test/benchmark_logic_test.dart
 import 'dart:convert';
 import 'dart:io';
@@ -15,6 +15,7 @@ import 'package:runmyai/benchmark/metrics.dart';
 import 'package:runmyai/benchmark/prompts.dart';
 import 'package:runmyai/benchmark/series.dart';
 import 'package:runmyai/benchmark/summary.dart';
+import 'package:runmyai/benchmark/whole_run.dart';
 import 'package:runmyai/data/chat_db.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -22,9 +23,10 @@ BenchmarkResult _run({
   double speed = 40,
   int loadMillis = 1000,
   String flags = '-c 4096 --temp 0',
-  List<double> words = const [10, 20, 30],
+  List<double> tokens = const [10, 20, 30],
   RunSeries? series,
   Map<String, Object?> stats = const {},
+  List<TurnRecord> turns = const [],
 }) => BenchmarkResult(
   at: DateTime(2026, 1, 2, 3, 4),
   modelName: 'M',
@@ -36,17 +38,30 @@ BenchmarkResult _run({
   replyLength: 10,
   warmups: const ['w'],
   loadMillis: loadMillis,
-  firstWordMillis: 2000,
+  firstTokenMillis: 2000,
   promptTokens: 100,
   promptMillis: 50,
   replyTokens: 50,
   replyMillis: 50 * 1000 / speed,
-  wordGaps: const [],
-  wordMillis: words,
+  tokenGaps: const [],
+  tokenMillis: tokens,
   engineStats: stats,
   log: const ['l'],
   disturbed: const [],
+  turns: turns,
   series: series,
+);
+
+/// A turn saved before the turns were timed: no place on the run's clock.
+const _noTimes = TurnRecord(
+  warmup: false,
+  firstTokenMillis: 500,
+  promptTokens: 1,
+  promptMillis: 1,
+  replyTokens: 2,
+  replyMillis: 1,
+  totalMillis: 1,
+  tokenMillis: [10, 11],
 );
 
 /// A series of [n] ticks half a second apart, with the series [make] gives for each tick.
@@ -123,16 +138,16 @@ void main() {
   });
 
   group('the numbers of a run', () {
-    test('percentiles of the words', () {
-      final words = [for (var i = 1; i <= 100; i++) i.toDouble()];
-      expect(percentile(words, 0.5), 51);
-      expect(percentile(words, 0.99), 99);
+    test('percentiles of the tokens', () {
+      final tokens = [for (var i = 1; i <= 100; i++) i.toDouble()];
+      expect(percentile(tokens, 0.5), 51);
+      expect(percentile(tokens, 0.99), 99);
       expect(percentile([], 0.5), 0);
-      final stats = WordStats.of(words);
+      final stats = TokenStats.of(tokens);
       expect((stats.p90, stats.max, stats.mean), (90, 100, 50.5));
     });
 
-    test('the spread counts every word, the slow ones in the last step', () {
+    test('the spread counts every token, the slow ones in the last step', () {
       expect(histogram([1, 2, 3, 9, 50], 10, 5), [1, 2, 0, 0, 2]);
       expect(histogram([1], 0, 3), [0, 0, 0]);
     });
@@ -140,8 +155,8 @@ void main() {
     test('a result is kept whole, and a result saved before these numbers existed still opens', () {
       final result = _run(stats: {'reply': {'stall_ms_per_token': 2.5, 'hit_rate_percent': 97.0}}, series: _ticks(3, (i) => {'a': 1}));
       final again = BenchmarkResult.fromJson(jsonDecode(jsonEncode(result.toJson())) as Map<String, Object?>);
-      expect((again.tokensPerSecond, again.promptTokensPerSecond, again.millisPerWord), (40.0, 2000.0, 25.0));
-      expect((again.slowestWord, again.ssdWaitPerWord, again.hitRate, again.flags), (30.0, 2.5, 97.0, '-c 4096 --temp 0'));
+      expect((again.tokensPerSecond, again.promptTokensPerSecond, again.millisPerToken), (40.0, 2000.0, 25.0));
+      expect((again.slowestToken, again.ssdWaitPerToken, again.hitRate, again.flags), (30.0, 2.5, 97.0, '-c 4096 --temp 0'));
       expect(again.series!.length, 3);
 
       final old = {
@@ -155,34 +170,50 @@ void main() {
         'replyLength': 10,
         'warmups': ['w'],
         'loadMillis': 1,
-        'firstWordMillis': 2,
+        'firstTokenMillis': 2,
         'promptTokens': 100,
         'promptMillis': 50,
         'replyTokens': 50,
         'replyMillis': 1000,
-        'wordGaps': [10, 20, 30],
+        'tokenGaps': [10, 20, 30],
         'engineStats': {'decode': {'stall_ms_per_token': 3.0}},
         'log': ['l'],
         'disturbed': ['The laptop was on battery.'],
       };
       final opened = BenchmarkResult.fromJson(old);
-      expect((opened.slowestWord, opened.ssdWaitPerWord), (30.0, 3.0));
+      expect((opened.slowestToken, opened.ssdWaitPerToken), (30.0, 3.0));
       expect(opened.series, isNull);
-      expect(opened.wordMillis, isEmpty);
-      expect(opened.words, [10, 20, 30], reason: 'the gaps stand in for the engine\'s own times');
+      expect(opened.tokenMillis, isEmpty);
+      expect(opened.tokens, [10, 20, 30], reason: 'the gaps stand in for the engine\'s own times');
+
+      // A run saved by an older app version names them as it saved them.
+      final saved = {
+        ...old,
+        'firstTokenMillis': null,
+        'tokenGaps': null,
+        'firstWordMillis': 2,
+        'wordGaps': [10, 20, 30],
+        'wordMillis': [10.0, 20.0, 30.0],
+        'timeParts': const {'Waiting for the GPU': 5.0},
+      };
+      final openedOld = BenchmarkResult.fromJson(saved);
+      expect(openedOld.firstTokenMillis, 2);
+      expect(openedOld.tokenGaps, [10.0, 20.0, 30.0]);
+      expect(openedOld.tokenMillis, [10.0, 20.0, 30.0]);
+      expect(openedOld.timeParts, {'CPU-GPU sync': 5.0});
     });
 
-    test('a word has its place on the time axis', () {
+    test('a token has its place on the time axis', () {
       final s = RunSeries()
         ..beginPhase(PhaseBand.load, 0)
         ..beginPhase(PhaseBand.reply, 10)
         ..endPhases(11);
-      final r = _run(words: [500, 250, 250], series: s);
+      final r = _run(tokens: [500, 250, 250], series: s);
       expect(replyStartSeconds(r), 10);
-      expect([wordTimeSeconds(r, 0), wordTimeSeconds(r, 1), wordTimeSeconds(r, 2)], [10.5, 10.75, 11.0]);
-      expect(wordTimeSeconds(r, 3), isNull);
-      expect([wordAtSeconds(r, 10.6), wordAtSeconds(r, 11), wordAtSeconds(r, 20), wordAtSeconds(r, 9)], [1, 2, 2, null]);
-      expect(wordTimeSeconds(_run(), 0), isNull, reason: 'no graphs, no place');
+      expect([tokenTimeSeconds(r, 0), tokenTimeSeconds(r, 1), tokenTimeSeconds(r, 2)], [10.5, 10.75, 11.0]);
+      expect(tokenTimeSeconds(r, 3), isNull);
+      expect([tokenAtSeconds(r, 10.6), tokenAtSeconds(r, 11), tokenAtSeconds(r, 20), tokenAtSeconds(r, 9)], [1, 2, 2, null]);
+      expect(tokenTimeSeconds(_run(), 0), isNull, reason: 'no graphs, no place');
     });
 
     test('numbers are written with spaces between thousands', () {
@@ -192,6 +223,308 @@ void main() {
       expect(formatNumber(-5.26, 1), '-5.3');
       expect(formatBytes(70147512048), '70.1 GB');
       expect(stopReasonText('length'), contains('longest'));
+    });
+  });
+
+  group('the turns of a run', () {
+    // A warm-up turn with everything the engine and the app saw of it, and a measured turn the engine said little of.
+    const warm = TurnRecord(
+      warmup: true,
+      firstTokenMillis: 1800,
+      promptTokens: 120,
+      promptMillis: 400,
+      replyTokens: 60,
+      replyMillis: 1500,
+      totalMillis: 2300,
+      stopReason: 'length',
+      tokenGaps: [12.34, 20.26, 7.96],
+      tokenMillis: [25.0, 12.346, 20.1],
+      engineStats: {'reply': {'stall_ms_per_token': 2.5, 'hit_rate_percent': 97.0}},
+    );
+    const measured = TurnRecord(
+      warmup: false,
+      firstTokenMillis: 900,
+      promptTokens: 80,
+      promptMillis: 200,
+      replyTokens: 50,
+      replyMillis: 1000,
+      totalMillis: 1300,
+      stopReason: 'stop',
+    );
+
+    test('every turn comes back whole from JSON, the gaps between tokens kept to a tenth of a millisecond', () {
+      final json = jsonDecode(jsonEncode(_run(turns: [warm, measured]).toJson())) as Map<String, Object?>;
+      expect(json['turns'], hasLength(2));
+      final turns = BenchmarkResult.fromJson(json).turns;
+      expect(turns, hasLength(2));
+      final (first, second) = (turns[0], turns[1]);
+      expect(
+        (first.warmup, first.firstTokenMillis, first.promptTokens, first.promptMillis, first.replyTokens, first.replyMillis, first.totalMillis, first.stopReason),
+        (true, 1800, 120, 400.0, 60, 1500.0, 2300, 'length'),
+      );
+      expect(first.tokenGaps, [12.3, 20.3, 8.0]);
+      expect(first.tokenMillis, [25.0, 12.35, 20.1]);
+      expect(first.engineStats, warm.engineStats);
+      expect(
+        (second.warmup, second.firstTokenMillis, second.promptTokens, second.promptMillis, second.replyTokens, second.replyMillis, second.totalMillis, second.stopReason),
+        (false, 900, 80, 200.0, 50, 1000.0, 1300, 'stop'),
+      );
+      expect(second.tokenGaps, isEmpty);
+      expect(second.tokenMillis, isEmpty);
+      expect(second.engineStats, isEmpty);
+    });
+
+    test('a run saved before the turns existed still opens, with none', () {
+      expect(_run().toJson().containsKey('turns'), isFalse, reason: 'nothing is written for a run without turns');
+      final old = {..._run(turns: [warm, measured]).toJson()}..remove('turns');
+      final opened = BenchmarkResult.fromJson(jsonDecode(jsonEncode(old)) as Map<String, Object?>);
+      expect(opened.turns, isEmpty);
+      expect((opened.tokensPerSecond, opened.firstTokenMillis), (40.0, 2000), reason: 'the headline stands on its own');
+    });
+
+    test('a turn\'s place on the run\'s time axis is kept to a millisecond when it has one, and left out when it has none', () {
+      const timed = TurnRecord(
+        warmup: false,
+        firstTokenMillis: 900,
+        promptTokens: 80,
+        promptMillis: 200,
+        replyTokens: 50,
+        replyMillis: 1000,
+        totalMillis: 1300,
+        startSeconds: 12.34567,
+        endSeconds: 20,
+      );
+      final json = jsonDecode(jsonEncode(_run(turns: [timed, warm]).toJson())) as Map<String, Object?>;
+      final written = (json['turns']! as List).cast<Map<String, Object?>>();
+      expect((written[0]['startSeconds'], written[0]['endSeconds']), (12.346, 20.0));
+      expect(written[1].containsKey('startSeconds') || written[1].containsKey('endSeconds'), isFalse, reason: 'a turn without times writes none');
+      final turns = BenchmarkResult.fromJson(json).turns;
+      expect((turns[0].startSeconds, turns[0].endSeconds), (12.346, 20.0));
+      expect((turns[1].startSeconds, turns[1].endSeconds), (null, null));
+      // A turn saved before the turns were timed opens with no times.
+      final old = {...warm.toJson()};
+      expect(old.containsKey('startSeconds'), isFalse);
+      final opened = TurnRecord.fromJson(jsonDecode(jsonEncode(old)) as Map<String, Object?>);
+      expect((opened.startSeconds, opened.endSeconds, opened.firstTokenMillis), (null, null, 1800));
+    });
+
+    test('a turn\'s speeds are its own tokens over its own time, and the engine\'s numbers are those of its reply', () {
+      expect((warm.tokensPerSecond, warm.promptTokensPerSecond), (40.0, 300.0));
+      expect((warm.ssdWaitPerToken, warm.hitRate), (2.5, 97.0));
+      expect((measured.ssdWaitPerToken, measured.hitRate), (null, null), reason: 'the engine said nothing');
+      // The counters of an engine that names the reply part 'decode' and gives one hit rate for the whole turn.
+      const older = TurnRecord(
+        warmup: false,
+        firstTokenMillis: 1,
+        promptTokens: 1,
+        promptMillis: 1,
+        replyTokens: 1,
+        replyMillis: 1,
+        totalMillis: 1,
+        tokenGaps: [5.0, 6.0],
+        engineStats: {'hit_rate_percent': 88.0, 'decode': {'stall_ms_per_token': 3.0}},
+      );
+      expect((older.ssdWaitPerToken, older.hitRate), (3.0, 88.0));
+      const empty = TurnRecord(warmup: false, firstTokenMillis: 0, promptTokens: 0, promptMillis: 0, replyTokens: 0, replyMillis: 0, totalMillis: 0);
+      expect((empty.tokensPerSecond, empty.promptTokensPerSecond), (0, 0), reason: 'no time, no speed');
+      // The token times are the engine's own where it gave them, the app's gaps otherwise.
+      expect(warm.tokens, [25.0, 12.346, 20.1]);
+      expect(warm.tokenStats.max, 25.0);
+      expect(older.tokens, [5.0, 6.0]);
+    });
+  });
+
+  group('the turns of a run taken together', () {
+    // Two turns whose own rates differ a lot, so a rate worked out over all the tokens and all the time differs from the
+    // mean of the two rates; the engine's counters of each are given in full.
+    const first = TurnRecord(
+      warmup: true,
+      firstTokenMillis: 4000,
+      promptTokens: 100,
+      promptMillis: 500,
+      replyTokens: 50,
+      replyMillis: 2000,
+      totalMillis: 6500,
+      tokenMillis: [40, 41, 42, 90],
+      startSeconds: 10,
+      endSeconds: 16.5,
+      engineStats: {
+        'prompt': {'mib_read': 100.0},
+        'reply': {
+          'expert_uses': 1000.0,
+          'ram_hit_percent': 60.0,
+          'vram_hit_percent': 10.0,
+          'misses': 300.0,
+          'mib_read': 900.0,
+          'stall_ms': 400.0,
+          'guesses': {'in_time': 50.0, 'late': 30.0, 'missed': 20.0},
+        },
+      },
+    );
+    const second = TurnRecord(
+      warmup: false,
+      firstTokenMillis: 2000,
+      promptTokens: 900,
+      promptMillis: 1500,
+      replyTokens: 150,
+      replyMillis: 3000,
+      totalMillis: 4600,
+      tokenMillis: [20, 21, 22, 70, 23],
+      startSeconds: 30,
+      endSeconds: 34.6,
+      engineStats: {
+        'prompt': {'mib_read': 300.0},
+        'reply': {
+          'expert_uses': 3000.0,
+          'ram_hit_percent': 80.0,
+          'vram_hit_percent': 15.0,
+          'misses': 150.0,
+          'mib_read': 300.0,
+          'stall_ms': 300.0,
+          'guesses': {'in_time': 150.0, 'late': 30.0, 'missed': 20.0},
+        },
+      },
+    );
+
+    test('the rates are all the tokens over all the time, not the mean of the turns\' rates; the TTFT is the turns\' mean', () {
+      final run = WholeRun([first, second]);
+      expect((first.promptTokensPerSecond, second.promptTokensPerSecond), (200.0, 600.0));
+      expect(run.promptTokensPerSecond, 500.0, reason: '1000 tokens in 2 s (the mean of 200 and 600 would be 400)');
+      expect((first.tokensPerSecond, second.tokensPerSecond), (25.0, 50.0));
+      expect(run.tokensPerSecond, 40.0, reason: '200 tokens in 5 s (the mean of 25 and 50 would be 37.5)');
+      expect(run.ttftMillis, 3000.0);
+      expect((run.promptTokens, run.replyTokens, run.promptMillis, run.replyMillis), (1000, 200, 2000.0, 5000.0));
+      expect(run.messagesMillis, 11100);
+      expect(run.isEmpty, isFalse);
+    });
+
+    test('the tokens are those of every turn in order, and the p99 is over all of them', () {
+      final run = WholeRun([first, second]);
+      expect(run.tokens, [40, 41, 42, 90, 20, 21, 22, 70, 23]);
+      expect(run.p99, 90.0);
+      expect(run.tokenStats.p50, 40.0);
+      // A turn that has only the app's gaps counts with those.
+      const gaps = TurnRecord(
+        warmup: false,
+        firstTokenMillis: 1,
+        promptTokens: 1,
+        promptMillis: 1,
+        replyTokens: 3,
+        replyMillis: 1,
+        totalMillis: 1,
+        tokenGaps: [5.0, 6.0],
+      );
+      expect(WholeRun([second, gaps]).tokens, [20, 21, 22, 70, 23, 5, 6]);
+    });
+
+    test('no turns give no numbers and no division by zero', () {
+      final run = WholeRun(const []);
+      expect(run.isEmpty, isTrue);
+      expect((run.ttftMillis, run.promptTokensPerSecond, run.tokensPerSecond, run.p99), (0, 0, 0, 0));
+      expect(run.tokens, isEmpty);
+      expect(run.tokenSeconds(0), isNull);
+      expect(run.engine.isEmpty, isTrue);
+    });
+
+    test('the run\'s length is its own clock when it was kept, else the load and the messages added up', () {
+      final run = WholeRun([first, second]);
+      expect(run.totalSeconds(clockEnd: 40.5, loadMillis: 12000), 40.5);
+      expect(run.totalSeconds(loadMillis: 12000), 23.1);
+      expect(run.totalSeconds(clockEnd: 0, loadMillis: 1000), 12.1, reason: 'a clock that never ticked is not a length');
+      expect(run.totalSeconds(), 11.1);
+    });
+
+    test('the engine\'s shares are weighted by each turn\'s expert uses, its rates are sums over sums', () {
+      final e = WholeRun([first, second]).engine;
+      expect(e.ramHitPercent, closeTo(75.0, 1e-9), reason: '(60 x 1000 + 80 x 3000) / 4000; the mean of 60 and 80 would be 70');
+      expect(e.vramHitPercent, closeTo(13.75, 1e-9));
+      expect(e.misses, 450.0);
+      expect(e.missesPerToken, closeTo(2.25, 1e-9), reason: '450 misses over 200 reply tokens');
+      expect(e.mibRead, 1600.0, reason: 'the prompts\' 400 and the replies\' 1200');
+      expect(e.mibPerToken, closeTo(6.0, 1e-9), reason: 'the replies\' 1200 MB over 200 reply tokens');
+      expect(e.ssdWaitPerToken, closeTo(3.5, 1e-9), reason: '(400 + 300) ms over 200 reply tokens');
+      expect(e.guesses, {'gInTime': 200.0, 'gLate': 60.0, 'gMissed': 40.0});
+      final shares = e.guessShares;
+      expect([for (final (label, _) in shares) label], ['In time', 'Late', 'Missed']);
+      expect(shares[0].$2, closeTo(66.667, 1e-3));
+      expect(shares[1].$2, closeTo(20.0, 1e-9));
+      expect(shares[2].$2, closeTo(13.333, 1e-3));
+      expect(e.isEmpty, isFalse);
+    });
+
+    test('one turn gives its own numbers, and a turn that did not give a number leaves it out of the others', () {
+      final one = engineNumbers([first]);
+      expect((one.ramHitPercent, one.vramHitPercent, one.misses, one.missesPerToken), (60.0, 10.0, 300.0, 6.0));
+      expect((one.mibRead, one.mibPerToken, one.ssdWaitPerToken), (1000.0, 18.0, 8.0));
+      // A turn with only a wait per token (an engine that gives little): its wait counts over its own tokens.
+      const thin = TurnRecord(
+        warmup: false,
+        firstTokenMillis: 1,
+        promptTokens: 1,
+        promptMillis: 1,
+        replyTokens: 100,
+        replyMillis: 1,
+        totalMillis: 1,
+        engineStats: {'reply': {'stall_ms_per_token': 2.0}},
+      );
+      final both = engineNumbers([first, thin]);
+      expect(both.ssdWaitPerToken, closeTo((400 + 200) / 150, 1e-9));
+      expect(both.ramHitPercent, 60.0, reason: 'the thin turn has no share to weigh');
+      expect(both.misses, 300.0);
+      expect(both.missesPerToken, closeTo(6.0, 1e-9), reason: 'only the turn that counted misses counts its tokens');
+      // Nothing the engine gave: nothing to show.
+      final none = engineNumbers([const TurnRecord(warmup: false, firstTokenMillis: 1, promptTokens: 1, promptMillis: 1, replyTokens: 1, replyMillis: 1, totalMillis: 1)]);
+      expect(none.isEmpty, isTrue);
+      expect((none.ramHitPercent, none.misses, none.mibRead, none.ssdWaitPerToken), (null, null, null, null));
+      expect(none.guessShares, isEmpty);
+      // An expert-use count of zero weighs nothing.
+      const idle = TurnRecord(
+        warmup: false,
+        firstTokenMillis: 1,
+        promptTokens: 1,
+        promptMillis: 1,
+        replyTokens: 1,
+        replyMillis: 1,
+        totalMillis: 1,
+        engineStats: {'reply': {'expert_uses': 0.0, 'ram_hit_percent': 0.0}},
+      );
+      expect(engineNumbers([idle]).ramHitPercent, isNull);
+      expect(engineNumbers([idle, second]).ramHitPercent, 80.0);
+    });
+
+    test('a token\'s moment on the run\'s clock: the turn\'s start, its TTFT, and the times of the tokens after the first', () {
+      expect(turnTokenSeconds(first, 0), closeTo(14.0, 1e-9), reason: 'the first token comes when the TTFT is over');
+      expect(turnTokenSeconds(first, 1), closeTo(14.041, 1e-9));
+      expect(turnTokenSeconds(first, 3), closeTo(14.173, 1e-9));
+      expect(turnTokenSeconds(first, 4), isNull, reason: 'no such token');
+      expect(turnTokenSeconds(first, -1), isNull);
+      // The app's gaps come before each token after the first.
+      const gaps = TurnRecord(
+        warmup: false,
+        firstTokenMillis: 1000,
+        promptTokens: 1,
+        promptMillis: 1,
+        replyTokens: 3,
+        replyMillis: 1,
+        totalMillis: 1,
+        tokenGaps: [10.0, 20.0],
+        startSeconds: 5,
+      );
+      expect(turnTokenSeconds(gaps, 0), closeTo(6.01, 1e-9));
+      expect(turnTokenSeconds(gaps, 1), closeTo(6.03, 1e-9));
+      // A turn saved without times has no moments.
+      expect(turnTokenSeconds(_noTimes, 0), isNull);
+    });
+
+    test('a token of the whole run finds its turn', () {
+      final run = WholeRun([first, second]);
+      expect(run.tokenSeconds(0), closeTo(14.0, 1e-9));
+      expect(run.tokenSeconds(3), closeTo(14.173, 1e-9));
+      expect(run.tokenSeconds(4), closeTo(32.0, 1e-9), reason: 'the first token of the second turn');
+      expect(run.tokenSeconds(6), closeTo(32.043, 1e-9));
+      expect(run.tokenSeconds(8), closeTo(32.0 + 0.021 + 0.022 + 0.070 + 0.023, 1e-9));
+      expect(run.tokenSeconds(9), isNull);
+      expect(run.tokenSeconds(-1), isNull);
     });
   });
 
@@ -349,7 +682,7 @@ void main() {
       expect(EngineSnapshot.parse('text'), isNull);
     });
 
-    test('per word and per share, from one reading to the next', () {
+    test('per token and per share, from one reading to the next', () {
       final tracker = EngineStatsTracker();
       final first = tracker.add(EngineSnapshot.parse({
         'tokens': 100, 'stall_ms': 100, 'hits': 900, 'misses': 100, 'vram_hits': 0, 'reads': 100,
@@ -363,7 +696,7 @@ void main() {
         'guesses': {'in_time': 6, 'late': 2, 'missed': 1, 'wasted': 1, 'cancelled': 0},
         'slots': 10, 'layers': 4,
       })!);
-      expect(second['eng.stall'], 5, reason: '50 ms over 10 words');
+      expect(second['eng.stall'], 5, reason: '50 ms over 10 tokens');
       expect(second['eng.reads'], 3);
       expect(second['eng.ramHit'], closeTo(100 * 100 / 110, 1e-9));
       expect(second['eng.vramHit'], closeTo(100 * 100 / 210, 1e-9));
@@ -372,17 +705,27 @@ void main() {
       expect(second['eng.gCancelled'], 0);
     });
 
-    test('the parts of a word, from the response or from two readings', () {
+    test('the parts of a token, from the response or from two readings', () {
       expect(timeParts({'reply': {'stall_ms_per_token': 5.0, 'cpu_ms_per_token': 12.0, 'gpu_ms_per_token': 8.0}}), {
         'SSD wait': 5.0,
         'CPU': 12.0,
         'GPU': 8.0,
       });
       expect(timeParts({'layers': 40}), isEmpty);
+      // Without the copies' own time the hand-off stays the one part:
+      expect(timeParts({'time_per_word': {'handoff_ms': 5.0}}), {'CPU-GPU sync': 5.0});
+      // With it, the hand-off is split into the copies and the waiting:
+      expect(timeParts({'time_per_word': {'handoff_ms': 5.0, 'handoff_copies_ms': 1.5}}), {
+        'CPU→GPU copies': 1.5,
+        'CPU-GPU sync': 3.5,
+      });
       final a = EngineSnapshot.parse({'tokens': 10, 'stall_ms': 10, 'cpu_ms': 100, 'handoff_ms': 5})!;
       final b = EngineSnapshot.parse({'tokens': 30, 'stall_ms': 50, 'cpu_ms': 300, 'handoff_ms': 25})!;
       expect(timePartsBetween(a, b), {'SSD wait': 2.0, 'CPU': 10.0, 'CPU-GPU sync': 1.0});
       expect(timePartsBetween(a, a), isEmpty);
+      final c = EngineSnapshot.parse({'tokens': 10, 'handoff_ms': 5, 'handoff_copies_ms': 1})!;
+      final d = EngineSnapshot.parse({'tokens': 30, 'handoff_ms': 25, 'handoff_copies_ms': 5})!;
+      expect(timePartsBetween(c, d), {'CPU→GPU copies': 0.2, 'CPU-GPU sync': 0.8});
     });
 
     test('each layer over the reply: the counters less those at its start', () {
@@ -421,7 +764,7 @@ void main() {
           {'layer': 4, 'hits': 80, 'misses': 20, 'vram_hits': 6, 'stall_ms': 9.0, 'ram_slots': 191, 'vram_experts': 62, 'reply': {'hits': 30, 'misses': 14, 'stall_ms': 7.0}},
         ],
         'time_per_word': {
-          'words': tokens,
+          'tokens': tokens,
           'ms_per_word': 13.3,
           'ssd_wait_ms': 2.7,
           'cpu_ms': 4.6,
@@ -456,7 +799,7 @@ void main() {
       expect(s.layout['kv_cache_mib'], 1020);
     });
 
-    test('per word and per share between two readings', () {
+    test('per token and per share between two readings', () {
       final tracker = EngineStatsTracker()..add(EngineSnapshot.parse(doc())!);
       final v = tracker.add(EngineSnapshot.parse(doc(tokens: 110, stall: 350, used: 1100))!);
       expect(v['eng.stall'], 5);
@@ -471,7 +814,7 @@ void main() {
       expect(layers.first['layer'], 3, reason: 'a place is not counted');
     });
 
-    test('the request\'s own response gives each layer\'s reply, and the parts of a word', () {
+    test('the request\'s own response gives each layer\'s reply, and the parts of a token', () {
       final response = (doc()['total']! as Map).cast<String, Object?>();
       final layers = layersOf(response);
       expect((layers[0]['stall_ms'], layers[0]['misses'], layers[1]['hits']), (3.0, 4.0, 30.0));
@@ -572,14 +915,14 @@ void main() {
       Future<int> count(String text) async => text.length ~/ 5;
       final fitted = await fitPrompt(corpus, 400, count);
       expect((fitted.tokens - 400).abs(), lessThanOrEqualTo(8));
-      expect(fitted.text, startsWith(longPromptIntro));
+      expect(fitted.text, endsWith('\n\n$promptReviewRequest'));
       expect(fitted.tokens, await count(fitted.text));
     });
 
     test('a corpus too short to reach the size gives the longest it can', () async {
       final fitted = await fitPrompt(corpus, 1000000, (t) async => t.length ~/ 5);
       expect(fitted.tokens, lessThan(1000000));
-      expect(fitted.text.length, lessThanOrEqualTo(corpus.capacity + longPromptIntro.length + 4));
+      expect(fitted.text.length, lessThanOrEqualTo(corpus.capacity + promptReviewRequest.length + 6));
     });
   });
 

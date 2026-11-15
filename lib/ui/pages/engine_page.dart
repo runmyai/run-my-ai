@@ -1,34 +1,36 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../backend/backend.dart';
 import '../../benchmark/benchmark.dart';
-import '../../benchmark/metrics.dart' show formatNumber;
+import '../../benchmark/engine_stats.dart';
+import '../../benchmark/metrics.dart';
+import '../../benchmark/summary.dart';
+import '../../benchmark/whole_run.dart';
 import '../../data/models.dart';
 import '../../engine/commands.dart';
-import '../../engine/engine_process.dart';
 import '../../state/benchmark.dart';
 import '../../state/chats.dart';
 import '../../state/library.dart';
-import '../../state/prefs.dart';
 import '../../state/profiles.dart';
 import '../../state/providers.dart';
 import '../../theme.dart';
 import '../benchmark/fold.dart';
 import '../benchmark/history_view.dart';
-import '../benchmark/live_graphs.dart';
+import '../benchmark/metric_cards.dart';
+import '../benchmark/result_charts.dart';
 import '../benchmark/result_view.dart';
+import '../benchmark/run_details.dart';
+import '../benchmark/token_scrubber.dart';
 import '../buttons.dart';
 import '../clicky.dart';
+import '../menu_panel.dart';
 import '../model_picker.dart';
-import '../thinking_toggle.dart';
+import '../select_box.dart';
 
 part 'benchmark_tab.dart';
 
-/// The engine: which profile runs each model, the profile's commands, the memory cap, and the engine's output.
+/// The engine page: model configuration (context lengths track, KV cache quantization) and benchmarking.
 class EnginePage extends ConsumerWidget {
   const EnginePage({super.key});
 
@@ -40,6 +42,7 @@ class EnginePage extends ConsumerWidget {
     final control = backend is EngineControl ? backend as EngineControl : null;
     ref.watch(profilesProvider);
     final benchmarkTab = ref.watch(engineTabProvider);
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(40, 28, 40, 40),
       children: [
@@ -63,368 +66,200 @@ class EnginePage extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 16),
-        // A soft raised surface, so the model and context stand out a little from the page.
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Container(
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              color: c.selected,
-              border: Border.all(color: c.inputBorder),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const ModelPicker(),
-          ),
-        ),
-        const SizedBox(height: 16),
         if (entry == null || control == null)
           Text('Get a model from the Store first.', style: TextStyle(fontSize: 14, color: c.textSecondary))
-        else if (benchmarkTab)
-          _BenchmarkTab(entry: entry, control: control)
-        else ...[
-          _Status(file: entry.file, control: control),
-          const SizedBox(height: 22),
-          _Profiles(file: entry.file, control: control),
-          const SizedBox(height: 28),
-          _Title('Engine output'),
-          const SizedBox(height: 10),
-          _Log(control: control),
+        else if (benchmarkTab) ...[
+          const SizedBox(height: 16),
+          _BenchmarkTab(entry: entry, control: control),
+        ] else ...[
+          const SizedBox(height: 16),
+          _RunTab(entry: entry),
         ],
       ],
     );
   }
 }
 
-class _Title extends StatelessWidget {
-  const _Title(this.text);
+/// A node on the context track line.
+class _ContextNode {
+  const _ContextNode({required this.tokens, required this.label});
 
-  final String text;
-
-  @override
-  Widget build(BuildContext context) =>
-      Text(text, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: context.colors.text));
+  final int tokens;
+  final String label;
 }
 
-/// Why the engine could not be started from this page (Start, or Restart now); null once it has started again.
-class _StartErrorNotifier extends Notifier<String?> {
-  @override
-  String? build() => null;
+const _contextTrackNodes = [
+  _ContextNode(tokens: 4096, label: '4k'),
+  _ContextNode(tokens: 8192, label: '8k'),
+  _ContextNode(tokens: 16384, label: '16k'),
+  _ContextNode(tokens: 32768, label: '32k'),
+  _ContextNode(tokens: 65536, label: '65k'),
+  _ContextNode(tokens: 100000, label: '100k'),
+  _ContextNode(tokens: 131072, label: '131k'),
+  _ContextNode(tokens: 200000, label: '200k'),
+  _ContextNode(tokens: 262144, label: '262k'),
+];
 
-  void set(String? message) => state = message;
-}
+/// Calculates the exact KV cache memory size based on model architecture and quantization format.
+String _calculateKvCacheSize({required String modelName, required int tokens, required String quant}) {
+  final isFlint = modelName.toLowerCase().contains('flint');
+  final double bpe = switch (quant.toLowerCase()) {
+    'fp16' => 2.0,
+    'q4_0' => 18.0 / 32.0, // 0.5625 bytes per element
+    _ => 34.0 / 32.0,      // 1.0625 bytes per element (Q8_0)
+  };
 
-final _startErrorProvider = NotifierProvider<_StartErrorNotifier, String?>(_StartErrorNotifier.new);
+  final double totalBytes;
+  if (isFlint) {
+    // Flint-40B: 49 layers total (14 full-attention, 35 sliding window attention).
+    // Full-attention layers: 14 layers x 2 (K+V) x 4 heads x 128 dim = 14,336 elements/token.
+    // Sliding-window layers: 35 layers x 2 (K+V) x 4 heads x 128 dim = 35,840 elements/cell.
+    // SWA cell buffer is padded in llama-kv-cache-iswa: GGML_PAD(n_swa + n_ubatch, 256) = PAD(513 + 2048, 256) = 2,816 cells.
+    const fullElemPerTok = 14 * 2 * 4 * 128; // 14,336 elem/tok
+    const swaFixedCells = 2816;              // GGML_PAD(513 + 2048, 256)
+    const swaElemPerCell = 35 * 2 * 4 * 128; // 35,840 elem/cell
+    totalBytes = (tokens * fullElemPerTok + swaFixedCells * swaElemPerCell) * bpe;
+  } else {
+    // Ling-3.0-flash: 8 MLA layers (K-only latent + decoupled rope, V absorbed) x 576 dim = 4,608 elem/tok.
+    // Recurrent state for 35 linear layers is fixed at ~11 MB independent of context tokens.
+    const elemPerTok = 8 * 576;
+    const recurrentFixedBytes = 11.0 * 1024 * 1024;
+    totalBytes = (tokens * elemPerTok * bpe) + recurrentFixedBytes;
+  }
 
-/// Starts the engine for [file] as [run] says (with [restart], even if it is running) and shows on this page why it
-/// could not, if it could not.
-Future<void> _startEngine(WidgetRef ref, EngineControl control, ModelFile file, EngineRun run, {bool restart = false}) async {
-  final error = ref.read(_startErrorProvider.notifier)..set(null);
-  try {
-    await control.startEngine(file, run, restart: restart);
-  } on Exception catch (e) {
-    error.set(e is EngineFailure ? e.message : '$e');
+  if (totalBytes >= 1024 * 1024 * 1024) {
+    return '${(totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  } else {
+    return '${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 }
 
-/// What the engine is doing, with Start and Stop.
-class _Status extends ConsumerStatefulWidget {
-  const _Status({required this.file, required this.control});
+/// The Run tab: an interactive context track with KV cache quantization selection and memory estimation.
+class _RunTab extends ConsumerStatefulWidget {
+  const _RunTab({required this.entry});
 
-  final ModelFile file;
-  final EngineControl control;
+  final CatalogEntry entry;
 
   @override
-  ConsumerState<_Status> createState() => _StatusState();
+  ConsumerState<_RunTab> createState() => _RunTabState();
 }
 
-class _StatusState extends ConsumerState<_Status> {
-  void _start() {
-    final shown = ref.read(shownContextProvider);
-    if (shown == null) return;
-    unawaited(_startEngine(ref, widget.control, widget.file, ref.read(profilesProvider.notifier).runFor(widget.file, shown.value)));
-  }
+class _RunTabState extends ConsumerState<_RunTab> {
+  final Map<int, String> _quantsByLength = {};
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final error = ref.watch(_startErrorProvider);
-    final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
-    final replyingChat = ref.watch(chatsProvider.select((s) => s.replyingId == null ? null : (s.byId(s.replyingId)?.title ?? '')));
-    final replying = replyingChat != null || benchmarking;
-    // Why Start is greyed out.
-    final why = benchmarking
-        ? 'A benchmark is running.'
-        : replyingChat != null
-        ? '"$replyingChat" is generating a response.'
-        : null;
-    final files = ref.watch(catalogFilesProvider);
-    return ValueListenableBuilder<EngineState>(
-      valueListenable: widget.control.engineState,
-      builder: (context, state, _) {
-        final name = files[state.modelId]?.model.name;
-        final length = state.run == null ? '' : ' at ${contextLabel(state.run!.contextLength)}';
-        final text = switch (state.phase) {
-          EnginePhase.stopped => 'Not running. A model loads when you send a message, or with Start.',
-          EnginePhase.loading => 'Loading $name$length…',
-          EnginePhase.ready => 'Running $name$length.',
-        };
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(child: Text(text, style: TextStyle(fontSize: 14, color: c.textSecondary))),
-                const SizedBox(width: 12),
-                if (state.phase == EnginePhase.stopped)
-                  MainButton(key: const Key('engine-start'), label: 'Start', onTap: replying ? null : _start)
-                else
-                  AppButton(
-                    key: const Key('engine-stop'),
-                    label: 'Stop',
-                    // (Stop while it loads ends the load.)
-                    onTap: replying ? null : widget.control.stopEngine,
-                  ),
-              ],
-            ),
-            if (state.phase == EnginePhase.stopped && why != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(why, key: const Key('engine-start-note'), style: TextStyle(fontSize: 13, color: c.textMuted)),
-              ),
-            if (error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: SelectableText(error, style: TextStyle(fontSize: 13, color: c.danger)),
-              ),
-          ],
-        );
-      },
+    final shown = ref.watch(shownContextProvider);
+    final currentTokens = shown?.value ?? 65536;
+
+    // Match the active context to the closest node on the track.
+    final selectedNode = _contextTrackNodes.firstWhere(
+      (n) => (n.tokens - currentTokens).abs() < 2500,
+      orElse: () => _contextTrackNodes.firstWhere(
+        (n) => n.tokens <= currentTokens,
+        orElse: () => _contextTrackNodes[4], // Default to 65k
+      ),
     );
-  }
-}
-
-/// The model's profiles, and the commands and memory cap of the one in use.
-class _Profiles extends ConsumerStatefulWidget {
-  const _Profiles({required this.file, required this.control});
-
-  final ModelFile file;
-  final EngineControl control;
-
-  @override
-  ConsumerState<_Profiles> createState() => _ProfilesState();
-}
-
-class _ProfilesState extends ConsumerState<_Profiles> {
-  var _adding = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final notifier = ref.read(profilesProvider.notifier);
-    final file = widget.file;
-    final active = notifier.active(file);
-    final maxContext = ref.watch(backendProvider).maxContext(file);
-    final benchmark = ref.watch(benchmarkProvider);
-    final replying = ref.watch(chatsProvider.select((s) => s.replyingId != null)) || benchmark.running;
-    // The profile a benchmark is using cannot be changed until it ends.
-    final locked = benchmark.running && benchmark.modelId == file.id && benchmark.profileId == active.id;
-    final commands = active.commands;
-
-    List<int> takenBesides(int? index) => [
-      for (var i = 0; i < commands.length; i++)
-        if (i != index) ?contextOf(commands[i]),
-    ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _Title('Profile'),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            for (final p in notifier.all(file))
-              OptionPill(
-                key: Key('profile-${p.id}'),
-                label: p.name,
-                chosen: p.id == active.id,
-                onTap: () {
-                  setState(() => _adding = false);
-                  notifier.setActive(file, p.id);
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          decoration: BoxDecoration(
+            color: c.inputFill,
+            border: Border.all(color: c.inputBorder),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: c.selected,
+                    border: Border.all(color: c.inputBorder),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const ModelPicker(showContext: false),
+                ),
+              ),
+              const SizedBox(height: 28),
+              _ContextQuantMatrix(
+                modelName: widget.entry.model.name,
+                nodes: _contextTrackNodes,
+                selectedNode: selectedNode,
+                quants: _quantsByLength,
+                onSelectContext: (node) {
+                  ref.read(chatsProvider.notifier).pickContext(node.tokens);
+                },
+                onSelectQuant: (tokens, quant) {
+                  setState(() => _quantsByLength[tokens] = quant);
                 },
               ),
-            AppButton(key: const Key('profile-new'), label: '+ New profile', onTap: () => notifier.create(file)),
-            _RestartNow(file: file, control: widget.control, replying: replying),
-          ],
-        ),
-        if (locked)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text('A benchmark is using this profile.', style: TextStyle(fontSize: 13, color: c.textMuted)),
-          ),
-        if (!active.isAuto && !locked) ...[
-          const SizedBox(height: 14),
-          _ProfileName(key: ValueKey('name-${active.id}'), file: file, profile: active),
-        ],
-        const SizedBox(height: 18),
-        _MemoryCap(key: ValueKey('cap-${active.id}-$locked'), file: file, profile: active, locked: locked),
-        const SizedBox(height: 24),
-        const _Title('Commands'),
-        const SizedBox(height: 2),
-        Text(
-          active.isAuto
-              ? 'Auto cannot be changed. Copy a command into your own profile to change it.'
-              : 'Only the engine\'s flags and settings. The app adds the engine, the model, the address and the port.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
-        ),
-        const SizedBox(height: 12),
-        for (var i = 0; i < commands.length; i++)
-          _Command(
-            key: ValueKey('${active.id}-$i-${commands.length}-$locked'),
-            saved: commands[i],
-            readOnly: active.isAuto || locked,
-            problemIn: (text) => commandProblem(text, maxContext: maxContext, taken: takenBesides(i)),
-            onSave: (text) =>
-                notifier.update(file, active.copyWith(commands: [...commands]..[i] = text)),
-            onDelete: active.isAuto || locked || commands.length == 1
-                ? null
-                : () => notifier.update(file, active.copyWith(commands: [...commands]..removeAt(i))),
-          ),
-        if (_adding)
-          _Command(
-            key: ValueKey('${active.id}-adding'),
-            saved: '',
-            readOnly: false,
-            startOpen: true,
-            problemIn: (text) => commandProblem(text, maxContext: maxContext, taken: takenBesides(null)),
-            onSave: (text) {
-              setState(() => _adding = false);
-              notifier.update(file, active.copyWith(commands: [...commands, text]));
-            },
-            onDelete: () => setState(() => _adding = false),
-          )
-        else if (!active.isAuto && !locked)
-          AppButton(key: const Key('command-add'), label: '+ Add a length', onTap: () => setState(() => _adding = true)),
-      ],
-    );
-  }
-}
-
-/// "Restart now": the engine is running this model with flags or a memory cap other than those saved.
-class _RestartNow extends ConsumerWidget {
-  const _RestartNow({required this.file, required this.control, required this.replying});
-
-  final ModelFile file;
-  final EngineControl control;
-  final bool replying;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    ref.watch(profilesProvider);
-    return ValueListenableBuilder<EngineState>(
-      valueListenable: control.engineState,
-      builder: (context, state, _) {
-        final running = state.run;
-        if (state.phase != EnginePhase.ready || running == null || state.modelId != file.id) {
-          return const SizedBox.shrink();
-        }
-        final saved = ref.read(profilesProvider.notifier).runFor(file, running.contextLength);
-        if (saved.flags == running.flags && saved.memoryCapGiB == running.memoryCapGiB) return const SizedBox.shrink();
-        return AppButton(
-          key: const Key('engine-restart'),
-          label: 'Restart now',
-          dense: true,
-          onTap: replying ? null : () => unawaited(_startEngine(ref, control, file, saved, restart: true)),
-        );
-      },
-    );
-  }
-}
-
-class _ProfileName extends ConsumerStatefulWidget {
-  const _ProfileName({super.key, required this.file, required this.profile});
-
-  final ModelFile file;
-  final EngineProfile profile;
-
-  @override
-  ConsumerState<_ProfileName> createState() => _ProfileNameState();
-}
-
-class _ProfileNameState extends ConsumerState<_ProfileName> {
-  late final _text = TextEditingController(text: widget.profile.name);
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final notifier = ref.read(profilesProvider.notifier);
-    return Row(
-      children: [
-        SizedBox(
-          width: 240,
-          child: TextField(
-            key: const Key('profile-name'),
-            controller: _text,
-            onChanged: (name) {
-              if (name.trim().isNotEmpty) notifier.update(widget.file, widget.profile.copyWith(name: name.trim()));
-            },
-            style: TextStyle(fontSize: 13, color: c.text),
-            cursorColor: c.text,
-            decoration: _boxDecoration(c),
+            ],
           ),
         ),
-        const SizedBox(width: 8),
-        AppButton(
-          key: const Key('profile-delete'),
-          label: 'Delete profile',
-          dense: true,
-          onTap: () => notifier.delete(widget.file, widget.profile.id),
+        const SizedBox(height: 16),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: c.inputFill,
+            border: Border.all(color: c.inputBorder),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Memory Headroom',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.text),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Free memory left for your operating system and background apps so your computer stays responsive.',
+                style: TextStyle(fontSize: 12.5, color: c.textSecondary),
+              ),
+              const SizedBox(height: 12),
+              _MemoryCapInput(file: widget.entry.file),
+            ],
+          ),
         ),
       ],
     );
   }
 }
 
-InputDecoration _boxDecoration(AppColors c, {String? hint}) => InputDecoration(
-  isDense: true,
-  hintText: hint,
-  hintStyle: TextStyle(color: c.textMuted),
-  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-  enabledBorder: OutlineInputBorder(
-    borderRadius: BorderRadius.circular(8),
-    borderSide: BorderSide(color: c.inputBorder),
-  ),
-  focusedBorder: OutlineInputBorder(
-    borderRadius: BorderRadius.circular(8),
-    borderSide: BorderSide(color: c.text.withValues(alpha: 0.35)),
-  ),
-);
-
-/// The memory cap. Save and Reset show only while there is a change.
-class _MemoryCap extends ConsumerStatefulWidget {
-  const _MemoryCap({super.key, required this.file, required this.profile, this.locked = false});
+/// The editable memory cap input with Save and Reset.
+class _MemoryCapInput extends ConsumerStatefulWidget {
+  const _MemoryCapInput({required this.file});
 
   final ModelFile file;
-  final EngineProfile profile;
-  final bool locked;
 
   @override
-  ConsumerState<_MemoryCap> createState() => _MemoryCapState();
+  ConsumerState<_MemoryCapInput> createState() => _MemoryCapInputState();
 }
 
-class _MemoryCapState extends ConsumerState<_MemoryCap> {
-  static String _show(double? gib) => gib == null ? '' : (gib == gib.roundToDouble() ? '${gib.round()}' : '$gib');
+class _MemoryCapInputState extends ConsumerState<_MemoryCapInput> {
+  static String _show(double? gib) => gib == null ? '1' : (gib == gib.roundToDouble() ? '${gib.round()}' : '$gib');
 
-  late final _text = TextEditingController(text: _show(widget.profile.memoryCapGiB));
+  late final _text = TextEditingController(
+    text: _show(ref.read(profilesProvider.notifier).active(widget.file).memoryCapGiB),
+  );
   String? _problem;
+
+  @override
+  void didUpdateWidget(_MemoryCapInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.file.id != widget.file.id) {
+      _text.text = _show(ref.read(profilesProvider.notifier).active(widget.file).memoryCapGiB);
+      _problem = null;
+    }
+  }
 
   @override
   void dispose() {
@@ -435,54 +270,50 @@ class _MemoryCapState extends ConsumerState<_MemoryCap> {
   void _save() {
     final text = _text.text.trim();
     final gib = double.tryParse(text);
-    if (text.isNotEmpty && (gib == null || gib <= 0)) {
-      setState(() => _problem = 'Enter a number of GB, or leave it empty.');
+    if (text.isEmpty || gib == null || gib <= 0) {
+      setState(() => _problem = 'Enter a number of GB (e.g. 1 or 2).');
       return;
     }
     setState(() => _problem = null);
-    ref.read(profilesProvider.notifier).update(widget.file, widget.profile.copyWith(memoryCapGiB: () => text.isEmpty ? null : gib));
+    ref.read(profilesProvider.notifier).setMemoryCap(widget.file, gib == 1.0 ? null : gib);
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    const allButOne = 'All RAM but 1 GB';
-    final dirty = _text.text.trim() != _show(widget.profile.memoryCapGiB);
+    ref.watch(profilesProvider);
+    final currentCap = ref.watch(profilesProvider.notifier).active(widget.file).memoryCapGiB;
+    final dirty = _text.text.trim() != _show(currentCap);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Text('Memory cap', style: TextStyle(fontSize: 13, color: c.textSecondary)),
-            const SizedBox(width: 12),
-            if (widget.profile.isAuto || widget.locked)
-              Text(_show(widget.profile.memoryCapGiB).isEmpty ? allButOne : '${_show(widget.profile.memoryCapGiB)} GB', style: TextStyle(fontSize: 13, color: c.text))
-            else ...[
-              SizedBox(
-                width: 150,
-                child: TextField(
-                  key: const Key('memory-cap'),
-                  controller: _text,
-                  onChanged: (_) => setState(() {}),
-                  style: TextStyle(fontSize: 13, color: c.text),
-                  cursorColor: c.text,
-                  decoration: _boxDecoration(c, hint: allButOne),
-                ),
+            SizedBox(
+              width: 160,
+              child: TextField(
+                key: const Key('memory-cap'),
+                controller: _text,
+                onChanged: (_) => setState(() => _problem = null),
+                style: TextStyle(fontSize: 13, color: c.text),
+                cursorColor: c.text,
+                decoration: _boxDecoration(c, hint: '1'),
               ),
+            ),
+            const SizedBox(width: 8),
+            Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
+            if (dirty) ...[
+              const SizedBox(width: 12),
+              MainButton(key: const Key('memory-cap-save'), label: 'Save', onTap: _save),
               const SizedBox(width: 6),
-              Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
-              if (dirty) ...[
-                const SizedBox(width: 10),
-                MainButton(key: const Key('memory-cap-save'), label: 'Save', onTap: _save),
-                const SizedBox(width: 6),
-                AppButton(
-                  label: 'Reset',
-                  onTap: () => setState(() {
-                    _text.text = _show(widget.profile.memoryCapGiB);
-                    _problem = null;
-                  }),
-                ),
-              ],
+              AppButton(
+                label: 'Reset',
+                onTap: () => setState(() {
+                  _text.text = _show(currentCap);
+                  _problem = null;
+                }),
+              ),
             ],
           ],
         ),
@@ -496,177 +327,288 @@ class _MemoryCapState extends ConsumerState<_MemoryCap> {
   }
 }
 
-/// One command, folded to its length until clicked. Save and Reset show only while there is a change; what cannot run
-/// cannot be saved.
-class _Command extends StatefulWidget {
-  const _Command({
-    super.key,
-    required this.saved,
-    required this.readOnly,
-    required this.problemIn,
-    required this.onSave,
-    required this.onDelete,
-    this.startOpen = false,
+/// The matrix of context lengths and their KV cache quantization options (Variation 1).
+class _ContextQuantMatrix extends StatelessWidget {
+  const _ContextQuantMatrix({
+    required this.modelName,
+    required this.nodes,
+    required this.selectedNode,
+    required this.quants,
+    required this.onSelectContext,
+    required this.onSelectQuant,
   });
 
-  /// It starts unfolded (a new one, to be typed in).
-  final bool startOpen;
-  final String saved;
-  final bool readOnly;
-  final String? Function(String) problemIn;
-  final void Function(String) onSave;
-  final VoidCallback? onDelete;
+  final String modelName;
+  final List<_ContextNode> nodes;
+  final _ContextNode selectedNode;
+  final Map<int, String> quants;
+  final ValueChanged<_ContextNode> onSelectContext;
+  final void Function(int tokens, String quant) onSelectQuant;
 
   @override
-  State<_Command> createState() => _CommandState();
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < nodes.length; i++)
+          Expanded(
+            child: _ContextColumn(
+              node: nodes[i],
+              index: i,
+              totalNodes: nodes.length,
+              isSelected: nodes[i].tokens == selectedNode.tokens,
+              quant: quants[nodes[i].tokens] ?? 'q8_0',
+              modelName: modelName,
+              onSelectContext: () => onSelectContext(nodes[i]),
+              onSelectQuant: (q) => onSelectQuant(nodes[i].tokens, q),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
-class _CommandState extends State<_Command> {
-  late final _text = TextEditingController(text: widget.saved);
-  late var _open = widget.startOpen;
-  String? _problem;
+class _ContextColumn extends StatelessWidget {
+  const _ContextColumn({
+    required this.node,
+    required this.index,
+    required this.totalNodes,
+    required this.isSelected,
+    required this.quant,
+    required this.modelName,
+    required this.onSelectContext,
+    required this.onSelectQuant,
+  });
 
-  @override
-  void didUpdateWidget(_Command old) {
-    super.didUpdateWidget(old);
-    if (old.saved != widget.saved && _text.text == old.saved) _text.text = widget.saved;
-  }
+  final _ContextNode node;
+  final int index;
+  final int totalNodes;
+  final bool isSelected;
+  final String quant;
+  final String modelName;
+  final VoidCallback onSelectContext;
+  final ValueChanged<String> onSelectQuant;
 
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final text = _text.text.trim();
-    final problem = widget.problemIn(text);
-    setState(() {
-      _problem = problem;
-      if (problem != null) _open = true;
-    });
-    if (problem == null) widget.onSave(text);
-  }
+  static const _quantOptions = [
+    (id: 'q4_0', name: 'Efficient', tag: 'Q4_0', desc: 'Lowest RAM consumption'),
+    (id: 'q8_0', name: 'Balanced', tag: 'Q8_0', desc: '50% compared to FP16, near-lossless'),
+    (id: 'fp16', name: 'Full Quality', tag: 'FP16', desc: 'Maximum precision'),
+  ];
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final style = TextStyle(fontSize: 12, height: 1.5, color: c.text, fontFamily: 'monospace');
-    final dirty = _text.text != widget.saved;
-    final length = contextOf(_text.text);
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 10),
-      decoration: BoxDecoration(
-        color: c.inputFill,
-        border: Border.all(color: c.inputBorder),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final size = _calculateKvCacheSize(modelName: modelName, tokens: node.tokens, quant: quant);
+    final quantItem = _quantOptions.firstWhere((q) => q.id == quant, orElse: () => _quantOptions[1]);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // Context length label (Clickable to select context)
+        Clicky.builder(
+          onTap: onSelectContext,
+          builder: (context, state) {
+            final active = state.hovered || isSelected;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                node.label,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                  color: isSelected ? c.text : (active ? c.text : c.textSecondary),
+                ),
+              ),
+            );
+          },
+        ),
+        // Timeline Track Node with connecting horizontal line
+        SizedBox(
+          height: 22,
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              Expanded(
-                child: Clicky(
-                  key: Key('command-fold-${length ?? 'new'}'),
-                  onTap: () => setState(() => _open = !_open),
-                  child: Row(
-                    children: [
-                      AnimatedRotation(
-                        turns: _open ? 0 : -0.25,
-                        duration: const Duration(milliseconds: 150),
-                        child: Icon(Icons.keyboard_arrow_down, size: 16, color: c.textMuted),
+              Positioned.fill(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        height: 2,
+                        color: index > 0 ? c.inputBorder : Colors.transparent,
                       ),
-                      const SizedBox(width: 4),
-                      Text(
-                        length == null ? 'New length' : contextLabel(length),
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: c.text),
+                    ),
+                    Expanded(
+                      child: Container(
+                        height: 2,
+                        color: index < totalNodes - 1 ? c.inputBorder : Colors.transparent,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-              if (dirty && !widget.readOnly) ...[
-                MainButton(key: const Key('command-save'), label: 'Save', onTap: _save),
-                const SizedBox(width: 6),
-                AppButton(
-                  label: 'Reset',
-                  onTap: () => setState(() {
-                    _text.text = widget.saved;
-                    _problem = null;
-                  }),
-                ),
-                const SizedBox(width: 6),
-              ],
-              AppIconButton(size: 24, iconSize: 14, radius: 6, muted: true, 
-                icon: Icons.copy_outlined,
-                tooltip: 'Copy',
-                onTap: () => Clipboard.setData(ClipboardData(text: _text.text)),
+              Clicky.builder(
+                onTap: onSelectContext,
+                builder: (context, state) {
+                  final active = state.hovered || isSelected;
+                  return Container(
+                    width: 20,
+                    height: 20,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isSelected ? c.text : c.page,
+                      border: Border.all(
+                        color: active ? c.text : c.inputBorder,
+                        width: isSelected ? 2.0 : 1.5,
+                      ),
+                    ),
+                    child: isSelected
+                        ? Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: c.page,
+                            ),
+                          )
+                        : (state.hovered
+                            ? Container(
+                                width: 6,
+                                height: 6,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: c.textMuted,
+                                ),
+                              )
+                            : null),
+                  );
+                },
               ),
-              if (widget.onDelete != null)
-                AppIconButton(size: 24, iconSize: 14, radius: 6, muted: true, icon: Icons.close, tooltip: 'Remove this length', onTap: widget.onDelete!),
             ],
           ),
-          if (_open) const SizedBox(height: 6),
-          if (_open && widget.readOnly)
-            SelectableText(widget.saved, style: style)
-          else if (_open)
-            TextField(
-              controller: _text,
-              onChanged: (_) => setState(() => _problem = null),
-              minLines: 2,
-              maxLines: null,
-              style: style,
-              cursorColor: c.text,
-              decoration: const InputDecoration(border: InputBorder.none, isDense: true, contentPadding: EdgeInsets.zero),
+        ),
+        const SizedBox(height: 14),
+        // Dropdown for Quantization
+        MenuAnchor(
+          style: bareMenuStyle,
+          alignmentOffset: const Offset(0, 4),
+          menuChildren: [
+            MenuPanel(
+              color: c.inputFill,
+              border: c.inputBorder,
+              elevation: 2,
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              children: [
+                for (final opt in _quantOptions)
+                  MenuItemButton(
+                    onPressed: () => onSelectQuant(opt.id),
+                    trailingIcon: opt.id == quant ? Icon(Icons.check, size: 14, color: c.text) : null,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${opt.name} (${opt.tag})',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: opt.id == quant ? FontWeight.w600 : FontWeight.w500,
+                                  color: c.text,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                _calculateKvCacheSize(modelName: modelName, tokens: node.tokens, quant: opt.id),
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSecondary),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            opt.desc,
+                            style: TextStyle(fontSize: 11, color: c.textMuted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          if (_open && _problem != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(_problem!, style: TextStyle(fontSize: 13, color: c.danger)),
-            ),
-        ],
-      ),
+          ],
+          builder: (context, menu, _) => Clicky.builder(
+            onTap: () => menu.isOpen ? menu.close() : menu.open(),
+            builder: (context, state) {
+              final active = isSelected || state.hovered || menu.isOpen;
+              return Container(
+                height: 32,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? c.buttonPressedFill
+                      : (state.hovered ? c.buttonHoverFill : c.inputFill),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: isSelected
+                        ? c.text
+                        : (state.hovered ? c.buttonHoverBorder : c.inputBorder),
+                    width: isSelected ? 1.5 : 1.0,
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      quantItem.tag,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                        color: active ? c.text : c.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.keyboard_arrow_down,
+                      size: 14,
+                      color: active ? c.text : c.textMuted,
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Memory footprint size
+        Text(
+          size,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+            color: isSelected ? c.textSecondary : c.textMuted,
+          ),
+        ),
+      ],
     );
   }
 }
 
-/// The engine's output as it comes.
-class _Log extends StatelessWidget {
-  const _Log({required this.control});
-
-  final EngineControl control;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return Container(
-      width: double.infinity,
-      height: 200,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: c.inputFill,
-        border: Border.all(color: c.inputBorder),
-        borderRadius: BorderRadius.circular(10),
+InputDecoration _boxDecoration(AppColors c, {String? hint}) => InputDecoration(
+      isDense: true,
+      hintText: hint,
+      hintStyle: TextStyle(color: c.textMuted),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.inputBorder),
       ),
-      child: ListenableBuilder(
-        listenable: control.logChanged,
-        builder: (context, _) {
-          final lines = control.logLines;
-          return SingleChildScrollView(
-            reverse: true,
-            child: SizedBox(
-              width: double.infinity,
-              child: SelectableText(
-                lines.isEmpty ? 'Nothing yet.' : lines.join('\n'),
-                style: TextStyle(fontSize: 11.5, height: 1.45, color: c.textMuted, fontFamily: 'monospace'),
-              ),
-            ),
-          );
-        },
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.text.withValues(alpha: 0.35)),
       ),
     );
-  }
-}

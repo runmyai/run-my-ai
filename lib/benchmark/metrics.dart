@@ -7,7 +7,7 @@ import 'series.dart';
 
 /// One line of a row: a series, and what it is measured against.
 class MetricLine {
-  const MetricLine(this.id, this.label, this.unit, {this.limit, this.fixedMax, this.digits = 0, this.bitmask = false});
+  const MetricLine(this.id, this.label, this.unit, {this.limit, this.fixedMax, this.digits = 0, this.bitmask = false, this.showLimit = true});
 
   /// The series.
   final String id;
@@ -23,7 +23,10 @@ class MetricLine {
   /// The value is a set of flag bits (the reasons a card is slowed): it is written out in words, not drawn.
   final bool bitmask;
 
-  /// [v] as it is shown, with its limit at tick [index] if the line has one.
+  /// Whether to show "of [limit]" in the formatted text string when a limit is present.
+  final bool showLimit;
+
+  /// [v] as it is shown, with its limit at tick [index] if the line has one and [showLimit] is true.
   String text(RunSeries series, int index) {
     final v = series.at(id, index);
     if (v == null) return '–';
@@ -32,7 +35,7 @@ class MetricLine {
       return names.isEmpty ? 'none' : names.join(', ');
     }
     final max = limitAt(series, index);
-    return max == null ? '${formatNumber(v, digits)} $unit'.trim() : '${formatNumber(v, digits)} of ${formatNumber(max, digits)} $unit'.trim();
+    return max == null || !showLimit ? '${formatNumber(v, digits)} $unit'.trim() : '${formatNumber(v, digits)} of ${formatNumber(max, digits)} $unit'.trim();
   }
 
   /// The limit at tick [index]; null when the line has none.
@@ -111,7 +114,7 @@ List<MetricRow> metricRows(RunSeries series, {List<String> gpuNames = const []})
   }.toList()..sort();
   return [
     const MetricRow('speed', 'Speed', [
-      MetricLine('speed.words', 'Generation', 'tokens/s', digits: 1),
+      MetricLine('speed.tokens', 'Generation', 'tokens/s', digits: 1),
       MetricLine('speed.prompt', 'Prompt processing', 'tokens/s'),
       MetricLine('speed.ttft', 'TTFT', 's', digits: 2),
     ]),
@@ -119,12 +122,11 @@ List<MetricRow> metricRows(RunSeries series, {List<String> gpuNames = const []})
       MetricRow('gpu.$n', cards.length > 1 ? 'GPU ${n + 1}' : 'GPU', subtitle: n < gpuNames.length ? gpuNames[n] : null, [
         MetricLine('gpu.$n.load', 'Load', '%', fixedMax: 100),
         MetricLine('gpu.$n.power', 'Power', 'W', limit: 'gpu.$n.powerLimit'),
-        MetricLine('gpu.$n.clock', 'Clock', 'MHz', limit: 'gpu.$n.clockMax'),
+        MetricLine('gpu.$n.clock', 'Clock', 'MHz', limit: 'gpu.$n.clockMax', showLimit: false),
         MetricLine('gpu.$n.temp', 'Temperature', '°C', limit: 'gpu.$n.tempMax'),
         MetricLine('gpu.$n.vram', 'Video memory', 'GB', limit: 'gpu.$n.vramTotal', digits: 1),
-        MetricLine('gpu.$n.pcieTx', 'PCIe sent', 'MB/s', limit: 'gpu.$n.pcieMax'),
-        MetricLine('gpu.$n.pcieRx', 'PCIe received', 'MB/s', limit: 'gpu.$n.pcieMax'),
-        MetricLine('gpu.$n.reasons', 'Slowdown reason', '', bitmask: true),
+        MetricLine('gpu.$n.pcieTx', 'PCIe sent', 'MB/s', limit: 'gpu.$n.pcieMax', showLimit: false),
+        MetricLine('gpu.$n.pcieRx', 'PCIe inbound', 'MB/s', limit: 'gpu.$n.pcieMax', showLimit: false),
       ]),
     if (cards.isEmpty)
       const MetricRow('gpu.none', 'GPU', [MetricLine('gpu.none.load', 'Load', '%', fixedMax: 100)],
@@ -132,7 +134,7 @@ List<MetricRow> metricRows(RunSeries series, {List<String> gpuNames = const []})
     const MetricRow('cpu', 'CPU', [
       MetricLine('cpu.load', 'Load', '%', fixedMax: 100),
       MetricLine('cpu.other', 'Other programs', '%', fixedMax: 100),
-      MetricLine('cpu.mhz', 'Clock (average)', 'MHz', limit: 'cpu.mhzMax'),
+      MetricLine('cpu.mhz', 'Clock (average)', 'MHz', limit: 'cpu.mhzMax', showLimit: false),
       MetricLine('cpu.power', 'Package power', 'W', limit: 'cpu.powerLimit', digits: 1),
       MetricLine('cpu.temp', 'Package temperature', '°C', limit: 'cpu.tempMax'),
     ]),
@@ -145,7 +147,7 @@ List<MetricRow> metricRows(RunSeries series, {List<String> gpuNames = const []})
       MetricLine('ram.swapActivity', 'Swap activity', 'MB/s', digits: 1),
     ]),
     const MetricRow('ssd', 'SSD', [
-      MetricLine('ssd.read', 'Read speed', 'GB/s', limit: 'ssd.readMax', digits: 2),
+      MetricLine('ssd.read', 'Read speed', 'GB/s', limit: 'ssd.readMax', digits: 2, showLimit: false),
       MetricLine('ssd.busy', 'Busy', '%', fixedMax: 100),
       MetricLine('ssd.iops', 'Reads', 'per second'),
       MetricLine('ssd.queue', 'Queue', 'requests', digits: 1),

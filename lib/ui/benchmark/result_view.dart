@@ -1,23 +1,19 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../benchmark/benchmark.dart';
-import '../../benchmark/compare.dart';
 import '../../benchmark/engine_stats.dart';
 import '../../benchmark/metrics.dart';
 import '../../benchmark/series.dart';
 import '../../benchmark/summary.dart';
 import '../../engine/commands.dart';
 import '../../theme.dart';
-import '../buttons.dart';
-import '../menu_panel.dart';
 import 'fold.dart';
 import 'result_charts.dart';
 
-/// The full result of a run: the headline numbers, where the time of a word went, every word, then (opened with a
+/// The full result of a run: the headline numbers, where the time of a token went, every token, then (opened with a
 /// click) the phases, the streaming, the memory layout, the hardware, the sanity checks and the record of the setup,
 /// and a comparison with any earlier run. [onShowMoment] moves the graphs' cursor to a moment (seconds on their axis).
-class ResultView extends StatefulWidget {
+class ResultView extends StatelessWidget {
   const ResultView({super.key, required this.result, this.others = const [], this.onShowMoment});
 
   final BenchmarkResult result;
@@ -27,33 +23,16 @@ class ResultView extends StatefulWidget {
   final void Function(double seconds)? onShowMoment;
 
   @override
-  State<ResultView> createState() => _ResultViewState();
-}
-
-class _ResultViewState extends State<ResultView> {
-  int? _picked;
-  BenchmarkResult? _other;
-
-  @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final r = widget.result;
-    final ssd = r.ssdWaitPerWord;
+    final r = result;
+    final ssd = r.ssdWaitPerToken;
     final parts = r.timeParts.isNotEmpty ? r.timeParts : {'SSD wait': ?ssd};
-    final others = [for (final o in widget.others) if (!identical(o, r) && (r.id == null || o.id != r.id)) o];
-    final onShow = widget.onShowMoment;
+    final onShow = onShowMoment;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (r.disturbed.isNotEmpty) ...[
-          for (final reason in r.disturbed)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text('Disturbed: $reason', style: TextStyle(fontSize: 13, color: c.danger)),
-            ),
-          const SizedBox(height: 6),
-        ],
         Text(
           '${r.modelName}  ·  ${contextLabel(r.contextLength)}  ·  ${r.profileName}  ·  ${r.promptLabel}  ·  '
           '${r.replyTokens} tokens generated',
@@ -61,70 +40,92 @@ class _ResultViewState extends State<ResultView> {
         ),
         const SizedBox(height: 12),
         _Headline(result: r),
+        if (r.turns.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          const SectionLabel('The turns: each with its own numbers, the warm-ups not counted'),
+          TurnsTable(turns: r.turns),
+        ],
         const SizedBox(height: 18),
-        const _Label('Where the time per token went'),
-        TimePerWord(total: r.millisPerWord, parts: parts),
+        const SectionLabel('Where the time per token went'),
+        TimePerToken(total: r.millisPerToken, parts: parts),
         const SizedBox(height: 18),
-        const _Label('Every token: click one to see that moment in the graphs'),
-        WordsChart(
-          words: r.words,
-          picked: _picked,
+        TokenCharts(
+          tokens: r.tokens,
           onPick: (k) {
-            setState(() => _picked = k);
-            final at = wordTimeSeconds(r, k);
+            final at = tokenTimeSeconds(r, k);
             if (at != null) onShow?.call(at);
           },
         ),
-        const SizedBox(height: 18),
-        const _Label('How the times spread'),
-        SpreadChart(words: r.words),
         const SizedBox(height: 14),
-        Fold(title: 'Phases', child: _phases(context, r)),
-        Fold(title: 'Streaming from the SSD', child: _streaming(context, r)),
-        Fold(title: 'Memory layout', child: _memory(context, r)),
-        if (r.layers.isNotEmpty)
-          Fold(title: 'Each layer', child: LayerHeatMap(layers: r.layers, words: r.replyTokens)),
-        if (r.series != null) Fold(title: 'Hardware over the run', child: _hardware(context, r.series!)),
-        Fold(title: 'Sanity: the reply and why it ended', child: _sanity(context, r)),
-        Fold(title: 'Setup record', child: _setup(context, r)),
-        if (others.isNotEmpty) Fold(title: 'Compare with another run', child: _compare(context, r, others)),
-        Fold(
-          title: 'Engine output',
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 220),
-            child: SingleChildScrollView(
-              child: SizedBox(
-                width: double.infinity,
-                child: SelectableText(
-                  r.log.isEmpty ? 'Nothing was kept.' : r.log.join('\n'),
-                  style: TextStyle(fontSize: 11.5, height: 1.45, color: c.textMuted, fontFamily: 'monospace'),
-                ),
-              ),
+        RunFolds(result: r, others: others, detailed: true),
+      ],
+    );
+  }
+}
+
+/// The folds that belong to a run as a whole, closed until clicked: its phases, the memory layout, the hardware over the
+/// run, the sanity checks, the record of the setup, a comparison with another run, and the engine's output. With
+/// [detailed] it also has a fold for each turn, for the streaming numbers and for each layer; a view that shows those
+/// another way (the turn tabs of the live view) leaves them out and says that the phases and the sanity checks are those
+/// of the measured turn.
+class RunFolds extends StatefulWidget {
+  const RunFolds({super.key, required this.result, this.others = const [], this.detailed = false});
+
+  final BenchmarkResult result;
+
+  /// The other runs it can be compared with.
+  final List<BenchmarkResult> others;
+  final bool detailed;
+
+  @override
+  State<RunFolds> createState() => _RunFoldsState();
+}
+
+class _RunFoldsState extends State<RunFolds> {
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.result;
+    final detailed = widget.detailed;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (detailed)
+          for (var i = 0; i < r.turns.length; i++)
+            Fold(
+              title: 'Turn ${i + 1}: ${r.turns[i].warmup ? 'warm-up, not counted' : 'measured'}',
+              child: _turn(context, r.turns[i]),
             ),
-          ),
-        ),
+        if (detailed) Fold(title: 'Streaming from the SSD', child: _streaming(context, r)),
+        Fold(title: 'Memory layout', hint: _memorySummary(r), child: _memory(context, r)),
+        if (detailed && r.layers.isNotEmpty)
+          Fold(title: 'Each layer', child: LayerHeatMap(layers: r.layers, tokens: r.replyTokens)),
+        if (r.series != null) Fold(title: 'Hardware over the run', child: _hardware(context, r.series!)),
       ],
     );
   }
 
-  Widget _phases(BuildContext context, BenchmarkResult r) {
-    final read = r.engineNumber('prompt', 'mib_read');
-    final replyRead = r.engineNumber('reply', 'mib_read');
-    String mb(double? v) => v == null ? 'not reported' : '${formatNumber(v, 0)} MB';
-    final warm = r.series?.phases.where((p) => p.name == PhaseBand.warmUp).firstOrNull;
-    return _Facts([
-      ('Load', '${(r.loadMillis / 1000).toStringAsFixed(1)} s to start the engine and load the model'),
-      if (warm != null) ('Warm-up', '${r.warmups.length} messages, ${((warm.end - warm.start)).toStringAsFixed(1)} s, not counted'),
+  Widget _turn(BuildContext context, TurnRecord turn) {
+    final stats = turn.tokenStats;
+    return Facts([
+      ('TTFT', '${(turn.firstTokenMillis / 1000).toStringAsFixed(2)} s to the first token'),
       (
         'Prompt processing',
-        '${formatNumber(r.promptTokens.toDouble(), 0)} tokens in ${(r.promptMillis / 1000).toStringAsFixed(2)} s '
-            '(${formatNumber(r.promptTokensPerSecond, 0)} tokens/s), ${mb(read)} read from the SSD',
+        '${formatNumber(turn.promptTokens.toDouble(), 0)} tokens in ${(turn.promptMillis / 1000).toStringAsFixed(2)} s '
+            '(${formatNumber(turn.promptTokensPerSecond, 0)} tokens/s)',
       ),
       (
         'Generation',
-        '${r.replyTokens} tokens in ${(r.replyMillis / 1000).toStringAsFixed(2)} s '
-            '(${r.tokensPerSecond.toStringAsFixed(1)} tokens/s), ${mb(replyRead)} read from the SSD',
+        '${turn.replyTokens} tokens in ${(turn.replyMillis / 1000).toStringAsFixed(2)} s '
+            '(${turn.tokensPerSecond.toStringAsFixed(1)} tokens/s)',
       ),
+      ('Token times', 'p50 ${stats.p50.toStringAsFixed(0)} · p90 ${stats.p90.toStringAsFixed(0)} · p99 ${stats.p99.toStringAsFixed(0)} ms'),
+      ('Time of the message', '${(turn.totalMillis / 1000).toStringAsFixed(1)} s'),
+      if (turn.stopReason != null) ('Ended because', stopReasonText(turn.stopReason)),
+      if (turn.hitRate != null) ('Found in memory', '${turn.hitRate!.toStringAsFixed(1)} % of the reply\'s expert uses (RAM or VRAM)'),
+      if (turn.ssdWaitPerToken != null) ('SSD wait', '${turn.ssdWaitPerToken!.toStringAsFixed(2)} ms/token'),
+      if (turn.engineNumber('reply', 'mib_read') != null)
+        ('Read from the SSD', '${formatNumber(turn.engineNumber('reply', 'mib_read')!, 0)} MB in the reply'),
     ]);
   }
 
@@ -139,218 +140,92 @@ class _ResultViewState extends State<ResultView> {
         if (pickNumber(s, names) ?? r.series?.average('eng.$id', from: replyStartSeconds(r)) case final v?)
           '$label ${v.toStringAsFixed(v == v.roundToDouble() ? 0 : 1)}${pickNumber(s, names) == null ? ' %' : ''}',
     ];
-    return _Facts([
+    return Facts([
       ('Read from the SSD', '${formatNumber(promptRead + replyRead, 0)} MB in all, ${formatNumber(r.engineNumber('reply', 'mib_per_token') ?? 0, 1)} MB per token of the reply'),
-      ('Found in RAM', 'reply ${pct(r.hitRate)}, prompt ${pct(r.engineNumber('prompt', 'hit_rate_percent'))}'),
+      ('Found in memory (RAM or VRAM)', 'reply ${pct(r.hitRate)}, prompt ${pct(r.engineNumber('prompt', 'hit_rate_percent'))}'),
       ('Reads from the SSD', '${formatNumber(r.engineNumber('reply', 'misses') ?? 0, 0)} in the reply, ${formatNumber(r.engineNumber('reply', 'misses_per_token') ?? 0, 2)} per token'),
-      if (r.ssdWaitPerWord != null) ('SSD wait', '${r.ssdWaitPerWord!.toStringAsFixed(2)} ms/token'),
+      if (r.ssdWaitPerToken != null) ('SSD wait', '${r.ssdWaitPerToken!.toStringAsFixed(2)} ms/token'),
       if (guesses.isNotEmpty) ('Guesses', guesses.join(', ')),
     ]);
   }
 
-  Widget _memory(BuildContext context, BenchmarkResult r) {
+  String? _memorySummary(BenchmarkResult r) {
     final m = r.memory;
     final s = r.engineStats;
     final slots = m.ramSlots ?? (s['slots'] as num?)?.toInt();
     final layers = m.streamedLayers ?? (s['layers'] as num?)?.toInt();
-    return _Facts([
-      if (slots != null) ('RAM slots', '$slots per layer${layers == null ? '' : ' in $layers streamed layers'}'),
-      if (m.vramExpertsPerLayer != null) ('VRAM experts', '${m.vramExpertsPerLayer} per layer'),
-      if (m.gpuLayers != null) ('Whole layers on the graphics card', '${m.gpuLayers}'),
-      if (m.kvMiB != null) ('Attention cache', '${formatNumber(m.kvMiB!, 0)} MB'),
-      ('Memory cap', r.memoryCapGiB == null ? 'all RAM but 1 GB' : '${r.memoryCapGiB} GB'),
-      if (m.freeRamGiB != null) ('Free RAM at the start', '${m.freeRamGiB!.toStringAsFixed(1)} GB'),
-      ('Context length', formatTokens(r.contextLength)),
-    ]);
+    final vramExp = m.vramExpertsPerLayer;
+    final parts = <String>[];
+    if (slots != null) parts.add('$slots in RAM');
+    if (vramExp != null) parts.add('$vramExp in VRAM');
+    if (parts.isEmpty) return null;
+    final suffix = layers != null ? ' in $layers streamed layers' : '';
+    return '(${parts.join(', ')}$suffix)';
+  }
+
+  Widget _memory(BuildContext context, BenchmarkResult r) {
+    final c = context.colors;
+    final m = r.memory;
+    final s = r.engineStats;
+    final slots = m.ramSlots ?? (s['slots'] as num?)?.toInt();
+    final layers = m.streamedLayers ?? (s['layers'] as num?)?.toInt();
+    final vramGiB = r.series?.peak('gpu.0.vram');
+    final vramTotal = r.series?.peak('gpu.0.vramTotal');
+    final ramEngine = r.series?.peak('ram.engine');
+
+    Widget tierHeader(String title, String? subtitle, Color color) => Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 4),
+      child: Row(
+        children: [
+          Container(width: 8, height: 8, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+          const SizedBox(width: 8),
+          Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.text)),
+          if (subtitle != null) ...[
+            const SizedBox(width: 6),
+            Text(subtitle, style: TextStyle(fontSize: 12, color: c.textMuted)),
+          ],
+        ],
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        tierHeader('Video Memory (VRAM)', vramGiB != null ? '${formatNumber(vramGiB, 1)}${vramTotal != null ? ' of ${formatNumber(vramTotal, 1)}' : ''} GB' : null, Colors.greenAccent),
+        Facts([
+          ('Base model weights', 'Embeddings, Attention, Routers, Normalizations'),
+          if (m.gpuLayers != null && m.gpuLayers! > 0)
+            ('Whole GPU layers', '${m.gpuLayers} layers pinned in VRAM'),
+          if (m.vramExpertsPerLayer != null && m.vramExpertsPerLayer! > 0)
+            ('VRAM expert pool', '${m.vramExpertsPerLayer} hot experts per layer'),
+          if (m.kvMiB != null)
+            ('Attention cache (KV)', '${formatNumber(m.kvMiB!, 0)} MB'),
+          ('Compute scratch', 'Pre-allocated CUDA activation & workspace buffers'),
+        ]),
+        const SizedBox(height: 12),
+        tierHeader('System RAM', ramEngine != null ? '${formatNumber(ramEngine, 1)} GB allocated' : null, Colors.lightBlueAccent),
+        Facts([
+          if (slots != null)
+            ('Streamed expert pool', '$slots slots per layer${layers == null ? '' : ' across $layers streamed layers'}'),
+          ('Host buffers', 'CPU base weights, DMA page-locked transfer buffers'),
+        ]),
+        const SizedBox(height: 12),
+        tierHeader('NVMe SSD', 'Cold store', Colors.orangeAccent),
+        Facts([
+          ('Cold expert store', 'Direct-IO streamed on demand without page caching'),
+        ]),
+      ],
+    );
   }
 
   Widget _hardware(BuildContext context, RunSeries series) {
     final facts = hardwareFacts(series);
     if (facts.isEmpty) return const _Empty('Nothing could be read from this computer.');
-    return _Facts([for (final f in facts) (f.label, f.text)]);
+    return Facts([for (final f in facts) (f.label, f.text)]);
   }
 
-  Widget _sanity(BuildContext context, BenchmarkResult r) {
-    final c = context.colors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _Facts([
-          ('Ended because', stopReasonText(r.stopReason)),
-          ('Tokens generated', '${r.replyTokens} of at most ${r.replyLength}'),
-          ('Disturbed', r.disturbed.isEmpty ? 'no' : r.disturbed.join('\n')),
-        ]),
-        const SizedBox(height: 8),
-        Text('The reply', style: TextStyle(fontSize: 12, color: c.textMuted)),
-        const SizedBox(height: 4),
-        Container(
-          width: double.infinity,
-          constraints: const BoxConstraints(maxHeight: 200),
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(color: c.inputFill, border: Border.all(color: c.inputBorder), borderRadius: BorderRadius.circular(8)),
-          child: SingleChildScrollView(
-            child: SelectableText(
-              r.replyText.isEmpty ? 'The reply was not kept.' : r.replyText,
-              style: TextStyle(fontSize: 13, height: 1.5, color: c.textSecondary),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 
-  Widget _setup(BuildContext context, BenchmarkResult r) {
-    final c = context.colors;
-    final e = r.environment;
-    final h = e.hardware;
-    final diff = _other == null ? null : diffFlags(r.flags, _other!.flags);
-    final mono = TextStyle(fontSize: 12, height: 1.5, color: c.textSecondary, fontFamily: 'monospace');
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text('Flags', style: TextStyle(fontSize: 12, color: c.textMuted)),
-            const SizedBox(width: 6),
-            AppIconButton(
-              key: const Key('copy-flags'),
-              size: 24,
-              iconSize: 14,
-              radius: 6,
-              muted: true,
-              icon: Icons.copy_outlined,
-              tooltip: 'Copy flags',
-              onTap: () => Clipboard.setData(ClipboardData(text: r.flags)),
-            ),
-            if (diff != null) Text(diff.isEmpty ? 'the same as the other run' : 'bold: differs from the other run', style: TextStyle(fontSize: 12, color: c.textMuted)),
-          ],
-        ),
-        _FlagsText(flags: r.flags, highlight: diff?.names ?? const {}, style: mono),
-        if (e.addedFlags.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text('Added by the benchmark: ${e.addedFlags.join(', ')}', style: TextStyle(fontSize: 12, color: c.textMuted)),
-          ),
-        const SizedBox(height: 10),
-        _Facts([
-          ('Profile', r.profileName),
-          ('Model', r.modelName),
-          if (e.modelFileBytes != null || e.modelFileModified != null)
-            (
-              'Model file',
-              [
-                if (e.modelFileBytes != null) formatBytes(e.modelFileBytes!),
-                if (e.modelFileModified != null) 'changed ${_date(e.modelFileModified!)}',
-              ].join(', '),
-            ),
-          if (e.engineVersion != null) ('Engine', e.engineVersion!),
-          if (e.appVersion != null) ('Run My AI', e.appVersion!),
-          ('Context', formatTokens(r.contextLength)),
-          ('Prompt', r.promptLabel),
-          ('Longest reply', '${r.replyLength} tokens'),
-          if (r.thinking != null) ('Thinking', r.thinking! ? 'on' : 'off'),
-          if (h.cpu.isNotEmpty) ('CPU', '${h.cpu}${h.threads > 0 ? ', ${h.threads} threads' : ''}'),
-          if (h.gpus.isNotEmpty) ('Graphics', h.gpus.join(', ')),
-          if (h.ramGiB > 0) ('RAM', '${h.ramGiB.toStringAsFixed(1)} GB'),
-          if (h.os.isNotEmpty) ('System', h.os),
-          if (e.onBattery != null) ('Power', e.onBattery! ? 'on battery' : 'plugged in'),
-          ('Run at', _date(r.at, time: true)),
-        ]),
-        const SizedBox(height: 6),
-        Fold(
-          title: 'Prompt text',
-          child: SelectableText(
-            r.promptText.isEmpty ? 'Not kept.' : r.promptText,
-            maxLines: 12,
-            style: TextStyle(fontSize: 12.5, height: 1.5, color: c.textSecondary),
-          ),
-        ),
-        for (var i = 0; i < r.warmups.length; i++)
-          Fold(
-            title: 'Warm-up message ${i + 1}',
-            child: SelectableText(r.warmups[i], style: TextStyle(fontSize: 12.5, height: 1.5, color: c.textSecondary)),
-          ),
-      ],
-    );
-  }
 
-  Widget _compare(BuildContext context, BenchmarkResult r, List<BenchmarkResult> others) {
-    final c = context.colors;
-    String name(BenchmarkResult o) =>
-        '${_date(o.at, time: true)}  ·  ${o.profileName}  ·  ${contextLabel(o.contextLength)}  ·  ${o.promptLabel}  ·  ${o.tokensPerSecond.toStringAsFixed(1)} tokens/s';
-    final other = _other;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        MenuAnchor(
-          style: bareMenuStyle,
-          clipBehavior: Clip.none,
-          builder: (context, controller, _) => AppButton(
-            key: const Key('compare-pick'),
-            label: other == null ? 'Choose a run' : name(other),
-            trailingIcon: Icons.arrow_drop_down,
-            onTap: () => controller.isOpen ? controller.close() : controller.open(),
-          ),
-          menuChildren: [
-            MenuPanel(
-              color: c.inputFill,
-              border: c.inputBorder,
-              elevation: 2,
-              shadowColor: Theme.of(context).shadowColor,
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              children: [
-                for (final o in others)
-                  MenuItemButton(
-                    onPressed: () => setState(() => _other = o),
-                    child: Text(name(o), style: TextStyle(fontSize: 13, color: c.text)),
-                  ),
-              ],
-            ),
-          ],
-        ),
-        if (other != null) ...[
-          const SizedBox(height: 10),
-          for (final d in compareRuns(r, other)) _DeltaRow(delta: d),
-          const SizedBox(height: 8),
-          _flagChanges(context, diffFlags(r.flags, other.flags)),
-        ],
-      ],
-    );
-  }
-
-  Widget _flagChanges(BuildContext context, FlagDiff diff) {
-    final c = context.colors;
-    if (diff.isEmpty) return Text('The flags are the same.', style: TextStyle(fontSize: 12.5, color: c.textMuted));
-    final mono = TextStyle(fontSize: 12, height: 1.5, color: c.textSecondary, fontFamily: 'monospace');
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Flags that differ', style: TextStyle(fontSize: 12, color: c.textMuted)),
-        for (final e in diff.changed.entries)
-          Text('${e.key}: ${_other == null ? '' : flagMap(_other!.flags)[e.key]}  →  ${e.value}', style: mono),
-        for (final e in diff.added.entries) Text('+ ${e.key} ${e.value}', style: mono),
-        for (final e in diff.removed.entries) Text('− ${e.key} ${e.value}', style: mono),
-      ],
-    );
-  }
-
-  static String _date(DateTime t, {bool time = false}) {
-    String two(int n) => n.toString().padLeft(2, '0');
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${t.day} ${months[t.month - 1]} ${t.year}${time ? ' ${two(t.hour)}:${two(t.minute)}' : ''}';
-  }
-}
-
-class _Label extends StatelessWidget {
-  const _Label(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(text, style: TextStyle(fontSize: 12.5, color: context.colors.textMuted)),
-  );
 }
 
 class _Empty extends StatelessWidget {
@@ -372,7 +247,7 @@ class _Headline extends StatelessWidget {
   Widget build(BuildContext context) {
     final r = result;
     final c = context.colors;
-    Widget tile(String key, String value, String unit, String name) => Container(
+    Widget tile(String key, String value, String unit, String name, {bool small = false}) => Container(
       key: Key('result-$key'),
       width: 150,
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -386,8 +261,16 @@ class _Headline extends StatelessWidget {
           Text.rich(
             TextSpan(
               children: [
-                TextSpan(text: value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500, color: c.text)),
-                TextSpan(text: ' $unit', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+                TextSpan(
+                  text: value,
+                  style: TextStyle(
+                    fontSize: small ? 14.5 : 22,
+                    height: small ? 1.35 : null,
+                    fontWeight: FontWeight.w500,
+                    color: c.text,
+                  ),
+                ),
+                if (unit.isNotEmpty) TextSpan(text: ' $unit', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
               ],
             ),
             style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
@@ -397,25 +280,122 @@ class _Headline extends StatelessWidget {
         ],
       ),
     );
+
+    // The engine's streaming numbers, when it reported them: several per card, so in a smaller type.
+    final vramHits = r.engineNumber('reply', 'vram_hit_percent');
+    final ramHits = r.ramHitPercent ?? r.hitRate;
+    final guesses = [for (final (_, _, names) in guessKinds) pickNumber(r.engineStats, names) ?? 0.0];
+    final guessSum = guesses.fold(0.0, (a, b) => a + b);
+    final readsPerToken = r.engineNumber('reply', 'misses_per_token');
+    final mibPerToken = r.engineNumber('reply', 'mib_per_token');
+    String share(double v) => '${v.toStringAsFixed(1)} %';
+    final hasStreaming = vramHits != null || ramHits != null || guessSum > 0 || readsPerToken != null || mibPerToken != null;
     return Wrap(
       spacing: 10,
       runSpacing: 10,
       children: [
         tile('reply-speed', r.tokensPerSecond.toStringAsFixed(1), 'tokens/s', 'Generation speed'),
-        tile('first-word', (r.firstWordMillis / 1000).toStringAsFixed(2), 's', 'TTFT'),
+        tile('first-token', (r.firstTokenMillis / 1000).toStringAsFixed(2), 's', 'TTFT'),
         tile('prompt-speed', formatNumber(r.promptTokensPerSecond, 0), 'tokens/s', 'Prompt processing'),
         tile('load', (r.loadMillis / 1000).toStringAsFixed(1), 's', 'Load time'),
         tile('slowest-1', r.slowestOnePercent.toStringAsFixed(0), 'ms/token', 'p99'),
-        tile('slowest-word', r.slowestWord.toStringAsFixed(0), 'ms', 'Slowest token'),
+        tile('slowest-token', r.slowestToken.toStringAsFixed(0), 'ms', 'Slowest token'),
         tile('total', (r.measuredMillis / 1000).toStringAsFixed(1), 's', 'Time of the message'),
+        if (hasStreaming) ...[
+          tile(
+            'hits',
+            [
+              if (vramHits != null) '${share(vramHits)} VRAM',
+              if (ramHits != null) '${share(ramHits)} RAM',
+            ].join(' · '),
+            '',
+            'VRAM / RAM hits',
+            small: true,
+          ),
+          if (guessSum > 0)
+            tile(
+              'guesses',
+              '${share(100 * guesses[0] / guessSum)} / ${share(100 * guesses[1] / guessSum)} / ${share(100 * guesses[2] / guessSum)}',
+              '',
+              'Guesses: in time / late / missed',
+              small: true,
+            ),
+          if (readsPerToken != null || mibPerToken != null)
+            tile(
+              'ssd-reads',
+              [
+                if (readsPerToken != null) '${readsPerToken.toStringAsFixed(1)} reads',
+                if (mibPerToken != null) '${formatNumber(mibPerToken, 1)} MB',
+              ].join(' · '),
+              '',
+              'SSD reads per token',
+              small: true,
+            ),
+        ],
       ],
     );
   }
 }
 
+/// The turns of a run side by side: one row per turn, so they compare without a click. The warm-up rows are
+/// marked; the engine's hit and SSD-wait numbers are each turn's own.
+class TurnsTable extends StatelessWidget {
+  const TurnsTable({super.key, required this.turns});
+
+  final List<TurnRecord> turns;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final cell = TextStyle(fontSize: 12.5, color: c.text, fontFeatures: const [FontFeature.tabularFigures()]);
+    final head = TextStyle(fontSize: 12, color: c.textMuted);
+    String? pct(double? v) => v == null ? null : '${v.toStringAsFixed(1)} %';
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Table(
+        defaultColumnWidth: const IntrinsicColumnWidth(),
+        defaultVerticalAlignment: TableCellVerticalAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          TableRow(
+            children: [
+              for (final h in ['Turn', 'TTFT', 'Reply', 'Speed', 'Time', 'RAM hits', 'SSD wait'])
+                Padding(
+                  padding: const EdgeInsets.only(right: 22, bottom: 4),
+                  child: Text(h, style: head),
+                ),
+            ],
+          ),
+          for (var i = 0; i < turns.length; i++)
+            TableRow(
+              children: [
+                for (final v in [
+                  '${i + 1}. ${turns[i].warmup ? 'Warm-up' : 'Measured'}',
+                  '${(turns[i].firstTokenMillis / 1000).toStringAsFixed(2)} s',
+                  '${turns[i].replyTokens} tokens',
+                  '${turns[i].tokensPerSecond.toStringAsFixed(1)} tokens/s',
+                  '${(turns[i].totalMillis / 1000).toStringAsFixed(1)} s',
+                  pct(turns[i].ramHitPercent ?? turns[i].hitRate) ?? '–',
+                  turns[i].ssdWaitPerToken?.toStringAsFixed(2) != null
+                      ? '${turns[i].ssdWaitPerToken!.toStringAsFixed(2)} ms/token'
+                      : '–',
+                ])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 22, bottom: 4),
+                    child: Text(v, style: cell),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Names and their values in two columns.
-class _Facts extends StatelessWidget {
-  const _Facts(this.rows);
+class Facts extends StatelessWidget {
+  const Facts(this.rows, {super.key});
 
   final List<(String, String)> rows;
 
@@ -441,82 +421,3 @@ class _Facts extends StatelessWidget {
   }
 }
 
-/// The flags of a run in one block; those named in [highlight] (and their values) are written in bold.
-class _FlagsText extends StatelessWidget {
-  const _FlagsText({required this.flags, required this.highlight, required this.style});
-
-  final String flags;
-  final Set<String> highlight;
-  final TextStyle style;
-
-  @override
-  Widget build(BuildContext context) {
-    final spans = <InlineSpan>[];
-    var on = false;
-    for (final word in flags.split(RegExp(r'\s+')).where((w) => w.isNotEmpty)) {
-      final isFlag = word.startsWith('-') && !RegExp(r'^-\d').hasMatch(word);
-      final env = RegExp(r'^([A-Za-z_]\w*)=').firstMatch(word);
-      if (isFlag) {
-        final name = word.contains('=') ? word.substring(0, word.indexOf('=')) : word;
-        on = highlight.contains(name);
-      } else if (env != null) {
-        on = highlight.contains(env[1]);
-      }
-      spans.add(
-        TextSpan(
-          text: '$word ',
-          style: on ? style.copyWith(fontWeight: FontWeight.w700, color: context.colors.text) : null,
-        ),
-      );
-    }
-    return SelectableText.rich(TextSpan(style: style, children: spans));
-  }
-}
-
-class _DeltaRow extends StatelessWidget {
-  const _DeltaRow({required this.delta});
-
-  final RunDelta delta;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final d = delta;
-    String f(double? v) => v == null ? '–' : formatNumber(v, d.digits);
-    final change = d.change;
-    final worse = d.better == false;
-    final text = change == null
-        ? ''
-        : '${change >= 0 ? '+' : '−'}${formatNumber(change.abs(), d.digits)}'
-              '${d.percent == null ? '' : ' (${d.percent! >= 0 ? '+' : '−'}${d.percent!.abs().toStringAsFixed(1)} %)'}';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          SizedBox(width: 170, child: Text(d.label, style: TextStyle(fontSize: 12.5, color: c.textMuted))),
-          SizedBox(
-            width: 190,
-            child: Text(
-              '${f(d.now)} against ${f(d.other)} ${d.unit}',
-              style: TextStyle(fontSize: 12.5, color: c.text, fontFeatures: const [FontFeature.tabularFigures()]),
-            ),
-          ),
-          Text(
-            text,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: d.better == null ? FontWeight.w400 : FontWeight.w600,
-              color: worse ? c.danger : c.text,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-          if (d.better != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: Text(d.better! ? 'better' : 'worse', style: TextStyle(fontSize: 12, color: worse ? c.danger : c.textMuted)),
-            ),
-        ],
-      ),
-    );
-  }
-}

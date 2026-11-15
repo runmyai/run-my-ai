@@ -14,7 +14,6 @@ import '../benchmark/prompts.dart';
 import '../benchmark/series.dart';
 import '../data/chat_db.dart' show ChatDb;
 import '../data/models.dart';
-import '../engine/commands.dart';
 import '../engine/engine_flags.dart';
 import '../engine/engine_process.dart';
 import 'about.dart';
@@ -36,7 +35,7 @@ class BenchmarkState {
     this.live,
     this.hardware = const HardwareInfo(),
     this.revision = 0,
-    this.replyWords = 0,
+    this.replyTokens = 0,
     this.promptProgress,
     this.disturbed = const [],
     this.counters = EngineCounters.unknown,
@@ -46,6 +45,9 @@ class BenchmarkState {
     this.modelId,
     this.profileId,
     this.history = const [],
+    this.turns = const [],
+    this.turnFirstTokenMillis,
+    this.turnStartSeconds,
   });
 
   final BenchmarkPhase phase;
@@ -62,9 +64,9 @@ class BenchmarkState {
   /// The computer, once the run's watching of it has begun.
   final HardwareInfo hardware;
 
-  /// The words of the measured reply written so far, and how far the engine is in reading its prompt (tokens read,
+  /// The tokens of the measured reply written so far, and how far the engine is in reading its prompt (tokens read,
   /// tokens in all).
-  final int replyWords;
+  final int replyTokens;
   final (int, int)? promptProgress;
 
   /// Why this run is not a fair one, as far as it has shown.
@@ -85,6 +87,16 @@ class BenchmarkState {
   /// Past runs, the newest first.
   final List<BenchmarkResult> history;
 
+  /// The turns of the running (or last) run that have finished, in order: the warm-up messages and then the
+  /// measured one, each with its own real numbers. It grows as the turns end and stays until the next run starts.
+  final List<TurnRecord> turns;
+
+  /// The TTFT of the turn going on, once its first token has come; null before that and between turns.
+  final int? turnFirstTokenMillis;
+
+  /// When the turn going on was sent, in seconds on [live]'s time axis; null while no turn is going on.
+  final double? turnStartSeconds;
+
   bool get running => phase != BenchmarkPhase.idle;
 
   BenchmarkState copyWith({
@@ -94,7 +106,7 @@ class BenchmarkState {
     RunSeries? Function()? live,
     HardwareInfo? hardware,
     int? revision,
-    int? replyWords,
+    int? replyTokens,
     (int, int)? Function()? promptProgress,
     List<String>? disturbed,
     EngineCounters? counters,
@@ -104,6 +116,9 @@ class BenchmarkState {
     String? Function()? modelId,
     String? Function()? profileId,
     List<BenchmarkResult>? history,
+    List<TurnRecord>? turns,
+    int? Function()? turnFirstTokenMillis,
+    double? Function()? turnStartSeconds,
   }) => BenchmarkState(
     phase: phase ?? this.phase,
     setup: setup ?? this.setup,
@@ -111,7 +126,7 @@ class BenchmarkState {
     live: live != null ? live() : this.live,
     hardware: hardware ?? this.hardware,
     revision: revision ?? this.revision,
-    replyWords: replyWords ?? this.replyWords,
+    replyTokens: replyTokens ?? this.replyTokens,
     promptProgress: promptProgress != null ? promptProgress() : this.promptProgress,
     disturbed: disturbed ?? this.disturbed,
     counters: counters ?? this.counters,
@@ -121,27 +136,18 @@ class BenchmarkState {
     modelId: modelId != null ? modelId() : this.modelId,
     profileId: profileId != null ? profileId() : this.profileId,
     history: history ?? this.history,
+    turns: turns ?? this.turns,
+    turnFirstTokenMillis: turnFirstTokenMillis != null ? turnFirstTokenMillis() : this.turnFirstTokenMillis,
+    turnStartSeconds: turnStartSeconds != null ? turnStartSeconds() : this.turnStartSeconds,
   );
 }
 
-/// The flag that makes the engine time the parts of each word.
+/// The flag that makes the engine time the parts of each token.
 const timingFlag = '--moe-stream-timing';
 
-/// The text assets the long prompts are made of.
-const promptSources = [
-  'assets/dummy/story.txt',
-  'assets/benchmark/architecture.txt',
-  'assets/benchmark/design-decisions.txt',
-  'assets/benchmark/how-it-works.txt',
-  'assets/benchmark/adding-a-model.txt',
-  'assets/benchmark/hardware.txt',
-  'assets/benchmark/readme.txt',
-  'assets/benchmark/settings.txt',
-];
-
-/// The text the long prompts are made of (the tests give their own).
-final promptCorpusProvider = FutureProvider<PromptCorpus>((ref) async {
-  return PromptCorpus([for (final name in promptSources) await rootBundle.loadString(name)]);
+/// The story of a prompt test, by its asset (the tests give their own).
+final promptCorpusProvider = FutureProvider.family<PromptCorpus, String>((ref, asset) async {
+  return PromptCorpus([await rootBundle.loadString(asset)]);
 });
 
 /// The versions of the app and the engine, asked when a run starts (the tests give their own).
@@ -184,18 +190,10 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
     ref.read(storageProvider).writeBenchmarkSetup(setup.toJson());
   }
 
-  /// What would stop the run from starting with the present setup; null when it can start.
-  String? problem(ModelFile file, {int? contextLength}) {
-    final setup = state.setup;
-    if (setup.promptId == BenchmarkPrompt.custom.id && setup.customText.trim().isEmpty) return 'Type your text first.';
-    final tokens = BenchmarkPrompt.byId(setup.promptId).tokens;
-    if (tokens != null && contextLength != null && !promptFits(tokens, setup.replyLength, contextLength)) {
-      return 'This prompt does not fit the context length. Choose a longer one or a shorter prompt.';
-    }
-    if (setup.profileId == BenchmarkSetup.testProfileId) {
-      return commandProblem(setup.testFlags, maxContext: ref.read(backendProvider).maxContext(file));
-    }
-    return null;
+  /// What would stop the run from starting with the present setup at [contextLength]; null when it can start.
+  String? problem({required int contextLength}) {
+    final test = state.setup.test;
+    return test.fits(contextLength) ? null : '${test.label} needs a longer context length.';
   }
 
   /// Deletes [run] from the history.
@@ -209,13 +207,14 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
     );
   }
 
+  /// The measured message of the setup's test, and its length in tokens as the engine counts them (null for the short
+  /// one of the reply-speed test).
   Future<({String text, int? tokens})> _prompt(EngineInsight? insight) async {
-    final setup = state.setup;
-    final prompt = BenchmarkPrompt.byId(setup.promptId);
-    if (prompt == BenchmarkPrompt.custom) return (text: setup.customText, tokens: null);
-    if (prompt.tokens == null) return (text: BenchmarkSetup.storyRequest, tokens: null);
-    final corpus = await ref.read(promptCorpusProvider.future);
-    final fitted = await fitPrompt(corpus, prompt.tokens!, (text) async => await insight?.countTokens(text) ?? text.length ~/ 4);
+    final test = state.setup.test;
+    final tokens = test.promptTokens;
+    if (tokens == null) return (text: replySpeedRequest, tokens: null);
+    final corpus = await ref.read(promptCorpusProvider(test.story!).future);
+    final fitted = await fitPrompt(corpus, tokens, (text) async => await insight?.countTokens(text) ?? text.length ~/ 4);
     return (text: fitted.text, tokens: fitted.tokens);
   }
 
@@ -223,7 +222,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
   static String _recorded(String text) =>
       text.length <= 20000 ? text : '${text.substring(0, 2000)}\n[… ${text.length} characters in all]';
 
-  /// Runs the benchmark with [file] at [contextLength]; for Test mode the length is the one its flags set.
+  /// Runs the benchmark with [file] at [contextLength], with the model's automatic preset.
   Future<void> start(ModelFile file, String modelName, int contextLength, {ModelThinking? thinking}) async {
     final backend = ref.read(backendProvider);
     if (state.running || backend is! EngineControl || ref.read(chatsProvider).replyingId != null) return;
@@ -231,18 +230,9 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
     final insight = backend is EngineInsight ? backend as EngineInsight : null;
     _control = control;
     final setup = state.setup;
-    final isTest = setup.profileId == BenchmarkSetup.testProfileId;
     final profiles = ref.read(profilesProvider.notifier);
-    var run = isTest
-        ? EngineRun(
-            flags: setup.testFlags,
-            contextLength: contextOf(setup.testFlags)!,
-            memoryCapGiB: setup.testMemoryCapGiB,
-          )
-        : profiles.runWith(file, setup.profileId, contextLength);
-    final profileName = isTest
-        ? 'Test'
-        : profiles.all(file).where((p) => p.id == setup.profileId).firstOrNull?.name ?? 'Auto';
+    var run = profiles.runWith(file, autoProfileId, contextLength);
+    final profileName = profiles.auto(file).name;
 
     _stopped = false;
     final series = RunSeries();
@@ -251,7 +241,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       warmup: 0,
       live: () => series,
       revision: 0,
-      replyWords: 0,
+      replyTokens: 0,
       promptProgress: () => null,
       disturbed: const [],
       counters: EngineCounters.unknown,
@@ -259,7 +249,9 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       result: () => null,
       error: () => null,
       modelId: () => file.id,
-      profileId: () => setup.profileId,
+      profileId: () => autoProfileId,
+      turns: const [],
+      turnStartSeconds: () => null,
     );
     final monitor = ref.read(hardwareMonitorProvider)();
     StreamSubscription<SystemSample>? watching;
@@ -269,7 +261,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       final versions = await ref.read(runVersionsProvider)();
       final fileInfo = await insight?.modelFileInfo(file);
 
-      // The flag that times the parts of a word, only if the engine knows it.
+      // The flag that times the parts of a token, only if the engine knows it.
       final added = <String>[];
       if (insight != null &&
           !EngineFlags.parse(run.flags).arguments.any((a) => a == timingFlag) &&
@@ -294,8 +286,8 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       // What the next tick carries besides the machine's readings.
       var engineValues = const <String, double?>{};
       var engineSeen = Duration.zero;
-      double? liveWords, livePrompt, firstWord;
-      var replyWords = 0;
+      double? liveTokens, livePrompt, firstToken;
+      var replyTokens = 0;
       var tickCount = 0;
       watching = monitor.samples.listen((s) {
         if (!ref.mounted) return;
@@ -303,13 +295,13 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         series.add(now(), {
           ...s.values,
           if (!stale) ...engineValues,
-          'speed.words': liveWords,
+          'speed.tokens': liveTokens,
           'speed.prompt': livePrompt,
-          'speed.ttft': firstWord,
+          'speed.ttft': firstToken,
         });
         state = state.copyWith(
           revision: ++tickCount,
-          replyWords: replyWords,
+          replyTokens: replyTokens,
           disturbed: disturbances(series, before: before),
         );
       });
@@ -360,11 +352,22 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         ModelThinking.optional => ref.read(prefsProvider).thinking,
       };
       final history = <ChatMessage>[];
-      Future<String> say(String text, {void Function(ReplyEvent)? onEvent}) {
+      Future<String> say(String text, {required bool warmup, void Function(ReplyEvent)? onEvent}) {
         history.add(ChatMessage(Role.user, text));
         final replied = Completer<String>();
         _replied = replied;
         final written = StringBuffer();
+        // This turn's own numbers, kept for every turn — warm-ups included.
+        final turnClock = Stopwatch()..start();
+        final startSeconds = now();
+        state = state.copyWith(turnFirstTokenMillis: () => null, turnStartSeconds: () => startSeconds);
+        final gaps = <double>[];
+        int? first;
+        var last = 0;
+        var turnReplyTokens = 0;
+        var turnTimings = const <String, Object?>{};
+        var turnTokenMillis = const <double>[];
+        String? turnStop;
         _reply = backend
             .reply(
               chatId: chatId!,
@@ -380,10 +383,28 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
                   case ReplyText():
                     written.write(event.text);
                   case ReplySpeed(:final live?):
-                    liveWords = live;
+                    liveTokens = live;
                   case ReplyProgress(:final processed, :final cached, :final millis):
                     if (millis > 0 && processed > cached) livePrompt = (processed - cached) * 1000 / millis;
                     state = state.copyWith(promptProgress: () => (processed, event.total));
+                  default:
+                    break;
+                }
+                switch (event) {
+                  case ReplyText() || ReplyThinking():
+                    final at = turnClock.elapsedMicroseconds;
+                    if (first == null) {
+                      first = at;
+                      state = state.copyWith(turnFirstTokenMillis: () => at ~/ 1000);
+                    } else {
+                      gaps.add((at - last) / 1000);
+                    }
+                    last = at;
+                    turnReplyTokens++;
+                  case ReplyDone(timings: final done, wordMillis: final wordMillis, finishReason: final reason):
+                    turnTimings = done;
+                    turnTokenMillis = wordMillis;
+                    turnStop = reason;
                   default:
                     break;
                 }
@@ -397,9 +418,34 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
               },
             );
         return replied.future.then((reply) {
+          final endSeconds = now();
           history.add(ChatMessage(Role.assistant, reply));
-          liveWords = null;
+          liveTokens = null;
           livePrompt = null;
+          // The turn's record: the engine's own figures for it first, the app's times as the fallback.
+          if (!_stopped) {
+            double n(String key) => (turnTimings[key] as num?)?.toDouble() ?? 0;
+            final promptMillis = n('prompt_ms');
+            final record = TurnRecord(
+              warmup: warmup,
+              firstTokenMillis: turnTokenMillis.isNotEmpty && promptMillis > 0
+                  ? (promptMillis + turnTokenMillis.first).round()
+                  : (first ?? 0) ~/ 1000,
+              promptTokens: n('prompt_n').round(),
+              promptMillis: promptMillis,
+              replyTokens: n('predicted_n').round() > 0 ? n('predicted_n').round() : turnReplyTokens,
+              replyMillis: n('predicted_ms'),
+              totalMillis: turnClock.elapsedMilliseconds,
+              stopReason: turnStop,
+              tokenGaps: gaps,
+              tokenMillis: turnTokenMillis,
+              // The counters of this turn's own final response (not the live endpoint's).
+              engineStats: (turnTimings['moe_stream'] as Map?)?.cast<String, Object?>() ?? const {},
+              startSeconds: startSeconds,
+              endSeconds: endSeconds,
+            );
+            state = state.copyWith(turns: [...state.turns, record], turnStartSeconds: () => null);
+          }
           return reply;
         });
       }
@@ -407,7 +453,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       if (setup.warmups.isNotEmpty) series.beginPhase(PhaseBand.warmUp, now());
       for (var i = 0; i < setup.warmups.length && !_stopped; i++) {
         state = state.copyWith(phase: BenchmarkPhase.warmingUp, warmup: i, promptProgress: () => null);
-        await say(setup.warmups[i]);
+        await say(setup.warmups[i], warmup: true);
       }
       if (_stopped) return;
 
@@ -416,39 +462,27 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       if (_stopped) return;
       final clock = Stopwatch()..start();
       series.beginPhase(PhaseBand.prompt, now());
-      final gaps = <double>[];
-      int? first;
-      var last = 0;
-      var timings = const <String, Object?>{};
-      var wordMillis = const <double>[];
-      String? finishReason;
       final reply = await say(
         prompt.text,
+        warmup: false,
         onEvent: (event) {
           switch (event) {
             case ReplyText() || ReplyThinking():
-              final at = clock.elapsedMicroseconds;
-              if (first == null) {
-                first = at;
-                firstWord = at / 1e6;
-                livePrompt = null;
+              // (The prompt's speed keeps its last value through the reply, the way the TTFT does, so the graphs and
+              // the number keep showing it.)
+              if (firstToken == null) {
+                firstToken = clock.elapsedMicroseconds / 1e6;
                 series.beginPhase(PhaseBand.reply, now());
                 if (insight != null) unawaited(poll().then((s) => atReplyStart ??= s));
-              } else {
-                gaps.add((at - last) / 1000);
               }
-              last = at;
-              replyWords++;
-            case ReplyDone(timings: final done):
-              timings = done;
-              wordMillis = event.wordMillis;
-              finishReason = event.finishReason;
+              replyTokens++;
             default:
               break;
           }
         },
       );
       if (_stopped) return;
+      final turn = state.turns.isEmpty ? null : state.turns.last;
       series.endPhases(now());
       final measured = clock.elapsedMilliseconds;
       polling?.cancel();
@@ -457,17 +491,12 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       await watching.cancel();
       watching = null;
 
-      double number(String key) => (timings[key] as num?)?.toDouble() ?? 0;
-      final moeStream = (timings['moe_stream'] as Map?)?.cast<String, Object?>() ?? const {};
+      final moeStream = turn?.engineStats ?? const {};
       // (The request's own figures first; the counters' difference for an engine that only gives those.)
       var parts = timeParts(moeStream);
       if (parts.isEmpty && atReplyStart != null && end != null) parts = timePartsBetween(atReplyStart!, end);
       var layers = layersOf(moeStream);
       if (layers.isEmpty && atReplyStart != null && end != null) layers = layersBetween(atReplyStart!, end);
-      final promptMillis = number('prompt_ms');
-      final firstWordMillis = wordMillis.isNotEmpty && promptMillis > 0
-          ? (promptMillis + wordMillis.first).round()
-          : (first ?? 0) ~/ 1000;
       final result = BenchmarkResult(
         at: DateTime.now(),
         modelName: modelName,
@@ -475,27 +504,28 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         profileName: profileName,
         flags: run.flags,
         memoryCapGiB: run.memoryCapGiB,
-        promptLabel: BenchmarkPrompt.byId(setup.promptId).label,
+        promptLabel: setup.test.label,
         replyLength: setup.replyLength,
         warmups: setup.warmups,
         loadMillis: loadMillis,
-        firstWordMillis: firstWordMillis,
-        promptTokens: number('prompt_n').round(),
-        promptMillis: promptMillis,
-        replyTokens: number('predicted_n').round(),
-        replyMillis: number('predicted_ms'),
-        wordGaps: gaps,
+        firstTokenMillis: turn?.firstTokenMillis ?? 0,
+        promptTokens: turn?.promptTokens ?? 0,
+        promptMillis: turn?.promptMillis ?? 0,
+        replyTokens: turn?.replyTokens ?? 0,
+        replyMillis: turn?.replyMillis ?? 0,
+        tokenGaps: turn?.tokenGaps ?? const [],
         engineStats: moeStream,
         log: control.logLines.length > 200 ? control.logLines.sublist(control.logLines.length - 200) : control.logLines,
         disturbed: disturbances(series, before: before),
         promptText: _recorded(prompt.text),
         thinking: thinkingOn,
         replyText: reply.length > 4000 ? reply.substring(0, 4000) : reply,
-        stopReason: finishReason,
-        wordMillis: wordMillis,
+        stopReason: turn?.stopReason,
+        tokenMillis: turn?.tokenMillis ?? const [],
         totalMillis: measured,
         timeParts: parts,
         layers: layers,
+        turns: state.turns,
         series: series.shrunk(200),
         memory: MemoryLayout.read(
           control.logLines,
@@ -512,7 +542,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
           hardware: monitor.info,
           onBattery: beforeSample.onBattery,
           addedFlags: added,
-          profileId: setup.profileId,
+          profileId: autoProfileId,
         ),
       );
       final id = await ref.read(chatStoreProvider).addBenchmark(jsonEncode(result.toJson()));
@@ -542,6 +572,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
           modelId: () => null,
           profileId: () => null,
           promptProgress: () => null,
+          turnStartSeconds: () => null,
           note: _stopped ? () => 'Stopped. Nothing was saved.' : null,
         );
       }

@@ -38,12 +38,12 @@ List<RunDelta> compareRuns(BenchmarkResult run, BenchmarkResult other) {
   return [
     d('Generation speed', 'tokens/s', run.tokensPerSecond, other.tokensPerSecond, up: true),
     d('Prompt processing', 'tokens/s', run.promptTokensPerSecond, other.promptTokensPerSecond, up: true, digits: 0),
-    d('TTFT', 's', sec(run.firstWordMillis), sec(other.firstWordMillis), up: false, digits: 2),
+    d('TTFT', 's', sec(run.firstTokenMillis), sec(other.firstTokenMillis), up: false, digits: 2),
     d('Load time', 's', sec(run.loadMillis), sec(other.loadMillis), up: false),
     d('p99', 'ms/token', run.slowestOnePercent, other.slowestOnePercent, up: false, digits: 0),
-    d('Slowest token', 'ms/token', run.slowestWord, other.slowestWord, up: false, digits: 0),
+    d('Slowest token', 'ms/token', run.slowestToken, other.slowestToken, up: false, digits: 0),
     d('Time of the message', 's', run.measuredMillis / 1000, other.measuredMillis / 1000, up: false),
-    d('SSD wait per token', 'ms/token', run.ssdWaitPerWord, other.ssdWaitPerWord, up: false),
+    d('SSD wait per token', 'ms/token', run.ssdWaitPerToken, other.ssdWaitPerToken, up: false),
     d('RAM hit rate', '%', run.hitRate, other.hitRate, up: true),
   ];
 }

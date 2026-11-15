@@ -1,5 +1,5 @@
-/// Real text of many kinds for the long prompts: a story, technical writing, guides and reference text. A prompt takes
-/// one passage from each source in turn, each passage once, so it reads as a mix and never repeats itself.
+/// The text a prompt test reads: its story, from the start. (With several sources a prompt takes one passage from each
+/// in turn, each passage once.)
 class PromptCorpus {
   PromptCorpus(List<String> sources) : _sources = [for (final s in sources) _passages(s)];
 
@@ -71,22 +71,39 @@ class PromptCorpus {
   }
 }
 
-/// What the measured message says before the text.
-const longPromptIntro =
-    'Below is a collection of passages from different documents. Read all of it, then tell me in a few sentences '
-    'what kinds of text it holds and what each part is about.';
+/// The two warm-up messages every test sends first, in the same conversation as the measured message. Their replies
+/// are not counted.
+const warmupMessages = [
+  'Hello bro, how are you? what are you doing? tell me in 5 sentences.',
+  'Tell me about yourself. In 5 sentences.',
+];
 
-/// A prompt of [target] tokens, within [tolerance] (a share): the text is made, counted by [count] (the engine's own
-/// tokenizer) and lengthened or shortened until it is that long. Returns the message and its token count; when the
-/// corpus is too short to reach [target], the longest it can make.
+/// The measured message of the reply-speed test, and the most tokens its reply may have.
+const replySpeedRequest = 'write a long random story of 1500 words.';
+const replySpeedMaxTokens = 2000;
+
+/// What the measured message of a prompt test says after its story, and the most tokens its reply may have.
+const promptReviewRequest =
+    'Write a short review of the story above. If the story feels cut off in the middle, just write the review based '
+    'on what is covered so far.';
+const promptReviewMaxTokens = 200;
+
+/// About how many tokens the two warm-up messages and their replies take in the conversation: counted against the
+/// context length when a prompt test is checked for fitting.
+const warmupRoomTokens = 400;
+
+/// A message of [target] tokens, within [tolerance] (a share): the text is cut at a word, followed at the very end by
+/// [request], counted by [count] (the engine's own tokenizer) and lengthened or shortened until it is that long.
+/// Returns the message and its token count; when the corpus is too short to reach [target], the longest it can make.
 Future<({String text, int tokens})> fitPrompt(
   PromptCorpus corpus,
   int target,
   Future<int> Function(String text) count, {
-  double tolerance = 0.02,
-  int attempts = 4,
+  String request = promptReviewRequest,
+  double tolerance = 0.002,
+  int attempts = 6,
 }) async {
-  String message(int chars) => '$longPromptIntro\n\n${corpus.build(chars)}';
+  String message(int chars) => '${corpus.build(chars)}\n\n$request';
   var chars = (target * 4.0).round();
   var text = message(chars);
   var tokens = await count(text);

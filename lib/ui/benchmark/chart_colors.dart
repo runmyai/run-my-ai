@@ -40,7 +40,8 @@ class ChartColors {
     'SSD wait' => of(context, 2),
     'CPU' => of(context, 1),
     'GPU' => of(context, 0),
-    'CPU-GPU sync' => of(context, 3),
+    'CPU→GPU copies' => of(context, 3),
+    'CPU-GPU sync' => of(context, 4),
     _ => context.colors.textMuted,
   };
 

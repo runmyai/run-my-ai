@@ -43,10 +43,11 @@ class EngineProfile {
 
 /// The user's profiles of one model, and which profile is in use.
 class ModelProfiles {
-  const ModelProfiles({this.active = autoProfileId, this.custom = const []});
+  const ModelProfiles({this.active = autoProfileId, this.custom = const [], this.memoryCapGiB});
 
   final String active;
   final List<EngineProfile> custom;
+  final double? memoryCapGiB;
 }
 
 /// Each model's profiles, by model file. Saved to profiles.json on every change.
@@ -63,6 +64,7 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
               for (final p in json['custom'] as List? ?? const [])
                 EngineProfile.fromJson((p as Map).cast<String, Object?>()),
             ],
+            memoryCapGiB: (json['memoryCapGiB'] as num?)?.toDouble(),
           ),
     };
   }
@@ -70,9 +72,11 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
   EngineProfile auto(ModelFile file) {
     final backend = ref.read(backendProvider);
     final commands = backend.autoCommands(file);
+    final sharedCap = state.values.map((m) => m.memoryCapGiB).whereType<double>().firstOrNull;
     return EngineProfile(
       id: autoProfileId,
       name: 'Auto',
+      memoryCapGiB: state[file.id]?.memoryCapGiB ?? sharedCap,
       commands: [
         for (final length in contextOptions(backend.maxContext(file)))
           if (commands[length] ?? _sameLabel(commands, length) case final command?) withContextLength(command, length),
@@ -99,7 +103,11 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
   EngineRun runFor(ModelFile file, int contextLength) {
     final profile = active(file);
     final length = closestContext(profile.lengths, contextLength);
-    final command = profile.commands.firstWhere((c) => contextOf(c) == length);
+    var command = profile.commands.firstWhere((c) => contextOf(c) == length);
+    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB ?? 1.0;
+    if (command.contains('--moe-stream')) {
+      command = withRamFree(command, headroom);
+    }
     return EngineRun(flags: command, contextLength: length, memoryCapGiB: profile.memoryCapGiB);
   }
 
@@ -107,8 +115,13 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
   EngineRun runWith(ModelFile file, String id, int contextLength) {
     final profile = all(file).where((p) => p.id == id).firstOrNull ?? auto(file);
     final length = closestContext(profile.lengths, contextLength);
+    var command = profile.commands.firstWhere((c) => contextOf(c) == length);
+    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB ?? 1.0;
+    if (command.contains('--moe-stream')) {
+      command = withRamFree(command, headroom);
+    }
     return EngineRun(
-      flags: profile.commands.firstWhere((c) => contextOf(c) == length),
+      flags: command,
       contextLength: length,
       memoryCapGiB: profile.memoryCapGiB,
     );
@@ -141,23 +154,57 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
     );
   }
 
+  void setMemoryCap(ModelFile file, double? gib) {
+    final activeProf = active(file);
+    if (!activeProf.isAuto) {
+      update(file, activeProf.copyWith(memoryCapGiB: () => gib));
+    }
+    // Update all models so the headroom setting is shared across all presets
+    final updated = <String, ModelProfiles>{};
+    for (final entry in state.entries) {
+      updated[entry.key] = ModelProfiles(
+        active: entry.value.active,
+        custom: entry.value.custom,
+        memoryCapGiB: gib,
+      );
+    }
+    if (!updated.containsKey(file.id)) {
+      updated[file.id] = ModelProfiles(memoryCapGiB: gib);
+    }
+    state = updated;
+    ref.read(storageProvider).writeProfiles({
+      for (final MapEntry(key: id, value: m) in state.entries)
+        id: {
+          'active': m.active,
+          'custom': [for (final p in m.custom) p.toJson()],
+          if (m.memoryCapGiB != null) 'memoryCapGiB': m.memoryCapGiB,
+        },
+    });
+  }
+
   void update(ModelFile file, EngineProfile profile) {
     final models = state[file.id];
     if (models == null) return;
     _put(file, custom: [for (final p in models.custom) p.id == profile.id ? profile : p]);
   }
 
-  void _put(ModelFile file, {String? active, List<EngineProfile>? custom}) {
+  void _put(ModelFile file, {String? active, List<EngineProfile>? custom, double? Function()? memoryCapGiB}) {
     final models = state[file.id] ?? const ModelProfiles();
+    final cap = memoryCapGiB != null ? memoryCapGiB() : models.memoryCapGiB;
     state = {
       ...state,
-      file.id: ModelProfiles(active: active ?? models.active, custom: custom ?? models.custom),
+      file.id: ModelProfiles(
+        active: active ?? models.active,
+        custom: custom ?? models.custom,
+        memoryCapGiB: cap,
+      ),
     };
     ref.read(storageProvider).writeProfiles({
       for (final MapEntry(key: id, value: m) in state.entries)
         id: {
           'active': m.active,
           'custom': [for (final p in m.custom) p.toJson()],
+          if (m.memoryCapGiB != null) 'memoryCapGiB': m.memoryCapGiB,
         },
     });
   }

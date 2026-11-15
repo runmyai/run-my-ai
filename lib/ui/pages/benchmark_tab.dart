@@ -1,7 +1,11 @@
 part of 'engine_page.dart';
 
-/// The Benchmark tab, one page from top to bottom: the settings, the live view of a run, the full result of the run
-/// that just ended, and the history. Each part keeps its detail behind a click.
+/// The parts of the benchmark, one on screen at a time.
+enum _View { setup, live, history }
+
+/// The Benchmark tab as steps: the setup, the live view of a run (which keeps the whole result of the run once it has
+/// ended), and the history beside them. The stepper on top switches; the setup is the only door into a run. Each part
+/// keeps its detail behind a click.
 class _BenchmarkTab extends ConsumerStatefulWidget {
   const _BenchmarkTab({required this.entry, required this.control});
 
@@ -13,9 +17,24 @@ class _BenchmarkTab extends ConsumerStatefulWidget {
 }
 
 class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
-  /// A moment pinned on the graphs (a word clicked in the result).
+  /// A moment pinned on the graphs (a token clicked in the charts under them).
   final _cursor = ValueNotifier<double?>(null);
-  final _graphs = GlobalKey();
+
+  /// The part on screen; chosen from the state the first time it is built.
+  _View? _view;
+
+  /// The part that was on screen before History was opened; History toggles back to it.
+  _View? _beforeHistory;
+
+  /// Where a step click goes: into History remembers the way back, out of it uses and clears it.
+  void _go(_View v) {
+    if (v == _View.history && _view != _View.history) {
+      _beforeHistory = _view;
+    } else if (v != _View.history) {
+      _beforeHistory = null;
+    }
+    setState(() => _view = v);
+  }
 
   @override
   void dispose() {
@@ -23,60 +42,216 @@ class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
     super.dispose();
   }
 
-  void _showMoment(double seconds) {
-    _cursor.value = seconds;
-    final box = _graphs.currentContext;
-    if (box != null) {
-      unawaited(Scrollable.ensureVisible(box, duration: const Duration(milliseconds: 250), alignment: 0.02));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(benchmarkProvider);
     final notifier = ref.read(benchmarkProvider.notifier);
     final result = state.result;
+    // Where the tab opens: in the run while it goes on, at its result when one is here, at the setup otherwise.
+    _view ??= state.running || result != null ? _View.live : _View.setup;
+    // A view that its step no longer allows is left at once (a run was cleared under us).
+    final canLive = state.running || result != null || state.live != null;
+    if (_view == _View.live && !canLive) _view = _View.setup;
+
+    // The run itself moves the tab: starting it shows it, and its end keeps it there with the whole run's numbers — or
+    // shows the setup when it stopped or failed without a result.
+    ref.listen<BenchmarkState>(benchmarkProvider, (before, after) {
+      if (after.running && !(before?.running ?? false)) {
+        setState(() => _view = _View.live);
+      } else if ((before?.running ?? false) && !after.running) {
+        setState(() => _view = after.result != null ? _View.live : _View.setup);
+      }
+    });
+
+    final view = _view!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _Panel(title: 'Settings', child: _BenchmarkSettings(entry: widget.entry, state: state)),
-        _Panel(
-          key: _graphs,
-          title: 'Live',
-          child: _LivePanel(state: state, control: widget.control, cursor: _cursor),
+        _Steps(
+          current: view,
+          running: state.running,
+          canSetup: !state.running,
+          canLive: canLive,
+          hasResult: result != null,
+          onGo: _go,
+          onHistory: () => _go(_view == _View.history ? (_beforeHistory ?? _View.setup) : _View.history),
         ),
-        if (result != null)
-          _Panel(
-            title: 'Full result',
-            child: ResultView(result: result, others: state.history, onShowMoment: _showMoment),
+        const SizedBox(height: 14),
+        switch (view) {
+          _View.live => _Panel(
+            title: 'Live',
+            child: _LivePanel(state: state, control: widget.control, cursor: _cursor),
           ),
-        _Panel(
-          title: 'History',
-          child: state.history.isEmpty
-              ? Text('Finished runs are kept here.', style: TextStyle(fontSize: 13, color: context.colors.textMuted))
-              : Column(
+          _View.history => _Panel(
+            title: 'History',
+            child: state.history.isEmpty
+                ? Text('Finished runs are kept here.', style: TextStyle(fontSize: 13, color: context.colors.textMuted))
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final run in state.history)
+                        HistoryRow(
+                          key: ValueKey(run.id ?? run.at),
+                          result: run,
+                          others: state.history,
+                          onDelete: () => notifier.delete(run),
+                        ),
+                    ],
+                  ),
+          ),
+          // The setup is one small panel, with no heading: the step above it is called Setup.
+          _ => Align(
+            alignment: Alignment.topLeft,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: _setupWidth),
+              child: _Panel(key: const Key('benchmark-setup'), child: _BenchmarkSettings(entry: widget.entry, state: state)),
+            ),
+          ),
+        },
+      ],
+    );
+  }
+}
+
+/// The stepper at the top of the tab: the two steps and History beside them. The step on screen is lit; a step not
+/// reached yet is locked, with the reason under it; a passed step keeps its check. The setup is the only way into a
+/// run.
+class _Steps extends StatelessWidget {
+  const _Steps({
+    required this.current,
+    required this.running,
+    required this.canSetup,
+    required this.canLive,
+    required this.hasResult,
+    required this.onGo,
+    required this.onHistory,
+  });
+
+  final _View current;
+  final bool running;
+  final bool canSetup;
+  final bool canLive;
+  final bool hasResult;
+  final void Function(_View) onGo;
+  final void Function() onHistory;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    // A step: its circle, its label and, when it is locked, why. The circle is lit for the step on screen, checked
+    // for a passed one, and faint for a locked one.
+    Widget step(
+      String name,
+      _View view, {
+      required bool enabled,
+      required String? sub,
+      Key? key,
+    }) {
+      final isCurrent = current == view;
+      final passed = switch (view) {
+        _View.setup => !running,
+        _View.live => hasResult,
+        _View.history => false,
+      };
+      final circleColor = isCurrent ? c.text : passed ? c.textSecondary : c.textMuted;
+      // A step is a button: a bordered pill that shows the hand (hover) and the press, lit while it is the one
+      // on screen, quiet when locked.
+      return InkWell(
+        key: key,
+        onTap: enabled && !isCurrent ? () => onGo(view) : null,
+        borderRadius: BorderRadius.circular(9),
+        hoverColor: c.rowHover,
+        splashColor: c.rowHover,
+        highlightColor: c.rowHover,
+        child: Opacity(
+          opacity: enabled ? 1 : 0.55,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: isCurrent ? c.selected : c.inputFill,
+              border: Border.all(color: isCurrent ? c.textSecondary : c.inputBorder),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 24,
+                  height: 24,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: isCurrent ? c.text : c.inputBorder, width: isCurrent ? 2 : 1.2),
+                  ),
+                  child: passed && !isCurrent
+                      ? Icon(Icons.check, size: 14, color: circleColor)
+                      : Text('${_View.values.indexOf(view) + 1}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: circleColor)),
+                ),
+                const SizedBox(width: 8),
+                Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final run in state.history)
-                      HistoryRow(
-                        key: ValueKey(run.id ?? run.at),
-                        result: run,
-                        others: state.history,
-                        onDelete: () => notifier.delete(run),
+                    Text(
+                      name,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400,
+                        color: enabled ? c.text : c.textMuted,
                       ),
+                    ),
+                    if (sub != null) Text(sub, style: TextStyle(fontSize: 10.5, color: c.textMuted)),
                   ],
                 ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget link(bool done) => Expanded(child: Container(height: 1.5, color: done ? c.textMuted : c.inputBorder));
+
+    return Row(
+      children: [
+        step('Setup', _View.setup, key: const Key('bench-step-1'), enabled: canSetup, sub: running ? 'stop the run to change' : null),
+        link(hasResult),
+        step('Live', _View.live, key: const Key('bench-step-2'), enabled: canLive, sub: canLive ? null : 'start a run first'),
+        const SizedBox(width: 18),
+        InkWell(
+          key: const Key('bench-history'),
+          onTap: onHistory,
+          borderRadius: BorderRadius.circular(9),
+          hoverColor: c.rowHover,
+          splashColor: c.rowHover,
+          highlightColor: c.rowHover,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
+            decoration: BoxDecoration(
+              color: current == _View.history ? c.selected : c.inputFill,
+              border: Border.all(color: c.inputBorder),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.history, size: 15, color: c.textSecondary),
+                const SizedBox(width: 6),
+                Text('History', style: TextStyle(fontSize: 12.5, color: c.textSecondary)),
+              ],
+            ),
+          ),
         ),
       ],
     );
   }
 }
 
-/// A part of the page: a quiet frame with a small heading.
+/// A part of the page: a quiet frame, with a small heading when it has a [title].
 class _Panel extends StatelessWidget {
-  const _Panel({super.key, required this.title, required this.child});
+  const _Panel({super.key, this.title, required this.child});
 
-  final String title;
+  final String? title;
   final Widget child;
 
   @override
@@ -94,11 +269,13 @@ class _Panel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title.toUpperCase(),
-            style: TextStyle(fontSize: 11.5, letterSpacing: 0.8, fontWeight: FontWeight.w600, color: c.textMuted),
-          ),
-          const SizedBox(height: 12),
+          if (title != null) ...[
+            Text(
+              title!.toUpperCase(),
+              style: TextStyle(fontSize: 11.5, letterSpacing: 0.8, fontWeight: FontWeight.w600, color: c.textMuted),
+            ),
+            const SizedBox(height: 12),
+          ],
           child,
         ],
       ),
@@ -106,11 +283,18 @@ class _Panel extends StatelessWidget {
   }
 }
 
+/// How wide the setup panel is at most.
+const _setupWidth = 560.0;
+
+/// The setup: three choices, a line on what the test does, and Start.
 class _BenchmarkSettings extends ConsumerWidget {
   const _BenchmarkSettings({required this.entry, required this.state});
 
   final CatalogEntry entry;
   final BenchmarkState state;
+
+  /// The width of the labels' column, so that every label starts at one edge and every box at another.
+  static const _labelWidth = 130.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -118,215 +302,115 @@ class _BenchmarkSettings extends ConsumerWidget {
     final notifier = ref.read(benchmarkProvider.notifier);
     final setup = state.setup;
     final replying = ref.watch(chatsProvider.select((s) => s.replyingId != null));
-    final profiles = (ref.watch(profilesProvider), ref.read(profilesProvider.notifier)).$2.all(entry.file);
-    final testing = setup.profileId == BenchmarkSetup.testProfileId;
-    final profile = profiles.firstWhere((p) => p.id == setup.profileId, orElse: () => profiles.first);
-    final options = profile.lengths;
-    final length = testing ? contextOf(setup.testFlags) : closestContext(options, setup.contextLength);
-    final problem = notifier.problem(entry.file, contextLength: length);
-    final thinking = ref.watch(prefsProvider.select((p) => p.thinking));
+    ref.watch(profilesProvider);
+    // A run always uses the model's automatic preset, at the chosen context length.
+    final presets = ref.read(profilesProvider.notifier).auto(entry.file).lengths;
+    final length = contextChoice(presets, setup.contextLength);
+    final problem = notifier.problem(contextLength: length);
     final busy = state.running;
-
-    // A prompt that no longer fits the context falls back to the story chat.
-    BenchmarkSetup fitted(BenchmarkSetup s, int? length) {
-      final tokens = BenchmarkPrompt.byId(s.promptId).tokens;
-      return tokens != null && length != null && !promptFits(tokens, s.replyLength, length) ? s.copyWith(promptId: BenchmarkPrompt.story.id) : s;
+    final library = ref.watch(libraryProvider);
+    final files = ref.watch(catalogFilesProvider);
+    final downloaded = [for (final id in library.downloaded) ?files[id]];
+    final modelEntries = [
+      for (final e in downloaded)
+        SelectEntry(id: e.file.id, value: e.file.id, label: '${e.model.name}  ${e.file.quantization}'),
+    ];
+    if (!modelEntries.any((e) => e.value == entry.file.id)) {
+      modelEntries.insert(
+        0,
+        SelectEntry(id: entry.file.id, value: entry.file.id, label: '${entry.model.name}  ${entry.file.quantization}'),
+      );
     }
 
-    Widget group(String label, Widget child) => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(label, style: TextStyle(fontSize: 12.5, color: c.textMuted))),
-        child,
-      ],
+    Widget row(String label, Widget box) => Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          SizedBox(
+            width: _labelWidth,
+            child: Text(label, style: TextStyle(fontSize: 13, color: c.textSecondary)),
+          ),
+          Expanded(child: Align(alignment: Alignment.centerLeft, child: box)),
+        ],
+      ),
     );
 
-    final flags = testing ? setup.testFlags : ref.read(profilesProvider.notifier).runWith(entry.file, setup.profileId, length ?? setup.contextLength).flags;
+    final String status;
+    final Color statusColor;
+    if (busy) {
+      (status, statusColor) = (_phaseText(state), c.textMuted);
+    } else if (replying) {
+      (status, statusColor) = ('A chat is replying. Wait for it to finish, or stop it.', c.danger);
+    } else if (problem != null) {
+      (status, statusColor) = (problem, c.danger);
+    } else {
+      (status, statusColor) = ('Close other apps for accurate results.', c.textMuted);
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          spacing: 28,
-          runSpacing: 14,
-          children: [
-            group(
-              'Profile',
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final p in profiles)
-                    OptionPill(
-                      label: p.name,
-                      chosen: setup.profileId == p.id,
-                      onTap: busy
-                          ? null
-                          : () {
-                              final length = closestContext(p.lengths, setup.contextLength);
-                              notifier.setSetup(fitted(setup.copyWith(profileId: p.id, contextLength: length), length));
-                            },
-                    ),
-                  OptionPill(
-                    key: const Key('benchmark-test-mode'),
-                    label: 'Test mode',
-                    chosen: testing,
-                    onTap: busy ? null : () => notifier.setSetup(setup.copyWith(profileId: BenchmarkSetup.testProfileId)),
-                  ),
-                ],
-              ),
-            ),
-            if (!testing)
-              group(
-                'Context length',
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final n in options)
-                      OptionPill(
-                        key: Key('benchmark-context-$n'),
-                        label: contextLabel(n),
-                        chosen: n == length,
-                        onTap: busy ? null : () => notifier.setSetup(fitted(setup.copyWith(contextLength: n), n)),
-                      ),
-                  ],
-                ),
-              ),
-          ],
+        row(
+          'Model',
+          SelectBox<String>(
+            id: 'benchmark-model',
+            label: 'Model',
+            value: entry.file.id,
+            entries: modelEntries,
+            onChanged: busy ? null : (id) => ref.read(chatsProvider.notifier).pickModel(id),
+          ),
         ),
-        const SizedBox(height: 14),
-        group(
-          'Prompt',
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final p in BenchmarkPrompt.all)
-                Builder(
-                  builder: (context) {
-                    final fits = p.tokens == null || length == null || promptFits(p.tokens!, setup.replyLength, length);
-                    final pill = OptionPill(
-                      key: Key('benchmark-prompt-${p.id}'),
-                      label: p.label,
-                      chosen: setup.promptId == p.id,
-                      onTap: busy || !fits ? null : () => notifier.setSetup(setup.copyWith(promptId: p.id)),
-                    );
-                    return fits ? pill : Tooltip(message: 'This does not fit the context length.', child: pill);
-                  },
+        row(
+          'Context length',
+          SelectBox<int>(
+            id: 'benchmark-context',
+            label: 'Context length',
+            value: length,
+            entries: [
+              for (final choice in contextChoices(presets))
+                SelectEntry(id: '${choice.length}', value: choice.length, label: contextLabel(choice.length), enabled: choice.available),
+            ],
+            onChanged: busy ? null : (n) => notifier.setSetup(setup.copyWith(contextLength: n)),
+          ),
+        ),
+        row(
+          'KV cache',
+          // A placeholder for now: the choice is kept and shown, and the run does not use it (every preset runs q8_0).
+          SelectBox<KvCache>(
+            id: 'benchmark-kv',
+            label: 'KV cache',
+            value: setup.kvCache,
+            entries: [for (final k in KvCache.all) SelectEntry(id: k.id, value: k, label: k.label)],
+            onChanged: busy ? null : (k) => notifier.setSetup(setup.copyWith(kvCache: k)),
+          ),
+        ),
+        row(
+          'Test',
+          SelectBox<BenchmarkTest>(
+            id: 'benchmark-test',
+            label: 'Test',
+            value: setup.test,
+            entries: [
+              for (final t in BenchmarkTest.all)
+                SelectEntry(
+                  id: t.id,
+                  value: t,
+                  label: t.label,
+                  enabled: t.fits(length),
+                  reason: t.fits(length) ? null : 'Needs a longer context',
                 ),
             ],
+            onChanged: busy ? null : (t) => notifier.setSetup(setup.copyWith(test: t)),
           ),
         ),
-        if (setup.promptId == BenchmarkPrompt.custom.id) ...[
-          const SizedBox(height: 10),
-          _TextBox(
-            key: const Key('benchmark-custom-text'),
-            text: setup.customText,
-            hint: 'Your text, sent as the measured message',
-            enabled: !busy,
-            onChanged: (t) => notifier.setSetup(setup.copyWith(customText: t)),
-          ),
-        ] else if (BenchmarkPrompt.byId(setup.promptId).tokens != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              'Varied real text, cut to about ${contextLabel(BenchmarkPrompt.byId(setup.promptId).tokens!)} tokens as the engine counts them.',
-              style: TextStyle(fontSize: 12, color: c.textMuted),
-            ),
-          ),
-        const SizedBox(height: 14),
-        Wrap(
-          spacing: 28,
-          runSpacing: 10,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Longest reply', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
-                const SizedBox(width: 10),
-                SizedBox(
-                  width: 96,
-                  child: _TextBox(
-                    key: const Key('benchmark-reply-length'),
-                    text: '${setup.replyLength}',
-                    enabled: !busy,
-                    onChanged: (t) {
-                      final n = int.tryParse(t.trim());
-                      if (n != null && n > 0) notifier.setSetup(fitted(setup.copyWith(replyLength: n), length));
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text('tokens at most; it stops sooner when the model stops', style: TextStyle(fontSize: 12, color: c.textMuted)),
-                ),
-              ],
-            ),
-            if (entry.model.thinking != ModelThinking.none)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ThinkingToggle(canChoose: entry.model.thinking == ModelThinking.optional),
-                  const SizedBox(width: 6),
-                  Text(
-                    entry.model.thinking == ModelThinking.always
-                        ? 'Thinking: always on for this model'
-                        : 'Thinking: ${thinking ? 'on' : 'off'}',
-                    key: const Key('benchmark-thinking'),
-                    style: TextStyle(fontSize: 12.5, color: c.textSecondary),
-                  ),
-                ],
-              ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        _Warmups(setup: setup, enabled: !busy, onChanged: (w) => notifier.setSetup(setup.copyWith(warmups: w))),
-        if (testing) ...[
-          const SizedBox(height: 10),
-          group(
-            'Flags to try (Test mode: nothing here is saved to a profile)',
-            _TextBox(
-              key: const Key('benchmark-test-flags'),
-              text: setup.testFlags,
-              hint: '-c 65536 --some-flag 1',
-              mono: true,
-              enabled: !busy,
-              onChanged: (t) => notifier.setSetup(setup.copyWith(testFlags: t)),
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: 200,
-            child: _TextBox(
-              key: const Key('benchmark-test-cap'),
-              text: setup.testMemoryCapGiB?.toString() ?? '',
-              hint: 'Memory cap in GB',
-              enabled: !busy,
-              onChanged: (t) => notifier.setSetup(setup.copyWith(testMemoryCapGiB: () => double.tryParse(t.trim()))),
-            ),
-          ),
-        ] else
-          Fold(
-            title: 'Flags (fixed here, edited in the Run tab)',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SelectableText(flags, style: TextStyle(fontSize: 12, height: 1.5, color: c.textSecondary, fontFamily: 'monospace')),
-                const SizedBox(height: 6),
-                AppButton(
-                  key: const Key('benchmark-copy-flags'),
-                  label: 'Copy flags',
-                  dense: true,
-                  onTap: () => Clipboard.setData(ClipboardData(text: flags)),
-                ),
-              ],
-            ),
-          ),
-        const SizedBox(height: 12),
+        Text(setup.test.description, key: const Key('benchmark-test-line'), style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+        Container(margin: const EdgeInsets.symmetric(vertical: 16), height: 1, color: c.inputBorder),
         Row(
           children: [
+            Expanded(
+              child: Text(status, key: const Key('benchmark-status'), style: TextStyle(fontSize: 13, color: statusColor)),
+            ),
+            const SizedBox(width: 16),
             if (busy)
               AppButton(key: const Key('benchmark-stop'), label: 'Stop', onTap: notifier.stop)
             else
@@ -335,19 +419,8 @@ class _BenchmarkSettings extends ConsumerWidget {
                 label: 'Start',
                 onTap: replying || problem != null
                     ? null
-                    : () => notifier.start(entry.file, entry.model.name, length ?? setup.contextLength, thinking: entry.model.thinking),
+                    : () => notifier.start(entry.file, entry.model.name, length, thinking: entry.model.thinking),
               ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                busy
-                    ? _phaseText(state)
-                    : replying
-                    ? 'A chat is replying. Wait for it to finish, or stop it.'
-                    : problem ?? 'For accurate results, close other apps first.',
-                style: TextStyle(fontSize: 13, color: !busy && problem != null ? c.danger : c.textMuted),
-              ),
-            ),
           ],
         ),
         if (state.error != null)
@@ -364,107 +437,21 @@ class _BenchmarkSettings extends ConsumerWidget {
     final read = progress == null ? '' : ' (${formatNumber(progress.$1.toDouble(), 0)} of ${formatNumber(progress.$2.toDouble(), 0)} tokens)';
     return switch (state.phase) {
       BenchmarkPhase.loading => 'Starting the engine and loading the model…',
-      BenchmarkPhase.warmingUp => 'Warm-up ${state.warmup + 1} of ${state.setup.warmups.length}, not counted$read…',
+      BenchmarkPhase.warmingUp => 'Warm-up ${state.warmup + 1} of ${state.setup.warmups.length}$read…',
       BenchmarkPhase.measuring =>
-        state.replyWords == 0 ? 'Reading the prompt$read…' : 'Writing the reply: ${state.replyWords} tokens of at most ${state.setup.replyLength}…',
+        state.replyTokens == 0 ? 'Reading the prompt$read…' : 'Writing the reply: ${state.replyTokens} tokens of at most ${state.setup.replyLength}…',
       BenchmarkPhase.idle => '',
     };
   }
 }
 
-/// A text box that keeps its own text while the user types.
-class _TextBox extends StatefulWidget {
-  const _TextBox({super.key, required this.text, required this.onChanged, this.hint, this.mono = false, this.enabled = true});
-
-  final String text;
-  final String? hint;
-  final bool mono;
-  final bool enabled;
-  final void Function(String) onChanged;
-
-  @override
-  State<_TextBox> createState() => _TextBoxState();
-}
-
-class _TextBoxState extends State<_TextBox> {
-  late final _text = TextEditingController(text: widget.text);
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return TextField(
-      controller: _text,
-      enabled: widget.enabled,
-      onChanged: widget.onChanged,
-      minLines: 1,
-      maxLines: 6,
-      style: TextStyle(fontSize: 13, color: c.text, fontFamily: widget.mono ? 'monospace' : null),
-      cursorColor: c.text,
-      decoration: _boxDecoration(c, hint: widget.hint),
-    );
-  }
-}
-
-/// The warm-up messages, folded until opened.
-class _Warmups extends StatelessWidget {
-  const _Warmups({required this.setup, required this.enabled, required this.onChanged});
-
-  final BenchmarkSetup setup;
-  final bool enabled;
-  final void Function(List<String>) onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final warmups = setup.warmups;
-    return Fold(
-      key: const Key('benchmark-warmups'),
-      title: 'Warm-up: ${warmups.length} messages, not counted',
-      hint: 'sent first, in the same conversation',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (var i = 0; i < warmups.length; i++)
-            Padding(
-              key: ValueKey('warmup-$i-${warmups.length}'),
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: _TextBox(
-                      text: warmups[i],
-                      enabled: enabled,
-                      onChanged: (t) => onChanged([...warmups]..[i] = t),
-                    ),
-                  ),
-                  AppIconButton(
-                    size: 24,
-                    iconSize: 14,
-                    radius: 6,
-                    muted: true,
-                    icon: Icons.close,
-                    tooltip: 'Remove',
-                    onTap: enabled ? () => onChanged([...warmups]..removeAt(i)) : null,
-                  ),
-                ],
-              ),
-            ),
-          AppButton(label: '+ Add a message', dense: true, onTap: enabled ? () => onChanged([...warmups, '']) : null),
-        ],
-      ),
-    );
-  }
-}
-
-/// The run as it goes on: the four numbers that matter, what is happening, why the run is not fair if it is not, the
-/// graphs and the engine's output. After the run the graphs stay as they were.
-class _LivePanel extends StatelessWidget {
+/// The run as it goes on and after it: the turns, the four numbers that matter, what is happening, the graphs and the
+/// engine's output. The turn tabs pick the turn: the current one live, finished ones frozen with their own real numbers
+/// and, under the graphs, their details — the user can go back to an earlier turn, and the view follows the run
+/// otherwise. Each turn has its own graphs (its stretch of the run); the tab before the turns is the whole run. When a run
+/// ends the whole run is shown, with every number taken over all the turns together, the turns side by side, and the
+/// folds of the run (its phases, memory layout, hardware, setup and engine output).
+class _LivePanel extends StatefulWidget {
   const _LivePanel({required this.state, required this.control, required this.cursor});
 
   final BenchmarkState state;
@@ -472,80 +459,168 @@ class _LivePanel extends StatelessWidget {
   final ValueNotifier<double?> cursor;
 
   @override
+  State<_LivePanel> createState() => _LivePanelState();
+}
+
+class _LivePanelState extends State<_LivePanel> {
+  bool _overall = false;
+  int? _pickedToken;
+
+  @override
+  void initState() {
+    super.initState();
+    _overall = !widget.state.running;
+    _pickedToken = null;
+  }
+
+  @override
+  void didUpdateWidget(_LivePanel old) {
+    super.didUpdateWidget(old);
+    final (before, now) = (old.state, widget.state);
+    if (!before.running && now.running) {
+      _overall = false;
+      _pickedToken = null;
+      widget.cursor.value = null;
+    } else if (before.running && !now.running && now.result != null) {
+      _overall = true;
+      _pickedToken = null;
+      widget.cursor.value = null;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    final state = widget.state;
     final series = state.live;
     final result = state.result;
-    double? last(String id) {
-      final column = series?.series(id);
-      if (column == null) return null;
-      for (var i = column.length - 1; i >= 0; i--) {
-        if (column[i] != null) return column[i];
-      }
-      return null;
-    }
+    final turns = state.turns.isNotEmpty ? state.turns : (result?.turns ?? const <TurnRecord>[]);
+    final total = state.setup.warmups.length + 1;
+    final liveIndex = state.running ? turns.length.clamp(0, total - 1) : -1;
+    final measuredTurn = turns.isNotEmpty ? turns.lastWhere((t) => !t.warmup, orElse: () => turns.last) : null;
+    final whole = !state.running && measuredTurn != null ? WholeRun([measuredTurn]) : (!state.running && turns.isNotEmpty ? WholeRun(turns) : null);
+    final tokens = measuredTurn != null && measuredTurn.tokens.isNotEmpty
+        ? measuredTurn.tokens
+        : (result?.tokens ?? const <double>[]);
 
-    String show(double? v, int digits) => v == null ? '–' : formatNumber(v, digits);
-    final tiles = [
-      ('TTFT', result != null ? (result.firstWordMillis / 1000).toStringAsFixed(2) : show(last('speed.ttft'), 2), 's'),
-      ('Prompt processing', result != null ? formatNumber(result.promptTokensPerSecond, 0) : show(last('speed.prompt'), 0), 'tokens/s'),
-      ('Generation speed', result != null ? result.tokensPerSecond.toStringAsFixed(1) : show(last('speed.words'), 1), 'tokens/s'),
-      ('p99', result != null ? result.slowestOnePercent.toStringAsFixed(0) : '–', 'ms/token'),
-    ];
-    final hint = state.running
-        ? null
-        : state.note ?? (result != null ? 'Hover a graph for any moment. Click a line for its detail.' : 'Press Start. The graphs fill in while the run goes on.');
+    final String turnTitle = liveIndex == 0
+        ? 'Warm-up 1'
+        : liveIndex == 1
+        ? 'Warm-up 2'
+        : 'Benchmark Run';
+
+    final bool isOverall = !state.running && _overall;
+    final activeTokenMillis = !isOverall && _pickedToken != null && _pickedToken! < tokens.length
+        ? tokens[_pickedToken!]
+        : null;
+
+    final hint = state.note ?? (!state.running && result == null ? 'Press Start. The graphs fill in while the run goes on.' : null);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            for (final (name, value, unit) in tiles)
-              Container(
-                width: 170,
-                padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
-                decoration: BoxDecoration(color: c.text.withValues(alpha: 0.04), borderRadius: BorderRadius.circular(10)),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(text: value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500, color: c.text)),
-                          TextSpan(text: ' $unit', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
-                        ],
-                      ),
-                      style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
-                    ),
-                    Text(name, style: TextStyle(fontSize: 12, color: c.textMuted)),
-                  ],
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        if (hint != null) Text(hint, style: TextStyle(fontSize: 13, color: c.textMuted)),
-        if (state.disturbed.isNotEmpty)
-          for (final reason in state.disturbed)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text('Disturbed: $reason', key: const Key('benchmark-disturbed'), style: TextStyle(fontSize: 13, color: c.danger)),
-            ),
-        const SizedBox(height: 12),
+        if (hint != null) ...[
+          Text(hint, style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+          const SizedBox(height: 12),
+        ],
+
+        // In-place live header during run
+        if (state.running) ...[
+          Row(
+            children: [
+              Container(width: 8, height: 8, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
+              const SizedBox(width: 8),
+              Text(turnTitle, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.text)),
+              if (state.replyTokens > 0) ...[
+                const SizedBox(width: 12),
+                Text('Writing reply: ${state.replyTokens} tokens…', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+              ] else ...[
+                const SizedBox(width: 12),
+                Text('Reading prompt…', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+
+        // After run finishes: TokenScrubber at the top
+        if (!state.running && tokens.isNotEmpty) ...[
+          TokenScrubber(
+            tokens: tokens,
+            overall: isOverall,
+            picked: _pickedToken,
+            onSelectOverall: () {
+              setState(() {
+                _overall = true;
+                _pickedToken = null;
+              });
+              widget.cursor.value = null;
+            },
+            onPickToken: (index) {
+              setState(() {
+                _overall = false;
+                _pickedToken = index;
+              });
+              final at = measuredTurn != null ? turnTokenSeconds(measuredTurn, index) : (result != null ? tokenTimeSeconds(result, index) : null);
+              if (at != null) {
+                widget.cursor.value = at;
+              }
+            },
+          ),
+          const SizedBox(height: 14),
+        ],
+
+        // Metric Cards (Speed, GPUs, CPU, RAM, SSD, Engine)
         if (series == null || series.isEmpty)
           Text(state.running ? 'Starting…' : '', style: TextStyle(fontSize: 13, color: c.textMuted))
         else
-          LiveGraphs(
+          MetricCards(
             series: series,
-            revision: state.revision,
-            cursor: cursor,
-            counters: state.counters,
-            running: state.running,
-            gpuNames: state.hardware.gpus,
+            rows: metricRows(series, gpuNames: state.hardware.gpus),
+            cursor: isOverall ? null : widget.cursor.value,
+            overall: isOverall,
+            whole: isOverall ? whole : null,
+            activeTokenMillis: activeTokenMillis,
           ),
-        if (state.running) Fold(title: 'Engine output', child: _Log(control: control)),
+
+        // Under the cards when run has ended:
+        if (!state.running && whole != null) ...[
+          // 1. Where the time per token went (Turn 3 only)
+          if (measuredTurn != null) ...[
+            Builder(
+              builder: (context) {
+                final parts = timeParts(measuredTurn.engineStats);
+                final totalMs = measuredTurn.replyTokens > 0 ? measuredTurn.replyMillis / measuredTurn.replyTokens : 0.0;
+                if (parts.isEmpty && totalMs <= 0) return const SizedBox.shrink();
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 18),
+                    const SectionLabel('Where the time per token went'),
+                    TimePerToken(total: totalMs, parts: parts),
+                  ],
+                );
+              },
+            ),
+          ],
+
+          // 2. The Run Facts (Load time, Cache hits, Misses, SSD wait, Correct guesses, Wrong guesses)
+          const SizedBox(height: 18),
+          Fold(
+            title: 'The run',
+            child: Facts([
+              if (result?.loadMillis case final load?)
+                ('Load time', '${(load / 1000).toStringAsFixed(1)} s'),
+              ...engineFacts(whole.engine, whole: false),
+            ]),
+          ),
+
+          // 3. Dropdowns / Collapsible folds
+          if (result != null) ...[
+            const SizedBox(height: 14),
+            RunFolds(result: result, others: state.history),
+          ],
+        ],
       ],
     );
   }

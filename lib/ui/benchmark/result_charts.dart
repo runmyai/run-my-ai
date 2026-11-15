@@ -8,61 +8,108 @@ import '../../theme.dart';
 import '../buttons.dart';
 import 'chart_colors.dart';
 
-/// Every word of the reply as a bar as tall as the word took; the slow ones stand out. A click picks the word nearest to
-/// it (the slowest one close by wins, so a thin spike is easy to hit) and says which, for [onPick].
-class WordsChart extends StatefulWidget {
-  const WordsChart({super.key, required this.words, required this.onPick, this.picked});
+/// A small caption over a chart or a block of numbers.
+class SectionLabel extends StatelessWidget {
+  const SectionLabel(this.text, {super.key});
 
-  final List<double> words;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(text, style: TextStyle(fontSize: 12.5, color: context.colors.textMuted)),
+  );
+}
+
+/// Every token as a bar and how their times spread, each under its caption; a click on a bar says which token it is, for
+/// [onPick].
+class TokenCharts extends StatefulWidget {
+  const TokenCharts({super.key, required this.tokens, required this.onPick});
+
+  final List<double> tokens;
+  final void Function(int index) onPick;
+
+  @override
+  State<TokenCharts> createState() => _TokenChartsState();
+}
+
+class _TokenChartsState extends State<TokenCharts> {
+  int? _picked;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SectionLabel('Every token: click one to see that moment in the graphs'),
+        TokensChart(
+          tokens: widget.tokens,
+          picked: _picked,
+          onPick: (k) {
+            setState(() => _picked = k);
+            widget.onPick(k);
+          },
+        ),
+        const SizedBox(height: 18),
+        const SectionLabel('How the times spread'),
+        SpreadChart(tokens: widget.tokens),
+      ],
+    );
+  }
+}
+
+/// Every token of the reply as a bar as tall as the token took; the slow ones stand out. A click picks the token nearest to
+/// it (the slowest one close by wins, so a thin spike is easy to hit) and says which, for [onPick].
+class TokensChart extends StatefulWidget {
+  const TokensChart({super.key, required this.tokens, required this.onPick, this.picked});
+
+  final List<double> tokens;
   final void Function(int index) onPick;
   final int? picked;
 
   @override
-  State<WordsChart> createState() => _WordsChartState();
+  State<TokensChart> createState() => _TokensChartState();
 }
 
-class _WordsChartState extends State<WordsChart> {
+class _TokensChartState extends State<TokensChart> {
   int? _hover;
 
-  int _wordAt(double dx, double width) {
-    final words = widget.words;
-    var k = (dx / width * words.length).floor().clamp(0, words.length - 1);
-    final reach = math.max(1, (words.length / width * 4).ceil());
-    for (var j = math.max(0, k - reach); j <= math.min(words.length - 1, k + reach); j++) {
-      if (words[j] > words[k]) k = j;
-    }
-    return k;
+  int _tokenAt(double dx, double width) {
+    final tokens = widget.tokens;
+    if (tokens.isEmpty || width <= 0) return 0;
+    return (dx / width * tokens.length).floor().clamp(0, tokens.length - 1);
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    if (widget.words.isEmpty) {
+    if (widget.tokens.isEmpty) {
       return Text('The engine gave no times per token.', style: TextStyle(fontSize: 12.5, color: c.textMuted));
     }
-    final typical = percentile(widget.words, 0.5);
+    final typical = percentile(widget.tokens, 0.5);
     return LayoutBuilder(
       builder: (context, box) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           MouseRegion(
             cursor: SystemMouseCursors.click,
-            onHover: (e) => setState(() => _hover = _wordAt(e.localPosition.dx, box.maxWidth)),
+            onHover: (e) => setState(() => _hover = _tokenAt(e.localPosition.dx, box.maxWidth)),
             onExit: (_) => setState(() => _hover = null),
             child: GestureDetector(
-              key: const Key('words-chart'),
+              key: const Key('tokens-chart'),
               behavior: HitTestBehavior.opaque,
-              onTapUp: (d) => widget.onPick(_wordAt(d.localPosition.dx, box.maxWidth)),
+              onTapUp: (d) => widget.onPick(_tokenAt(d.localPosition.dx, box.maxWidth)),
               child: SizedBox(
                 height: 92,
                 width: double.infinity,
                 child: CustomPaint(
-                  painter: _WordsPainter(
-                    words: widget.words,
+                  painter: _TokensPainter(
+                    tokens: widget.tokens,
                     picked: widget.picked,
                     hover: _hover,
-                    bar: c.textMuted.withValues(alpha: 0.7),
+                    bar: c.textMuted.withValues(alpha: 0.65),
                     slow: ChartColors.of(context, 2),
+                    fast: ChartColors.of(context, 0),
                     mark: c.text,
                     typical: typical,
                   ),
@@ -73,8 +120,8 @@ class _WordsChartState extends State<WordsChart> {
           const SizedBox(height: 4),
           Text(
             _hover == null
-                ? 'Token 1 to ${widget.words.length}. Bars above ${(typical * 1.5).round()} ms are marked.'
-                : 'Token ${_hover! + 1}: ${widget.words[_hover!].toStringAsFixed(1)} ms',
+                ? 'Token 1 to ${widget.tokens.length} · Fast (< ${(typical * 0.85).round()} ms) in blue, slow (> ${(typical * 1.5).round()} ms) in yellow.'
+                : 'Token ${_hover! + 1}: ${widget.tokens[_hover!].toStringAsFixed(1)} ms',
             style: TextStyle(fontSize: 12, color: c.textMuted, fontFeatures: const [FontFeature.tabularFigures()]),
           ),
         ],
@@ -83,68 +130,88 @@ class _WordsChartState extends State<WordsChart> {
   }
 }
 
-class _WordsPainter extends CustomPainter {
-  _WordsPainter({
-    required this.words,
+class _TokensPainter extends CustomPainter {
+  _TokensPainter({
+    required this.tokens,
     required this.picked,
     required this.hover,
     required this.bar,
     required this.slow,
+    required this.fast,
     required this.mark,
     required this.typical,
   });
 
-  final List<double> words;
+  final List<double> tokens;
   final int? picked;
   final int? hover;
   final Color bar;
   final Color slow;
+  final Color fast;
   final Color mark;
   final double typical;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final top = math.max(percentile(words, 0.995) * 1.15, 1.0);
+    final top = math.max(percentile(tokens, 0.995) * 1.15, 1.0);
     final w = size.width, h = size.height;
-    final columns = math.min(words.length, w.floor());
+    final columns = math.min(tokens.length, w.floor());
+    if (columns <= 0) return;
     final each = w / columns;
     for (var i = 0; i < columns; i++) {
-      // A column covers several words when there are more words than pixels: its tallest word shows.
-      final from = i * words.length ~/ columns, to = math.max(from + 1, (i + 1) * words.length ~/ columns);
+      // A column covers several tokens when there are more tokens than pixels: its tallest token shows.
+      final from = i * tokens.length ~/ columns, to = math.max(from + 1, (i + 1) * tokens.length ~/ columns);
       var most = 0.0;
       var at = from;
       for (var k = from; k < to; k++) {
-        if (words[k] > most) {
-          most = words[k];
+        if (tokens[k] > most) {
+          most = tokens[k];
           at = k;
         }
       }
       final bh = math.max(1.0, h * (most / top).clamp(0.0, 1.0));
       final isPicked = picked != null && picked! >= from && picked! < to;
       final isHover = hover != null && hover! >= from && hover! < to;
+
+      Color color;
+      if (isPicked || isHover) {
+        color = mark;
+      } else if (tokens[at] > typical * 1.5) {
+        color = slow;
+      } else if (tokens[at] < typical * 0.85) {
+        color = fast;
+      } else {
+        color = bar;
+      }
+
       canvas.drawRect(
         Rect.fromLTWH(i * each, h - bh, math.max(1.0, each - (each > 3 ? 0.8 : 0)), bh),
-        Paint()..color = isPicked || isHover ? mark : (words[at] > typical * 1.5 ? slow : bar),
+        Paint()..color = color,
       );
     }
   }
 
   @override
-  bool shouldRepaint(_WordsPainter old) =>
-      !identical(old.words, words) || old.picked != picked || old.hover != hover || old.bar != bar;
+  bool shouldRepaint(_TokensPainter old) =>
+      !identical(old.tokens, tokens) ||
+      old.picked != picked ||
+      old.hover != hover ||
+      old.bar != bar ||
+      old.slow != slow ||
+      old.fast != fast;
 }
 
-/// How the words' times spread: a histogram with the 50 %, 90 % and 99 % marks, and the numbers.
+/// How the tokens' times spread: a histogram with the 50 %, 90 % and 99 % marks, and the numbers.
 class SpreadChart extends StatelessWidget {
-  const SpreadChart({super.key, required this.words});
+  const SpreadChart({super.key, required this.tokens});
 
-  final List<double> words;
+  final List<double> tokens;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    if (words.isEmpty) return const SizedBox.shrink();
-    final stats = WordStats.of(words);
+    if (tokens.isEmpty) return const SizedBox.shrink();
+    final stats = TokenStats.of(tokens);
     final top = math.max(stats.p99 * 1.25, stats.max.clamp(0, stats.p99 * 3).toDouble());
     Widget chip(String label, double ms) => Padding(
       padding: const EdgeInsets.only(right: 22),
@@ -173,7 +240,7 @@ class SpreadChart extends StatelessWidget {
           width: double.infinity,
           child: CustomPaint(
             painter: _SpreadPainter(
-              counts: histogram(words, top, 48),
+              counts: histogram(tokens, top, 48),
               top: top,
               stats: stats,
               bar: ChartColors.of(context, 0).withValues(alpha: 0.75),
@@ -199,7 +266,7 @@ class _SpreadPainter extends CustomPainter {
 
   final List<int> counts;
   final double top;
-  final WordStats stats;
+  final TokenStats stats;
   final Color bar;
   final Color mark;
   final Color muted;
@@ -211,7 +278,7 @@ class _SpreadPainter extends CustomPainter {
     final w = size.width, h = size.height - 14;
     final each = w / counts.length;
     for (var i = 0; i < counts.length; i++) {
-      // (A square-root scale keeps the thin tail of slow words visible beside the crowd of typical ones.)
+      // (A square-root scale keeps the thin tail of slow tokens visible beside the crowd of typical ones.)
       final bh = counts[i] == 0 ? 0.0 : math.max(1.5, h * math.sqrt(counts[i] / peak));
       canvas.drawRect(Rect.fromLTWH(i * each + 0.5, h - bh, each - 1, bh), Paint()..color = bar);
     }
@@ -236,10 +303,10 @@ class _SpreadPainter extends CustomPainter {
 
 /// Where the time per token went: one bar cut in the parts the engine measured, and what is left. The graphics card's
 /// kernels run beside the CPU's work, so they are named under the bar and not cut out of it.
-class TimePerWord extends StatelessWidget {
-  const TimePerWord({super.key, required this.total, required this.parts});
+class TimePerToken extends StatelessWidget {
+  const TimePerToken({super.key, required this.total, required this.parts});
 
-  /// The mean time of a word in milliseconds, and its parts by name.
+  /// The mean time of a token in milliseconds, and its parts by name.
   final double total;
   final Map<String, double> parts;
 
@@ -253,7 +320,9 @@ class TimePerWord extends StatelessWidget {
     final rest = total - known;
     final shown = <(String, double)>[
       for (final e in stacked.entries) (e.key, e.value),
-      if (rest > total * 0.02) (stacked.isEmpty ? 'Everything else' : 'Other', rest),
+      // (The engine's own leftover already came in as a part; this is the gap the app sees between the parts and the
+      // whole token: the server and the app themselves.)
+      if (rest > total * 0.02) (stacked.isEmpty ? 'Everything else' : 'Server and streaming', rest),
     ];
     final width = math.max(total, known);
     return Column(
@@ -321,11 +390,11 @@ class TimePerWord extends StatelessWidget {
 
 /// One cell for each streamed layer, as dark as that layer's number is high: where the SSD is waited on.
 class LayerHeatMap extends StatefulWidget {
-  const LayerHeatMap({super.key, required this.layers, required this.words});
+  const LayerHeatMap({super.key, required this.layers, required this.tokens});
 
-  /// Each layer's counters over the reply, and the words the reply had.
+  /// Each layer's counters over the reply, and the tokens the reply had.
   final List<Map<String, double>> layers;
-  final int words;
+  final int tokens;
 
   @override
   State<LayerHeatMap> createState() => _LayerHeatMapState();
@@ -336,13 +405,23 @@ class _LayerHeatMapState extends State<LayerHeatMap> {
 
   /// What can be shown, by name: the key of the layer's numbers and how to turn it into a value per layer.
   List<(String, String, double? Function(Map<String, double> layer))> get _metrics {
-    final words = math.max(1, widget.words);
+    final tokens = math.max(1, widget.tokens);
     bool has(String key) => widget.layers.any((l) => l.containsKey(key));
     return [
-      if (has('stall_ms')) ('SSD wait (ms/token)', 'stall_ms', (l) => l['stall_ms'] == null ? null : l['stall_ms']! / words),
-      if (has('misses')) ('Reads from the SSD (per token)', 'misses', (l) => l['misses'] == null ? null : l['misses']! / words),
+      if (has('stall_ms')) ('SSD wait (ms/token)', 'stall_ms', (l) => l['stall_ms'] == null ? null : l['stall_ms']! / tokens),
+      if (has('misses')) ('Reads from the SSD (per token)', 'misses', (l) => l['misses'] == null ? null : l['misses']! / tokens),
       if (has('hit_rate_percent'))
         ('Missed in RAM (%)', 'hit_rate_percent', (l) => l['hit_rate_percent'] == null ? null : 100 - l['hit_rate_percent']!),
+      if (has('vram_hits'))
+        (
+          'VRAM hits (%)',
+          'vram_hit_percent',
+          (l) {
+            final vram = l['vram_hits'];
+            final all = (l['hits'] ?? 0) + (l['misses'] ?? 0) + (vram ?? 0);
+            return vram == null || all <= 0 ? null : 100 * vram / all;
+          },
+        ),
     ];
   }
 

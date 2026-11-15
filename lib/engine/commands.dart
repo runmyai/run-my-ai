@@ -37,6 +37,16 @@ List<int> contextOptions(int maxContext) {
 String withContextLength(String command, int length) =>
     command.replaceFirstMapped(RegExp(r'(^|\s)(-c|--ctx-size)([ =])\d+'), (m) => '${m[1]}${m[2]}${m[3]}$length');
 
+/// [command] with its --moe-stream-ram-free set to [gib].
+String withRamFree(String command, double gib) {
+  final str = gib == gib.roundToDouble() ? '${gib.round()}GiB' : '${gib}GiB';
+  final pattern = RegExp(r'(^|\s)--moe-stream-ram-free([ =])\S+');
+  if (pattern.hasMatch(command)) {
+    return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-ram-free${m[2]}$str');
+  }
+  return '$command --moe-stream-ram-free $str';
+}
+
 /// The smallest context length a command may use.
 const minContextLength = 1024;
 

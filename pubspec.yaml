@@ -33,3 +33,4 @@ flutter:
     - assets/licenses/
     - assets/author/
     - assets/benchmark/
+    - assets/benchmark/stories/

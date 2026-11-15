@@ -170,5 +170,30 @@ void main() {
       expect(profiles().active(_file).isAuto, isTrue);
       expect(profiles().all(_file), hasLength(1));
     });
+
+    test('setting memory cap on Auto updates run and persists across restart', () {
+      expect(profiles().active(_file).memoryCapGiB, isNull);
+      profiles().setMemoryCap(_file, 24.5);
+      expect(profiles().active(_file).memoryCapGiB, 24.5);
+      expect(profiles().runFor(_file, 65536).memoryCapGiB, 24.5);
+
+      final restarted = open();
+      addTearDown(restarted.dispose);
+      expect(restarted.read(profilesProvider.notifier).active(_file).memoryCapGiB, 24.5);
+
+      profiles().setMemoryCap(_file, null);
+      expect(profiles().active(_file).memoryCapGiB, isNull);
+      expect(profiles().runFor(_file, 65536).memoryCapGiB, isNull);
+    });
+
+    test('setting memory cap updates all models presets', () {
+      const otherFile = ModelFile(id: 'other/model', quantization: 'q', sizeBytes: 1000);
+      expect(profiles().active(_file).memoryCapGiB, isNull);
+      expect(profiles().active(otherFile).memoryCapGiB, isNull);
+
+      profiles().setMemoryCap(_file, 2.0);
+      expect(profiles().active(_file).memoryCapGiB, 2.0);
+      expect(profiles().active(otherFile).memoryCapGiB, 2.0);
+    });
   });
 }

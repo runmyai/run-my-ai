@@ -715,13 +715,15 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return engine;
   }
 
-  /// Keeps the engine within [capGiB] of RAM (null: all the RAM but 1 GB), so running out of memory ends only the
+  /// Keeps the engine within headroom of RAM (default: all the RAM but 1 GB), so running out of memory ends only the
   /// engine.
-  static List<String> _memoryCap(double? capGiB) {
+  static List<String> _memoryCap(double? headroomGiB) {
     if (!Directory('/run/systemd/system').existsSync()) return const [];
     final total = RegExp(r'MemTotal:\s+(\d+) kB').firstMatch(File('/proc/meminfo').readAsStringSync());
     if (total == null) return const [];
-    final capKiB = capGiB != null ? (capGiB * 1048576).round() : int.parse(total[1]!) - 1048576;
+    final totalKiB = int.parse(total[1]!);
+    final headroomKiB = ((headroomGiB ?? 1.0) * 1048576).round();
+    final capKiB = (totalKiB - headroomKiB).clamp(4 * 1048576, totalKiB - 524288);
     return ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=${capKiB}K', '-p', 'MemorySwapMax=0', '--'];
   }
 }

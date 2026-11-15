@@ -2,6 +2,7 @@
 // phases, the flags it adds, the history. No model and no GPU are used.
 // Run: flutter test test/benchmark_test.dart
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -50,6 +51,10 @@ class _Backend implements Backend, EngineControl {
   final calls = <String>[];
   final prompts = <int>[];
 
+  /// The text of the message each reply answers, and the most tokens it was allowed.
+  final texts = <String>[];
+  final caps = <int?>[];
+
   /// The request settings of each reply.
   final runs = <EngineRun>[];
 
@@ -69,6 +74,8 @@ class _Backend implements Backend, EngineControl {
     int? maxTokens,
   }) async* {
     prompts.add(messages.length);
+    texts.add(messages.last.text);
+    caps.add(maxTokens);
     runs.add(run);
     calls.add('reply:${messages.last.text.substring(0, 2)}:$maxTokens');
     yield const ReplyProgress(processed: 100, total: 100, millis: 50);
@@ -146,6 +153,62 @@ class _InsightBackend extends _Backend implements EngineInsight {
   Future<int?> countTokens(String text) async => text.length ~/ 4;
 }
 
+/// An engine whose automatic preset already sets the timing flag.
+class _TimedPresetBackend extends _InsightBackend {
+  @override
+  Map<int, String> autoCommands(ModelFile file) => const {4096: '-c 4096 --auto --moe-stream-timing 0'};
+}
+
+/// An engine whose [holdAt]-th reply never ends by itself; the ones before it do.
+class _HoldAtBackend extends _Backend {
+  _HoldAtBackend(this.holdAt);
+
+  final int holdAt;
+  var _started = 0;
+
+  @override
+  Stream<ReplyEvent> reply({
+    required String chatId,
+    required ModelFile model,
+    required List<ChatMessage> messages,
+    required EngineRun run,
+    bool thinking = false,
+    int? maxTokens,
+  }) {
+    hold = ++_started >= holdAt;
+    return super.reply(chatId: chatId, model: model, messages: messages, run: run, thinking: thinking, maxTokens: maxTokens);
+  }
+}
+
+/// An engine whose every reply carries counters of its own, higher with each turn of the conversation.
+class _CountersBackend extends _Backend {
+  @override
+  Stream<ReplyEvent> reply({
+    required String chatId,
+    required ModelFile model,
+    required List<ChatMessage> messages,
+    required EngineRun run,
+    bool thinking = false,
+    int? maxTokens,
+  }) async* {
+    final turn = (messages.length + 1) ~/ 2;
+    yield const ReplyText('one');
+    yield ReplyDone(
+      {
+        'prompt_n': 100,
+        'prompt_ms': 50,
+        'predicted_n': 2,
+        'predicted_ms': 40,
+        'moe_stream': {
+          'reply': {'stall_ms_per_token': 1.5 * turn, 'hit_rate_percent': 90.0 + turn},
+        },
+      },
+      wordMillis: const [30, 10],
+      finishReason: 'stop',
+    );
+  }
+}
+
 void main() {
   group('context options', () {
     const m = 1000000;
@@ -189,9 +252,113 @@ void main() {
     expect(promptFits(16000, 1024, 16384), isFalse);
   });
 
-  test('a setup from an older version still opens: an unknown prompt is the story', () {
-    final setup = BenchmarkSetup.fromJson({'promptId': '8k', 'replyLength': 5});
-    expect((setup.promptId, setup.replyLength, setup.contextLength), ('story', 5, defaultContextLength));
+  test('a prompt test fits a context when its text, the warm-ups and its reply stay inside the engine\'s room', () {
+    bool fits(BenchmarkTest t, int context) => t.fits(context);
+    final [p8, p25, p50, p100] = BenchmarkTest.prompts;
+    expect([for (final n in [4096, 8192, 16384, 32768, 65536, 131072, 262144]) fits(p8, n)], [false, false, true, true, true, true, true]);
+    expect([for (final n in [4096, 8192, 16384, 32768, 65536, 131072, 262144]) fits(p25, n)], [false, false, false, true, true, true, true]);
+    expect([for (final n in [4096, 8192, 16384, 32768, 65536, 131072, 262144]) fits(p50, n)], [false, false, false, false, true, true, true]);
+    expect([for (final n in [4096, 8192, 16384, 32768, 65536, 131072, 262144]) fits(p100, n)], [false, false, false, false, false, true, true]);
+    expect(BenchmarkTest.replySpeed.fits(4096), isTrue, reason: 'a short message and a reply: fits every length');
+  });
+
+  group('the tests', () {
+    test('five tests, named as the setup names them, each with its own reply cap', () {
+      expect(BenchmarkTest.all.map((t) => t.label), ['Reply speed', 'Prompt 8k', 'Prompt 25k', 'Prompt 50k', 'Prompt 100k']);
+      expect(BenchmarkTest.all.map((t) => t.promptTokens), [null, 8000, 25000, 50000, 100000]);
+      expect(BenchmarkTest.all.map((t) => t.replyCap), [2000, 200, 200, 200, 200]);
+      expect(BenchmarkTest.replySpeed.description, 'Two warm-up messages, then a long story.');
+      expect(BenchmarkTest.prompts[1].description, 'Two warm-up messages, then a story of 25k tokens and a short review.');
+    });
+
+    test('every prompt test has a story of its own in the app, longer than three characters for each of its tokens', () {
+      final listed = File('pubspec.yaml').readAsStringSync();
+      expect(listed, contains('- assets/benchmark/stories/'));
+      expect(BenchmarkTest.replySpeed.story, isNull);
+      expect({for (final t in BenchmarkTest.prompts) t.story}, hasLength(BenchmarkTest.prompts.length));
+      for (final t in BenchmarkTest.prompts) {
+        expect(t.story, startsWith('assets/benchmark/stories/'));
+        expect(File(t.story!).lengthSync(), greaterThan(t.promptTokens! * 3), reason: t.label);
+      }
+    });
+
+    test('the warm-ups and the messages are fixed, word for word', () {
+      expect(warmupMessages, [
+        'Hello bro, how are you? what are you doing? tell me in 5 sentences.',
+        'Tell me about yourself. In 5 sentences.',
+      ]);
+      expect(replySpeedRequest, 'write a long random story of 1500 words.');
+      expect(
+        promptReviewRequest,
+        'Write a short review of the story above. If the story feels cut off in the middle, just write the review based on '
+        'what is covered so far.',
+      );
+      expect(const BenchmarkSetup().warmups, warmupMessages);
+    });
+
+    test('the context dropdown lists the preset\'s lengths, and 100k and 200k greyed in their place', () {
+      const presets = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+      expect([for (final c in contextChoices(presets)) (contextLabel(c.length), c.available)], [
+        ('4k', true),
+        ('8k', true),
+        ('16k', true),
+        ('32k', true),
+        ('65k', true),
+        ('100k', false),
+        ('131k', true),
+        ('200k', false),
+        ('262k', true),
+      ]);
+      // A length the preset does have is not greyed.
+      expect(contextChoices([4096, 100000]).map((c) => (c.length, c.available)), [(4096, true), (100000, true), (200000, false)]);
+    });
+
+    test('a saved context length is kept when the preset has it, else the default one', () {
+      const presets = [4096, 8192, 65536, 131072];
+      expect(contextChoice(presets, 8192), 8192);
+      expect(contextChoice(presets, 100000), 65536, reason: 'no preset for it');
+      expect(contextChoice(presets, 12345), 65536);
+      expect(contextChoice(const [4096, 8192], 65536), 8192, reason: 'the closest the preset has below the default');
+    });
+  });
+
+  group('an older saved setup', () {
+    /// What the version before wrote: a profile, a prompt, the text and reply length, the warm-ups and Test mode's flags.
+    const before = <String, Object?>{
+      'profileId': 'test',
+      'contextLength': 32768,
+      'promptId': '16k',
+      'customText': 'my own text',
+      'replyLength': 512,
+      'warmups': ['one', 'two', 'three'],
+      'testFlags': '-c 4096 --something 1',
+      'testMemoryCapGiB': 12.5,
+    };
+
+    test('opens with the defaults, keeping the context length', () {
+      final setup = BenchmarkSetup.fromJson(before);
+      expect((setup.contextLength, setup.kvCache, setup.test), (32768, KvCache.q8, BenchmarkTest.replySpeed));
+      expect(setup.warmups, warmupMessages, reason: 'the warm-ups are the test\'s, not the saved ones');
+      expect(setup.replyLength, 2000);
+    });
+
+    test('a setup with nothing, or with the wrong kinds of values, is the default one', () {
+      for (final json in <Map<String, Object?>>[
+        const {},
+        const {'contextLength': 'big', 'kvCache': 7, 'test': null},
+        const {'contextLength': null, 'kvCache': 'q5_9', 'test': 'prompt-1m'},
+      ]) {
+        final setup = BenchmarkSetup.fromJson(json);
+        expect((setup.contextLength, setup.kvCache, setup.test), (defaultContextLength, KvCache.q8, BenchmarkTest.replySpeed), reason: '$json');
+      }
+    });
+
+    test('what it writes now reads back', () {
+      final setup = BenchmarkSetup(contextLength: 8192, kvCache: KvCache.fp16, test: BenchmarkTest.prompts.last);
+      expect(setup.toJson(), {'contextLength': 8192, 'kvCache': 'fp16', 'test': 'prompt-100k'});
+      final again = BenchmarkSetup.fromJson(setup.toJson());
+      expect((again.contextLength, again.kvCache, again.test), (8192, KvCache.fp16, BenchmarkTest.prompts.last));
+    });
   });
 
   group('a run', () {
@@ -200,8 +367,9 @@ void main() {
     late _Backend backend;
     late ProviderContainer container;
 
-    Future<void> open(_Backend b) async {
+    Future<void> open(_Backend b, {Map<String, Object?>? saved}) async {
       dir = Directory.systemTemp.createTempSync('runmyai-bench-');
+      if (saved != null) Storage(dir).writeBenchmarkSetup(saved);
       store = await ChatStore.open(dir);
       backend = b;
       container = ProviderContainer(
@@ -212,8 +380,8 @@ void main() {
           hardwareMonitorProvider.overrideWithValue(_Monitor.new),
           runVersionsProvider.overrideWithValue(() async => (engine: '1.2.3', app: '0.1.0')),
           promptCorpusProvider.overrideWith(
-            (ref) => PromptCorpus([
-              for (var s = 0; s < 4; s++) [for (var p = 0; p < 400; p++) 'Source $s passage $p ${'word ' * 40}'].join('\n\n'),
+            (ref, asset) => PromptCorpus([
+              [for (var p = 0; p < 3200; p++) 'Story $asset passage $p ${'word ' * 40}'].join('\n\n'),
             ]),
           ),
         ],
@@ -231,33 +399,31 @@ void main() {
     test('fresh engine, warm-ups not counted, one conversation; the engine stops afterwards; kept in the history', () async {
       await open(_Backend());
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(warmups: ['w1', 'w2'], replyLength: 77));
       await notifier.start(_file, 'M', 4096);
-      expect(backend.calls, ['stop', 'start:-c 4096 --auto', 'reply:w1:77', 'reply:w2:77', 'reply:Wr:77', 'erase', 'stop']);
+      expect(backend.calls, ['stop', 'start:-c 4096 --auto', 'reply:He:2000', 'reply:Te:2000', 'reply:wr:2000', 'erase', 'stop']);
       expect(backend.prompts, [1, 3, 5], reason: 'one conversation');
       expect(backend.runs.every((r) => !r.keepState && r.reportProgress), isTrue, reason: 'nothing is saved for a run');
       final state = container.read(benchmarkProvider);
       final result = state.result!;
       expect(state.running, isFalse);
-      expect((result.replyTokens, result.promptTokens, result.wordGaps.length), (2, 100, 1));
+      expect((result.replyTokens, result.promptTokens, result.tokenGaps.length), (2, 100, 1));
       expect(result.log, hasLength(2));
       expect(await store.benchmarks(), hasLength(1));
       expect(result.id, isNotNull);
       expect(state.history.single.id, result.id);
     });
 
-    test('it keeps the engine\'s word times, how the reply ended, the phases, the machine and the record', () async {
+    test('it keeps the engine\'s token times, how the reply ended, the phases, the machine and the record', () async {
       await open(_Backend());
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(warmups: ['w1'], replyLength: 77));
       await notifier.start(_file, 'M', 4096, thinking: ModelThinking.optional);
       final r = container.read(benchmarkProvider).result!;
-      expect(r.wordMillis, [30, 10]);
-      expect(r.slowestWord, 30);
+      expect(r.tokenMillis, [30, 10]);
+      expect(r.slowestToken, 30);
       expect((r.stopReason, r.replyText), ('stop', 'one two'));
       expect(r.thinking, isNotNull);
-      // 40 ms of the reply and 50 ms of the prompt, and the first word is the prompt and the first word's own time.
-      expect(r.firstWordMillis, 80);
+      // 40 ms of the reply and 50 ms of the prompt, and the first token is the prompt plus the first token's own time.
+      expect(r.firstTokenMillis, 80);
       final phases = r.series!.phases.map((p) => p.name).toList();
       expect(phases, [PhaseBand.load, PhaseBand.warmUp, PhaseBand.prompt, PhaseBand.reply]);
       expect(r.series!.length, greaterThan(2), reason: 'the machine was read during the run');
@@ -269,17 +435,17 @@ void main() {
       expect(r.memory.ramSlots, 191);
       expect(r.memory.vramExpertsPerLayer, 62);
       expect(r.memory.freeRamGiB, 12);
-      expect(r.promptText, startsWith('Write me'));
+      expect(r.promptText, 'write a long random story of 1500 words.');
+      expect((r.promptLabel, r.replyLength, r.warmups), ('Reply speed', 2000, warmupMessages));
       // It comes back whole from the database.
       final again = (await store.benchmarks()).single;
-      expect(again.$2, contains('"wordMillis"'));
+      expect(again.$2, contains('"tokenMillis"'));
     });
 
-    test('the engine\'s counters, once a second, give the parts of a word and each layer; the timing flag is added', () async {
+    test('the engine\'s counters, once a second, give the parts of a token and each layer; the timing flag is added', () async {
       final insight = _InsightBackend();
       await open(insight);
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(warmups: [], replyLength: 9));
       await notifier.start(_file, 'M', 4096);
       final r = container.read(benchmarkProvider).result!;
       expect(insight.calls[1], 'start:-c 4096 --auto --moe-stream-timing 1');
@@ -287,62 +453,128 @@ void main() {
       expect(r.environment.addedFlags, ['--moe-stream-timing 1']);
       expect(r.environment.modelFileBytes, 1234567);
       expect(r.timeParts.keys, containsAll(['SSD wait', 'CPU', 'GPU']));
-      expect(r.timeParts['CPU'], closeTo(10, 0.001), reason: '100 ms for 10 words');
+      expect(r.timeParts['CPU'], closeTo(10, 0.001), reason: '100 ms for 10 tokens');
       expect(r.layers, hasLength(2));
       expect(container.read(benchmarkProvider).counters, EngineCounters.available);
     });
 
-    test('the timing flag is left out when the engine does not know it, or the user set it', () async {
+    test('the timing flag is left out when the engine does not know it, or the preset sets it', () async {
       final insight = _InsightBackend()..accepts = false;
       await open(insight);
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(warmups: []));
       await notifier.start(_file, 'M', 4096);
       expect(insight.calls[1], 'start:-c 4096 --auto');
       expect(container.read(benchmarkProvider).result!.environment.addedFlags, isEmpty);
 
-      insight.accepts = true;
-      notifier.setSetup(const BenchmarkSetup(profileId: 'test', testFlags: '-c 4096 --moe-stream-timing 0', warmups: []));
-      await notifier.start(_file, 'M', 4096);
-      expect(insight.calls.where((c) => c.startsWith('start:')).last, 'start:-c 4096 --moe-stream-timing 0');
+      final preset = _TimedPresetBackend();
+      container.dispose();
+      await store.close();
+      dir.deleteSync(recursive: true);
+      await open(preset);
+      await container.read(benchmarkProvider.notifier).start(_file, 'M', 4096);
+      expect(preset.calls[1], allOf(startsWith('start:-c 4096 --auto --moe-stream-timing 0'), isNot(contains('timing 1'))));
+      expect(container.read(benchmarkProvider).result!.environment.addedFlags, isEmpty);
     });
 
-    test('a long prompt is cut to its size by the engine\'s own count', () async {
+    test('a prompt test sends its own story and then its request, cut to its size by the engine\'s own count', () async {
       await open(_InsightBackend());
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(warmups: [], promptId: '1k', replyLength: 9));
+      notifier.setSetup(BenchmarkSetup(test: BenchmarkTest.prompts.first));
       await notifier.start(_file, 'M', 65536);
       final r = container.read(benchmarkProvider).result!;
-      expect(r.promptLabel, '1k');
+      expect((r.promptLabel, r.replyLength), ('Prompt 8k', 200));
+      final message = backend.texts.last;
       // (The stand-in counts a token for four characters.)
-      expect((r.promptText.length / 4 - 1000).abs(), lessThan(40));
-      expect(r.promptText, startsWith('Below is a collection'));
+      expect((message.length / 4 - 8000).abs(), lessThan(8000 * 0.002 + 2));
+      expect(message, startsWith('Story ${BenchmarkTest.prompts.first.story} passage 0'));
+      expect(message, endsWith('\n\n$promptReviewRequest'));
+      expect(message, isNot(contains('Below is a collection')), reason: 'no introduction before the text');
+      expect(backend.caps, [200, 200, 200]);
     });
 
-    test('Test mode runs its own flags; a bad command cannot start', () async {
-      await open(_Backend());
-      final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(profileId: 'test', testFlags: '-m x', warmups: []));
-      expect(notifier.problem(_file), contains('the app sets it'));
-      notifier.setSetup(const BenchmarkSetup(profileId: 'test', testFlags: '-c 8192 --mine', warmups: []));
-      expect(notifier.problem(_file), isNull);
-      await notifier.start(_file, 'M', 4096);
-      expect(backend.calls[1], 'start:-c 8192 --mine');
-      expect(container.read(benchmarkProvider).result!.profileName, 'Test');
+    test('every test sends the two warm-ups word for word, then its own message, in one conversation', () async {
+      for (final test in BenchmarkTest.all) {
+        if (test != BenchmarkTest.replySpeed) {
+          // (The last one is closed by the test's own tear-down.)
+          container.dispose();
+          await store.close();
+          dir.deleteSync(recursive: true);
+        }
+        await open(_InsightBackend());
+        final notifier = container.read(benchmarkProvider.notifier);
+        notifier.setSetup(BenchmarkSetup(test: test));
+        await notifier.start(_file, 'M', 262144);
+        expect(backend.texts.take(2), [
+          'Hello bro, how are you? what are you doing? tell me in 5 sentences.',
+          'Tell me about yourself. In 5 sentences.',
+        ], reason: test.label);
+        expect(backend.prompts, [1, 3, 5], reason: test.label);
+        expect(backend.caps, List.filled(3, test.replyCap), reason: test.label);
+        if (test.promptTokens == null) {
+          expect(backend.texts.last, 'write a long random story of 1500 words.');
+        } else {
+          expect(backend.texts.last, endsWith(promptReviewRequest), reason: test.label);
+          expect((backend.texts.last.length / 4 - test.promptTokens!).abs(), lessThan(test.promptTokens! * 0.02 + 2), reason: test.label);
+        }
+        // It records what it always recorded.
+        final r = container.read(benchmarkProvider).result!;
+        expect((r.promptLabel, r.firstTokenMillis, r.promptTokens, r.replyTokens), (test.label, 80, 100, 2), reason: test.label);
+        expect((r.memory.ramSlots, r.turns.length), (191, 3), reason: test.label);
+        expect(r.series, isNotNull, reason: test.label);
+        expect(r.timeParts, isNotEmpty, reason: test.label);
+      }
     });
 
-    test('a prompt that does not fit the context cannot start', () async {
+    test('a run always uses the model\'s automatic preset at the chosen length, whatever the KV cache choice', () async {
       await open(_Backend());
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(promptId: '32k'));
-      expect(notifier.problem(_file, contextLength: 32768), contains('does not fit'));
-      expect(notifier.problem(_file, contextLength: 65536), isNull);
+      await notifier.start(_file, 'M', 65536);
+      final first = backend.calls[1];
+      expect(first, 'start:-c 65536 --auto');
+      final r = container.read(benchmarkProvider).result!;
+      expect((r.profileName, r.environment.profileId, r.contextLength), ('Auto', 'auto', 65536));
+      // The KV cache choice is a placeholder: it is kept, and changes nothing in the run.
+      for (final kv in KvCache.all) {
+        notifier.setSetup(BenchmarkSetup(kvCache: kv));
+        await notifier.start(_file, 'M', 65536);
+        expect(backend.calls.where((c) => c.startsWith('start:')).last, first, reason: kv.id);
+      }
+      expect(container.read(benchmarkProvider).setup.kvCache, KvCache.fp16);
+    });
+
+    test('a prompt test that does not fit the context cannot start; the reply-speed test always can', () async {
+      await open(_Backend());
+      final notifier = container.read(benchmarkProvider.notifier);
+      notifier.setSetup(const BenchmarkSetup(test: BenchmarkTest.replySpeed));
+      expect(notifier.problem(contextLength: 4096), isNull);
+      notifier.setSetup(BenchmarkSetup(test: BenchmarkTest.prompts[2]));
+      expect(notifier.problem(contextLength: 32768), 'Prompt 50k needs a longer context length.');
+      expect(notifier.problem(contextLength: 65536), isNull);
+    });
+
+    test('a setup saved by the version before opens with the defaults and runs', () async {
+      await open(_Backend(), saved: const {
+        'profileId': 'test',
+        'contextLength': 32768,
+        'promptId': '16k',
+        'customText': 'my own text',
+        'replyLength': 512,
+        'warmups': ['one', 'two', 'three'],
+        'testFlags': '-c 4096 --something 1',
+        'testMemoryCapGiB': 12.5,
+      });
+      final notifier = container.read(benchmarkProvider.notifier);
+      final setup = container.read(benchmarkProvider).setup;
+      expect((setup.contextLength, setup.kvCache, setup.test), (32768, KvCache.q8, BenchmarkTest.replySpeed));
+      await notifier.start(_file, 'M', setup.contextLength);
+      // (The stand-in's presets are 4k and 64k: the run uses what it is given.)
+      expect(backend.texts, [...warmupMessages, replySpeedRequest]);
+      expect(await store.benchmarks(), hasLength(1));
     });
 
     test('Stop keeps nothing', () async {
       await open(_Backend());
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(warmups: ['w1', 'w2']));
       backend.hold = true;
       final run = notifier.start(_file, 'M', 4096);
       while (container.read(benchmarkProvider).phase != BenchmarkPhase.warmingUp) {
@@ -357,10 +589,134 @@ void main() {
       expect(await store.benchmarks(), isEmpty);
     });
 
+    test('every message is a turn with its own numbers: the warm-ups marked, the measured one last, kept with the result', () async {
+      await open(_Backend());
+      final lengths = <int>[];
+      container.listen(benchmarkProvider, (_, state) {
+        if (state.turns.isNotEmpty && (lengths.isEmpty || lengths.last != state.turns.length)) lengths.add(state.turns.length);
+      });
+      final notifier = container.read(benchmarkProvider.notifier);
+      await notifier.start(_file, 'M', 4096);
+      final state = container.read(benchmarkProvider);
+      expect(state.turns, hasLength(3));
+      expect(state.turns.map((t) => t.warmup), [true, true, false]);
+      expect(lengths, [1, 2, 3], reason: 'a turn is added as it ends');
+      for (final turn in state.turns) {
+        expect((turn.promptTokens, turn.promptMillis, turn.replyTokens, turn.replyMillis), (100, 50.0, 2, 40.0));
+        expect((turn.firstTokenMillis, turn.stopReason, turn.tokenGaps.length), (80, 'stop', 1));
+        expect(turn.tokenMillis, [30.0, 10.0]);
+      }
+      // The headline of the result is its last turn, and the turns are in what the history keeps.
+      final result = state.result!;
+      expect(result.turns, hasLength(3));
+      expect(result.turns.map((t) => t.warmup), [true, true, false]);
+      expect((result.firstTokenMillis, result.replyTokens), (state.turns.last.firstTokenMillis, state.turns.last.replyTokens));
+      final saved = BenchmarkResult.fromJson((jsonDecode((await store.benchmarks()).single.$2) as Map).cast<String, Object?>());
+      expect(saved.turns.map((t) => t.warmup), [true, true, false]);
+      expect(saved.turns.last.tokenMillis, [30.0, 10.0]);
+    });
+
+    test('every turn is placed on the run\'s time axis: from its message to its reply, one after the other, kept with the result', () async {
+      await open(_Backend());
+      // What the state said of the turn going on, each time it changed.
+      final seen = <double>{};
+      container.listen(benchmarkProvider, (_, state) {
+        final start = state.turnStartSeconds;
+        if (start != null) seen.add(start);
+      });
+      final notifier = container.read(benchmarkProvider.notifier);
+      await notifier.start(_file, 'M', 4096);
+      final state = container.read(benchmarkProvider);
+      final turns = state.turns;
+      expect(turns, hasLength(3));
+      for (final t in turns) {
+        expect(t.startSeconds, isNotNull);
+        expect(t.endSeconds, isNotNull);
+        expect(t.startSeconds!, greaterThanOrEqualTo(0));
+        expect(t.endSeconds!, greaterThan(t.startSeconds!), reason: 'a reply takes time');
+        expect((t.endSeconds! - t.startSeconds!) * 1000, greaterThanOrEqualTo(t.totalMillis - 25), reason: 'the same stretch the turn timed itself');
+      }
+      for (var i = 1; i < turns.length; i++) {
+        expect(turns[i].startSeconds!, greaterThanOrEqualTo(turns[i - 1].endSeconds!), reason: 'turn ${i + 1} starts after turn $i ended');
+      }
+      // The state announced each turn's start while it was going on, and none is left once the run is over.
+      expect(seen, {for (final t in turns) t.startSeconds!});
+      expect(state.turnStartSeconds, isNull);
+      // The measured turn lies inside the series' phases: after the warm-ups began, from where its prompt began.
+      final phases = state.live!.phases;
+      expect(turns.first.startSeconds!, greaterThanOrEqualTo(phases.firstWhere((p) => p.name == PhaseBand.warmUp).start));
+      expect(turns.last.startSeconds!, greaterThanOrEqualTo(phases.firstWhere((p) => p.name == PhaseBand.prompt).start));
+      // The times are in the history too, to a millisecond.
+      final saved = BenchmarkResult.fromJson((jsonDecode((await store.benchmarks()).single.$2) as Map).cast<String, Object?>());
+      for (var i = 0; i < turns.length; i++) {
+        expect(saved.turns[i].startSeconds, closeTo(turns[i].startSeconds!, 0.0006));
+        expect(saved.turns[i].endSeconds, closeTo(turns[i].endSeconds!, 0.0006));
+      }
+    });
+
+    test('the start of the turn going on is known while it goes on, and is gone when the run stops', () async {
+      final held = _HoldAtBackend(2);
+      await open(held);
+      final notifier = container.read(benchmarkProvider.notifier);
+      final run = notifier.start(_file, 'M', 4096);
+      expect(container.read(benchmarkProvider).turnStartSeconds, isNull, reason: 'the engine is loading, no turn has begun');
+      // The second warm-up is the one that never ends.
+      while (container.read(benchmarkProvider).warmup != 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final going = container.read(benchmarkProvider);
+      expect(going.turns, hasLength(1));
+      expect(going.turnStartSeconds, isNotNull);
+      expect(going.turnStartSeconds!, greaterThanOrEqualTo(going.turns.first.endSeconds!), reason: 'the second turn began after the first ended');
+      notifier.stop();
+      await run;
+      expect(container.read(benchmarkProvider).turnStartSeconds, isNull);
+    });
+
+    test('each turn keeps the counters of its own reply, and the result\'s are those of the measured turn', () async {
+      await open(_CountersBackend());
+      final notifier = container.read(benchmarkProvider.notifier);
+      await notifier.start(_file, 'M', 4096);
+      final result = container.read(benchmarkProvider).result!;
+      expect(result.turns.map((t) => t.ssdWaitPerToken), [1.5, 3.0, 4.5]);
+      expect(result.turns.map((t) => t.hitRate), [91.0, 92.0, 93.0]);
+      expect((result.ssdWaitPerToken, result.hitRate), (4.5, 93.0));
+    });
+
+    test('a new run starts its turns afresh: warm-ups first, the measured turn last', () async {
+      await open(_Backend());
+      final notifier = container.read(benchmarkProvider.notifier);
+      await notifier.start(_file, 'M', 4096);
+      expect(container.read(benchmarkProvider).turns, hasLength(3));
+      await notifier.start(_file, 'M', 4096);
+      final state = container.read(benchmarkProvider);
+      expect(state.turns.map((t) => t.warmup), [true, true, false]);
+      expect(state.result!.turns, hasLength(3));
+    });
+
+    test('Stop during a warm-up keeps no measured turn and no result', () async {
+      final held = _HoldAtBackend(2);
+      await open(held);
+      final notifier = container.read(benchmarkProvider.notifier);
+      final run = notifier.start(_file, 'M', 4096);
+      // The second warm-up is the one that never ends.
+      while (container.read(benchmarkProvider).warmup != 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      notifier.stop();
+      await run;
+      final state = container.read(benchmarkProvider);
+      expect((state.running, state.result), (false, null));
+      expect(state.turns.map((t) => t.warmup), [true], reason: 'the first warm-up ended; the stopped one is not a turn');
+      expect(held.prompts, [1, 3], reason: 'the measured message was never sent');
+      expect(await store.benchmarks(), isEmpty);
+    });
+
     test('a run can be deleted from the history, and the history stays bounded in the store', () async {
       await open(_Backend());
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(warmups: []));
       await notifier.start(_file, 'M', 4096);
       await notifier.start(_file, 'M', 4096);
       expect(container.read(benchmarkProvider).history, hasLength(2));
@@ -388,9 +744,9 @@ void main() {
 
     test('the setup is remembered', () async {
       await open(_Backend());
-      container.read(benchmarkProvider.notifier).setSetup(const BenchmarkSetup(testFlags: '-c 1', replyLength: 5, contextLength: 8192));
+      container.read(benchmarkProvider.notifier).setSetup(BenchmarkSetup(contextLength: 8192, kvCache: KvCache.q4, test: BenchmarkTest.prompts.last));
       final again = BenchmarkSetup.fromJson(Storage(dir).readBenchmarkSetup()!);
-      expect((again.testFlags, again.replyLength, again.contextLength), ('-c 1', 5, 8192));
+      expect((again.contextLength, again.kvCache, again.test), (8192, KvCache.q4, BenchmarkTest.prompts.last));
     });
   });
 }

@@ -26,10 +26,57 @@ double niceStep(double domain) {
   return steps.last;
 }
 
+/// The stretch of the time axis the graphs draw, from [from] to [to] seconds on the run's clock: the whole run, or
+/// one window of it stretched over the full width. All the maths between a moment and a place on the axis is here.
+class AxisSpan {
+  const AxisSpan(this.from, this.to, {this.windowed = false});
+
+  /// The span for a run [runEnd] seconds long, or for [window] (from, to) when one is given. A span is at least a
+  /// second wide, so a run or a turn that has only just begun still has an axis.
+  factory AxisSpan.of(double runEnd, (double, double)? window) {
+    if (window == null) return AxisSpan(0, math.max(runEnd, 1));
+    return AxisSpan(window.$1, math.max(window.$2, window.$1 + 1), windowed: true);
+  }
+
+  final double from;
+  final double to;
+
+  /// Whether this is a window of the run rather than all of it; only a window clips what it draws.
+  final bool windowed;
+
+  double get length => to - from;
+
+  /// Where [seconds] falls on an axis [width] pixels wide.
+  double x(double seconds, double width) => (seconds - from) / length * width;
+
+  /// The moment [dx] pixels from the left of an axis [width] pixels wide (a place outside it counts as its edge).
+  double timeAt(double dx, double width) => from + (dx / width).clamp(0.0, 1.0) * length;
+
+  bool contains(double seconds) => seconds >= from && seconds <= to;
+
+  /// The part of a phase from [start] to [end] that is on this axis, as (start, end); null when none of it is. A
+  /// phase that is [open] (still going on, so it has no end yet) reaches the end of the span. The whole run draws
+  /// every phase as it is.
+  (double, double)? band(double start, double end, {bool open = false}) {
+    if (!windowed) return (start, end);
+    final last = open ? math.max(end, to) : end;
+    if (last <= from || start >= to) return null;
+    return (math.max(start, from), math.min(last, to));
+  }
+
+  @override
+  bool operator ==(Object other) => other is AxisSpan && other.from == from && other.to == to && other.windowed == windowed;
+
+  @override
+  int get hashCode => Object.hash(from, to, windowed);
+}
+
 /// The graphs of a run on one time axis, in rows: speed, each graphics card, CPU, RAM, SSD and the engine's numbers.
 /// The phases of the run (load, warm-up, prompt, reply) are shaded behind every row. Hovering a graph puts a cursor on
 /// that moment in all of them and the rows say what each value was then; a click on a line (or on a row) opens the row's
-/// detail, with every value against its limit. [cursor] is a moment pinned from outside (a word picked in the result).
+/// detail, with every value against its limit. [cursor] is a moment pinned from outside (a token picked in the result).
+/// A [window] (from, to seconds on the run's clock) shows only that stretch, for one turn of the run, stretched over the
+/// full width, with the axis counting from its start; without one the graphs show the whole run.
 class LiveGraphs extends StatefulWidget {
   const LiveGraphs({
     super.key,
@@ -39,6 +86,7 @@ class LiveGraphs extends StatefulWidget {
     this.counters = EngineCounters.available,
     this.running = false,
     this.gpuNames = const [],
+    this.window,
   });
 
   final RunSeries series;
@@ -49,6 +97,7 @@ class LiveGraphs extends StatefulWidget {
   final EngineCounters counters;
   final bool running;
   final List<String> gpuNames;
+  final (double, double)? window;
 
   @override
   State<LiveGraphs> createState() => _LiveGraphsState();
@@ -84,18 +133,30 @@ class _LiveGraphsState extends State<LiveGraphs> {
 
   void _changed() => setState(() {});
 
-  double get _domain => math.max(widget.series.end, 1);
+  /// The moment to mark: the hovered one, else the one pinned from outside. In a window, a moment outside it is none.
+  double? _moment(AxisSpan span) {
+    double? inside(double? t) => t == null || !span.windowed || span.contains(t) ? t : null;
+    return inside(_hover) ?? inside(widget.cursor.value);
+  }
 
   @override
   Widget build(BuildContext context) {
     final series = widget.series;
+    final span = AxisSpan.of(series.end, widget.window);
     final rows = metricRows(series, gpuNames: widget.gpuNames);
-    final time = _hover ?? widget.cursor.value;
-    final index = series.isEmpty ? -1 : (time == null ? series.length - 1 : series.indexAt(time));
+    final time = _moment(span);
+    // The values the rows say when nothing is hovered or pinned: the latest, or the end of the window.
+    final index = series.isEmpty
+        ? -1
+        : time != null
+        ? series.indexAt(time)
+        : span.windowed
+        ? series.indexAt(span.to)
+        : series.length - 1;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (final row in rows) _row(context, row, index, time),
+        for (final row in rows) _row(context, row, index, time, span),
         const SizedBox(height: 2),
         LayoutBuilder(
           builder: (context, box) => SizedBox(
@@ -104,7 +165,8 @@ class _LiveGraphsState extends State<LiveGraphs> {
             child: CustomPaint(
               painter: _AxisPainter(
                 series: series,
-                domain: _domain,
+                span: span,
+                running: widget.running,
                 cursor: time,
                 text: context.colors.text,
                 muted: context.colors.textMuted,
@@ -118,7 +180,7 @@ class _LiveGraphsState extends State<LiveGraphs> {
     );
   }
 
-  Widget _row(BuildContext context, MetricRow row, int index, double? time) {
+  Widget _row(BuildContext context, MetricRow row, int index, double? time, AxisSpan span) {
     final c = context.colors;
     final series = widget.series;
     final open = _open.contains(row.id);
@@ -193,7 +255,7 @@ class _LiveGraphsState extends State<LiveGraphs> {
           const SizedBox(height: 4),
           LayoutBuilder(
             builder: (context, box) {
-              double timeAt(Offset p) => (p.dx / box.maxWidth).clamp(0.0, 1.0) * _domain;
+              double timeAt(Offset p) => span.timeAt(p.dx, box.maxWidth);
               return MouseRegion(
                 cursor: SystemMouseCursors.precise,
                 onHover: (e) => setState(() => _hover = series.isEmpty ? null : timeAt(e.localPosition)),
@@ -219,7 +281,8 @@ class _LiveGraphsState extends State<LiveGraphs> {
                         series: series,
                         row: row,
                         shown: visible.length,
-                        domain: _domain,
+                        span: span,
+                        running: widget.running,
                         cursor: time,
                         focus: focus,
                         colors: [for (var i = 0; i < row.lines.length; i++) ChartColors.of(context, i)],
@@ -234,7 +297,7 @@ class _LiveGraphsState extends State<LiveGraphs> {
               );
             },
           ),
-          if (open && has) _detail(context, row, index, focus),
+          if (open && has) _detail(context, row, index, focus, span, time),
         ],
       ),
     );
@@ -261,7 +324,7 @@ class _LiveGraphsState extends State<LiveGraphs> {
     return best;
   }
 
-  Widget _detail(BuildContext context, MetricRow row, int index, String? focus) {
+  Widget _detail(BuildContext context, MetricRow row, int index, String? focus, AxisSpan span, double? time) {
     final series = widget.series;
     final lines = [for (final l in row.lines) if (series.series(l.id)?.any((v) => v != null) ?? false) l];
     final focused = lines.where((l) => l.id == focus).firstOrNull;
@@ -292,8 +355,9 @@ class _LiveGraphsState extends State<LiveGraphs> {
               line: focused,
               color: ChartColors.of(context, row.lines.indexOf(focused)),
               series: series,
-              domain: _domain,
-              cursor: _hover ?? widget.cursor.value,
+              span: span,
+              running: widget.running,
+              cursor: time,
               revision: widget.revision,
               onHover: (t) => setState(() => _hover = t),
             ),
@@ -316,7 +380,8 @@ class _RowPainter extends CustomPainter {
     required this.series,
     required this.row,
     required this.shown,
-    required this.domain,
+    required this.span,
+    required this.running,
     required this.cursor,
     required this.focus,
     required this.colors,
@@ -331,7 +396,10 @@ class _RowPainter extends CustomPainter {
 
   /// How many of the row's lines are drawn (the first few, until the row is opened).
   final int shown;
-  final double domain;
+  final AxisSpan span;
+
+  /// Whether the run is still going on, so its last phase has no end yet.
+  final bool running;
   final double? cursor;
   final String? focus;
   final List<Color> colors;
@@ -343,11 +411,15 @@ class _RowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
-    double x(double seconds) => seconds / domain * w;
+    double x(double seconds) => span.x(seconds, w);
+    // A window shows nothing from outside it.
+    if (span.windowed) canvas.clipRect(Offset.zero & size);
     // The phases behind the lines.
     for (var k = 0; k < series.phases.length; k++) {
       final p = series.phases[k];
-      final x0 = x(p.start), x1 = math.max(x0 + 1, x(p.end));
+      final band = span.band(p.start, p.end, open: running && k == series.phases.length - 1);
+      if (band == null) continue;
+      final x0 = x(band.$1), x1 = math.max(x0 + 1, x(band.$2));
       canvas.drawRect(Rect.fromLTRB(x0, 0, x1, h), Paint()..color = text.withValues(alpha: k.isEven ? 0.035 : 0.075));
     }
     canvas.drawLine(Offset(0, h - 0.5), Offset(w, h - 0.5), Paint()..color = muted.withValues(alpha: 0.3));
@@ -415,7 +487,7 @@ class _RowPainter extends CustomPainter {
 
     final at = cursor;
     if (at != null && !series.isEmpty) {
-      final cx = x(at.clamp(0, domain));
+      final cx = x(at.clamp(span.from, span.to));
       canvas.drawLine(Offset(cx, 0), Offset(cx, h), Paint()..color = text.withValues(alpha: 0.55));
       final i = series.indexAt(at);
       for (var li = 0; li < shown && li < row.lines.length; li++) {
@@ -432,7 +504,8 @@ class _RowPainter extends CustomPainter {
   bool shouldRepaint(_RowPainter old) =>
       old.revision != revision ||
       old.cursor != cursor ||
-      old.domain != domain ||
+      old.span != span ||
+      old.running != running ||
       old.focus != focus ||
       old.shown != shown ||
       old.text != text ||
@@ -442,7 +515,8 @@ class _RowPainter extends CustomPainter {
 class _AxisPainter extends CustomPainter {
   _AxisPainter({
     required this.series,
-    required this.domain,
+    required this.span,
+    required this.running,
     required this.cursor,
     required this.text,
     required this.muted,
@@ -451,7 +525,8 @@ class _AxisPainter extends CustomPainter {
   });
 
   final RunSeries series;
-  final double domain;
+  final AxisSpan span;
+  final bool running;
   final double? cursor;
   final Color text;
   final Color muted;
@@ -471,29 +546,40 @@ class _AxisPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
-    double x(double seconds) => seconds / domain * w;
+    double x(double seconds) => span.x(seconds, w);
+    if (span.windowed) canvas.clipRect(Offset.zero & size);
     final here = cursor == null ? null : series.phaseAt(cursor!);
-    for (final p in series.phases) {
-      final x0 = x(p.start), x1 = math.max(x0 + 1, x(p.end));
-      canvas.drawLine(Offset(x0, 0), Offset(x0, 14), Paint()..color = rule);
+    for (var k = 0; k < series.phases.length; k++) {
+      final p = series.phases[k];
+      final band = span.band(p.start, p.end, open: running && k == series.phases.length - 1);
+      if (band == null) continue;
+      final x0 = x(band.$1), x1 = math.max(x0 + 1, x(band.$2));
+      // A phase that began before the window has no beginning to mark on it.
+      if (p.start >= span.from) canvas.drawLine(Offset(x0, 0), Offset(x0, 14), Paint()..color = rule);
       _label(canvas, p.name, x0 + 4, 0, identical(p, here) ? text : muted, width: math.max(10, x1 - x0 - 6));
     }
-    final step = niceStep(domain);
-    for (var t = 0.0; t <= domain; t += step) {
-      final tx = x(t);
+    // The marks count from the start of the span: "0 s" is its first moment.
+    final step = niceStep(span.length);
+    for (var t = 0.0; t <= span.length; t += step) {
+      final tx = x(span.from + t);
       canvas.drawLine(Offset(tx, 17), Offset(tx, 22), Paint()..color = rule);
       _label(canvas, formatSeconds(t), tx + (t == 0 ? 0 : -14), 21, muted, width: 50);
     }
     final at = cursor;
     if (at != null) {
-      final cx = x(at.clamp(0, domain));
+      final cx = x(at.clamp(span.from, span.to));
       canvas.drawLine(Offset(cx, 15), Offset(cx, 24), Paint()..color = text);
     }
   }
 
   @override
   bool shouldRepaint(_AxisPainter old) =>
-      old.revision != revision || old.cursor != cursor || old.domain != domain || old.text != text || !identical(old.series, series);
+      old.revision != revision ||
+      old.cursor != cursor ||
+      old.span != span ||
+      old.running != running ||
+      old.text != text ||
+      !identical(old.series, series);
 }
 
 /// One value of a row against its limit: its name and value, and a bar of how full the limit is.
@@ -623,13 +709,14 @@ class _Cores extends StatelessWidget {
   }
 }
 
-/// A line alone, taller, with its limit, and what it was over the whole run: the opened detail of a line.
+/// A line alone, taller, with its limit, and what it was over the span on the axis: the opened detail of a line.
 class _FocusedLine extends StatelessWidget {
   const _FocusedLine({
     required this.line,
     required this.color,
     required this.series,
-    required this.domain,
+    required this.span,
+    required this.running,
     required this.cursor,
     required this.revision,
     required this.onHover,
@@ -638,7 +725,8 @@ class _FocusedLine extends StatelessWidget {
   final MetricLine line;
   final Color color;
   final RunSeries series;
-  final double domain;
+  final AxisSpan span;
+  final bool running;
   final double? cursor;
   final int revision;
   final void Function(double?) onHover;
@@ -646,9 +734,9 @@ class _FocusedLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final low = series.valuesBetween(line.id, 0, double.infinity).fold<double?>(null, (a, b) => a == null || b < a ? b : a);
-    final high = series.peak(line.id);
-    final average = series.average(line.id);
+    final low = series.valuesBetween(line.id, span.from, span.to).fold<double?>(null, (a, b) => a == null || b < a ? b : a);
+    final high = series.peak(line.id, from: span.from, to: span.to);
+    final average = series.average(line.id, from: span.from, to: span.to);
     String f(double? v) => v == null ? '–' : formatNumber(v, line.digits);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -661,7 +749,7 @@ class _FocusedLine extends StatelessWidget {
         LayoutBuilder(
           builder: (context, box) => MouseRegion(
             cursor: SystemMouseCursors.precise,
-            onHover: (e) => onHover((e.localPosition.dx / box.maxWidth).clamp(0.0, 1.0) * domain),
+            onHover: (e) => onHover(span.timeAt(e.localPosition.dx, box.maxWidth)),
             onExit: (_) => onHover(null),
             child: SizedBox(
               height: 96,
@@ -671,7 +759,8 @@ class _FocusedLine extends StatelessWidget {
                   line: line,
                   color: color,
                   series: series,
-                  domain: domain,
+                  span: span,
+                  running: running,
                   cursor: cursor,
                   text: c.text,
                   muted: c.textMuted,
@@ -691,7 +780,8 @@ class _FocusPainter extends CustomPainter {
     required this.line,
     required this.color,
     required this.series,
-    required this.domain,
+    required this.span,
+    required this.running,
     required this.cursor,
     required this.text,
     required this.muted,
@@ -701,7 +791,8 @@ class _FocusPainter extends CustomPainter {
   final MetricLine line;
   final Color color;
   final RunSeries series;
-  final double domain;
+  final AxisSpan span;
+  final bool running;
   final double? cursor;
   final Color text;
   final Color muted;
@@ -710,11 +801,14 @@ class _FocusPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
-    double x(double seconds) => seconds / domain * w;
+    double x(double seconds) => span.x(seconds, w);
+    if (span.windowed) canvas.clipRect(Offset.zero & size);
     for (var k = 0; k < series.phases.length; k++) {
       final p = series.phases[k];
+      final band = span.band(p.start, p.end, open: running && k == series.phases.length - 1);
+      if (band == null) continue;
       canvas.drawRect(
-        Rect.fromLTRB(x(p.start), 0, math.max(x(p.start) + 1, x(p.end)), h),
+        Rect.fromLTRB(x(band.$1), 0, math.max(x(band.$1) + 1, x(band.$2)), h),
         Paint()..color = text.withValues(alpha: k.isEven ? 0.035 : 0.075),
       );
     }
@@ -759,12 +853,17 @@ class _FocusPainter extends CustomPainter {
     );
     final at = cursor;
     if (at != null) {
-      final cx = x(at.clamp(0, domain));
+      final cx = x(at.clamp(span.from, span.to));
       canvas.drawLine(Offset(cx, 0), Offset(cx, h), Paint()..color = text.withValues(alpha: 0.55));
     }
   }
 
   @override
   bool shouldRepaint(_FocusPainter old) =>
-      old.revision != revision || old.cursor != cursor || old.domain != domain || old.line != line || !identical(old.series, series);
+      old.revision != revision ||
+      old.cursor != cursor ||
+      old.span != span ||
+      old.running != running ||
+      old.line != line ||
+      !identical(old.series, series);
 }

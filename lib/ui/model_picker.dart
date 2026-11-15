@@ -12,7 +12,9 @@ import 'menu_panel.dart';
 
 /// The model picker at the top of the chat: only downloaded models.
 class ModelPicker extends ConsumerWidget {
-  const ModelPicker({super.key});
+  const ModelPicker({super.key, this.showContext = true});
+
+  final bool showContext;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -69,6 +71,7 @@ class ModelPicker extends ConsumerWidget {
         ]),
       ),
     );
+    if (!showContext) return modelMenu;
     return Row(mainAxisSize: MainAxisSize.min, children: [modelMenu, const SizedBox(width: 4), const _ContextPicker()]);
   }
 }
