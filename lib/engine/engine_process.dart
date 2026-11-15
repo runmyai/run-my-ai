@@ -33,8 +33,8 @@ class EngineProcess {
     required this.port,
     required this.startedWith,
     this.onOutput,
-    Win32Job? win32Job,
-  }) : _win32Job = win32Job {
+    this._win32Job,
+  }) {
     void read(Stream<List<int>> output) => output
         .transform(const Utf8Decoder(allowMalformed: true))
         .transform(const LineSplitter())
