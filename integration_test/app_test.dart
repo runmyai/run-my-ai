@@ -67,10 +67,31 @@ ProviderContainer container(WidgetTester tester) => ProviderScope.containerOf(te
 
 ChatStore? _store;
 
+/// The folders of finished tests that are still to be deleted. Windows cannot delete a folder while the chats database
+/// in it is open (the store stays open until the next test's app closes it), so there a folder is deleted once the
+/// store has been closed: by the next app(), or at the end of the run. Elsewhere it is deleted at once.
+final _finishedDirs = <Directory>[];
+
+void deleteTestDir(Directory dir) {
+  if (Platform.isWindows) {
+    _finishedDirs.add(dir);
+  } else {
+    dir.deleteSync(recursive: true);
+  }
+}
+
+void _deleteFinishedDirs() {
+  for (final dir in _finishedDirs) {
+    dir.deleteSync(recursive: true);
+  }
+  _finishedDirs.clear();
+}
+
 /// The app on [dir], with its own chats database worker (the one before is closed first, as when the app quits).
 /// The reply-finished sound is counted, not played.
 Future<Widget> app(Directory dir, DummyBackend backend) async {
   await _store?.close();
+  _deleteFinishedDirs();
   _store = await ChatStore.open(dir);
   return appWith(storage: Storage(dir), chatStore: _store!, backend: backend, chime: CountingChime.new);
 }
@@ -104,6 +125,11 @@ void writeOldChat(Directory dir, Chat chat) {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  tearDownAll(() async {
+    await _store?.close();
+    _store = null;
+    _deleteFinishedDirs();
+  });
 
   testWidgets('store, downloads, picker, chat, chat list, stop, saving', (tester) async {
     final dir = Directory.systemTemp.createTempSync('runmyai-test-');
@@ -301,7 +327,7 @@ void main() {
     await wait(tester, 400);
     await shot('10-store-dark');
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('search: results, the line under each title, jumping to matches, closing', (tester) async {
@@ -433,7 +459,7 @@ void main() {
     await wait(tester, 400);
     await shot('17-search-dark');
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('chat menu: rename, pin, drag the pinned, unpin, delete with and without the box', (tester) async {
@@ -647,7 +673,7 @@ void main() {
     expect([for (final c in again.chats) c.title], ['Bravo renamed', 'Delta']);
     expect(again.pinned, ['b']);
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('chat menu keys: R renames, P pins and unpins, D deletes (with its box), as a click would', (tester) async {
@@ -718,7 +744,7 @@ void main() {
     expect(find.text('Rename'), findsNothing);
     expect(find.text('Alpha'), findsOneWidget);
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('chat list headings fold and open; the open chat stays visible; folds are kept by day; a search '
@@ -782,7 +808,7 @@ void main() {
     await wait(tester, 400);
     expect(container(tester).read(foldsProvider)[ChatKind.chat], isEmpty, reason: 'opened for the match');
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('archive: A in the menu; the Archived row and list (last active first); search puts archived last; '
@@ -864,7 +890,7 @@ void main() {
     expect(tester.getTopLeft(find.text('Alpha')).dy, lessThan(tester.getTopLeft(find.text('Bravo')).dy));
     expect(await saved(dir, (db) => db.chats().firstWhere((c) => c.id == 'a').archived), isFalse);
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('Chat and Code: each has its own chats, pins, search and open chat', (tester) async {
@@ -998,7 +1024,7 @@ void main() {
     await wait(tester, 400);
     expect(find.text('Budget'), findsNothing);
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('dragging a chat: it stays under its heading and inside the list, and scrolls a long day', (tester) async {
@@ -1083,7 +1109,7 @@ void main() {
       return order['t40']! > order['t5']!;
     }), isTrue);
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('reply motion: no settings; messages from the top; the page follows only from the bottom; '
@@ -1254,7 +1280,7 @@ void main() {
     await tester.tap(find.byKey(const Key('stop')));
     await wait(tester, 400);
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('long sent messages: folded to 8 lines with an arrow; opened; folding keeps the arrow in place; a '
@@ -1349,7 +1375,7 @@ void main() {
     expect(wordAt, inInclusiveRange(area.top, area.bottom - 24), reason: 'the match is on screen');
     await shot('32-folded-search-light');
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('keyboard shortcuts: Ctrl+N, Alt+↑/↓ (pinned twice, folded skipped, the ends), typing anywhere, Ctrl+K, '
@@ -1549,7 +1575,7 @@ void main() {
     await press(LogicalKeyboardKey.escape);
     expect(find.byKey(const Key('shortcuts-sheet')), findsNothing);
 
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 
   testWidgets('message buttons (copy, bookmark), bookmarks (marks, the dashes and their card, Alt+Shift+↑/↓), drafts '
@@ -1724,7 +1750,7 @@ void main() {
     await settle();
 
     await mouse.removePointer();
-    dir.deleteSync(recursive: true);
+    deleteTestDir(dir);
   });
 }
 

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'win32_job.dart';
+
 /// The engine could not start or stopped answering. [log]: its last lines of output.
 class EngineFailure implements Exception {
   const EngineFailure(this.message, {this.log = const []});
@@ -31,6 +33,7 @@ class EngineProcess {
     required this.port,
     required this.startedWith,
     this.onOutput,
+    this._win32Job,
   }) {
     void read(Stream<List<int>> output) => output
         .transform(const Utf8Decoder(allowMalformed: true))
@@ -40,11 +43,12 @@ class EngineProcess {
     read(_process.stderr);
     exited = _process.exitCode.then((code) {
       _running = false;
+      _win32Job?.close();
       return code;
     });
   }
 
-  /// Starts [command] (the program and its arguments) under the watcher.
+  /// Starts [command] (the program and its arguments) under the watcher (POSIX) or Job Object (Windows).
   static Future<EngineProcess> start({
     required List<String> command,
     required String modelId,
@@ -53,8 +57,27 @@ class EngineProcess {
     String startedWith = '',
     Map<String, String> environment = const {},
     String? workingDirectory,
+    int? memoryCapBytes,
     void Function()? onOutput,
   }) async {
+    if (Platform.isWindows) {
+      final process = await Process.start(
+        command.first,
+        command.sublist(1),
+        environment: environment,
+        workingDirectory: workingDirectory,
+      );
+      final job = Win32Job.attach(process.pid, memoryCapBytes: memoryCapBytes);
+      return EngineProcess._(
+        process,
+        modelId: modelId,
+        contextLength: contextLength,
+        port: port,
+        startedWith: startedWith,
+        onOutput: onOutput,
+        win32Job: job,
+      );
+    }
     final process = await Process.start(
       '/bin/sh',
       ['-c', _watcher, 'run-my-ai-engine', ...command],
@@ -95,6 +118,7 @@ exit "\$code"
 ''';
 
   final Process _process;
+  final Win32Job? _win32Job;
 
   /// Called after each new line of output.
   final void Function()? onOutput;
@@ -160,6 +184,16 @@ exit "\$code"
 
   /// Stops the engine and returns when it has ended.
   Future<void> stop() async {
+    if (Platform.isWindows) {
+      _process.kill();
+      try {
+        await exited.timeout(const Duration(seconds: _graceSeconds));
+      } on TimeoutException {
+        _win32Job?.close();
+        await exited;
+      }
+      return;
+    }
     try {
       await _process.stdin.close();
     } on IOException {

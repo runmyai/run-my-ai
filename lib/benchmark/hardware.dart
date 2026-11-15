@@ -4,6 +4,7 @@ import 'dart:isolate';
 
 import 'amd_gpu.dart';
 import 'nvml.dart';
+import 'win32_metrics.dart';
 
 // Reading the machine while a benchmark runs: what the operating system says in /proc and /sys, and the graphics
 // cards through their driver's library. The readings are plain functions on text, so they can be tested without the
@@ -262,6 +263,7 @@ class SystemReader {
   final FileSource files;
   final GpuSource? gpu;
   final int Function() _micros;
+  late final Win32Metrics? _win32 = Platform.isWindows && files is DiskFiles ? Win32Metrics() : null;
 
   var _tick = 0;
   int? _before;
@@ -310,7 +312,11 @@ class SystemReader {
 
   void _cpuValues(Map<String, double?> out, double seconds) {
     final text = files.read('$_proc/stat');
-    if (text == null) return;
+    if (text == null) {
+      final w = _win32;
+      if (w != null) out['cpu.load'] = w.cpuLoad();
+      return;
+    }
     final now = parseCpuTimes(text);
     final before = _cpu;
     _cpu = now;
@@ -361,7 +367,19 @@ class SystemReader {
   void _memoryValues(Map<String, double?> out, double seconds) {
     final text = files.read('$_proc/meminfo');
     final mem = text == null ? null : parseMemInfo(text);
-    if (mem == null) return;
+    if (mem == null) {
+      final m = _win32?.memory();
+      if (m != null) {
+        out['ram.total'] = m.totalGiB;
+        out['ram.used'] = (m.totalGiB - m.availGiB).clamp(0.0, m.totalGiB);
+        out['ram.available'] = m.availGiB;
+        if (m.swapTotalGiB > 0) {
+          out['ram.swap'] = m.swapUsedGiB;
+          out['ram.swapTotal'] = m.swapTotalGiB;
+        }
+      }
+      return;
+    }
     const gib = 1048576.0;
     var engine = 0;
     for (final pid in _enginePids) {
@@ -460,8 +478,10 @@ class SystemReader {
   }
 
   bool _onBattery() {
+    final names = files.list('$_sys/class/power_supply');
+    if (names.isEmpty && _win32 != null) return _win32.onBattery();
     final supplies = [
-      for (final name in files.list('$_sys/class/power_supply'))
+      for (final name in names)
         (
           type: files.read('$_sys/class/power_supply/$name/type')?.trim(),
           online: files.read('$_sys/class/power_supply/$name/online')?.trim(),
@@ -472,18 +492,26 @@ class SystemReader {
 
   /// What the computer is.
   HardwareInfo info() {
+    final w = _win32;
     final cpuInfo = files.read('$_proc/cpuinfo') ?? '';
-    final model = RegExp(r'^model name\s*:\s*(.+)$', multiLine: true).firstMatch(cpuInfo)?[1]?.trim() ?? '';
+    final procModel = RegExp(r'^model name\s*:\s*(.+)$', multiLine: true).firstMatch(cpuInfo)?[1]?.trim() ?? '';
+    final model = procModel.isNotEmpty ? procModel : (w?.cpuName() ?? '');
     final mem = parseMemInfo(files.read('$_proc/meminfo') ?? '');
+    final winMem = mem == null ? w?.memory() : null;
     final release = files.read('/etc/os-release') ?? '';
     final pretty = RegExp(r'^PRETTY_NAME="?([^"\n]*)"?', multiLine: true).firstMatch(release)?[1];
     final kernel = files.read('$_proc/sys/kernel/osrelease')?.trim();
+    final procCores = parseCpuTimes(files.read('$_proc/stat') ?? '').cores.length;
     return HardwareInfo(
       cpu: model,
-      threads: parseCpuTimes(files.read('$_proc/stat') ?? '').cores.length,
+      threads: procCores > 0 ? procCores : (w != null ? Platform.numberOfProcessors : 0),
       gpus: gpu?.names ?? const [],
-      ramGiB: mem == null ? 0 : mem.total / 1048576,
-      os: [pretty ?? Platform.operatingSystem, if (kernel != null) 'kernel $kernel'].join(', '),
+      ramGiB: mem != null ? mem.total / 1048576 : (winMem?.totalGiB ?? 0),
+      os: pretty != null
+          ? [pretty, if (kernel != null) 'kernel $kernel'].join(', ')
+          : (w != null
+                ? '${Platform.operatingSystem} (${Platform.operatingSystemVersion})'
+                : [Platform.operatingSystem, if (kernel != null) 'kernel $kernel'].join(', ')),
     );
   }
 }
