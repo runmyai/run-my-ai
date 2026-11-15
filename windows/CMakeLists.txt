@@ -55,7 +55,8 @@ add_subdirectory("runner")
 # The app's sound player (native/sound.c), loaded by the app at run time, next to the app.
 enable_language(C)
 add_library(runmyai_sound SHARED "../native/sound.c")
-target_compile_options(runmyai_sound PRIVATE /O2 /W0)
+# /O2 only outside Debug: Debug builds compile with /RTC1, which MSVC refuses together with /O2
+target_compile_options(runmyai_sound PRIVATE /W0 $<$<NOT:$<CONFIG:Debug>>:/O2>)
 
 
 # Generated plugin build rules, which manage building the plugins and adding
