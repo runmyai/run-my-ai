@@ -63,6 +63,14 @@ Future<void> waitUntil(WidgetTester tester, bool Function() done, {int timeoutMs
   }
 }
 
+/// On Windows, window_manager reports a new size only while the user drags an edge, not after setSize: this sends
+/// the app the event the end of such a drag sends.
+Future<void> windowResized() async {
+  if (!Platform.isWindows) return;
+  const call = MethodCall('onEvent', {'eventName': 'resized'});
+  ServicesBinding.instance.channelBuffers.push('window_manager', const StandardMethodCodec().encodeMethodCall(call), (_) {});
+}
+
 ProviderContainer container(WidgetTester tester) => ProviderScope.containerOf(tester.element(find.byType(Shell)));
 
 ChatStore? _store;
@@ -244,7 +252,8 @@ void main() {
     backend.speed.value = 22;
 
     // The picker lists only downloaded models; pick Qwen.
-    await tester.tap(find.byKey(const Key('picker')));
+    // (The context length's button next to it is the same kind of button, with the same key; the model's comes first.)
+    await tester.tap(find.byKey(const Key('picker')).first);
     await wait(tester, 400);
     await shot('08-picker-open-light');
     expect(find.textContaining('UD-Q4_K_XL', findRichText: true), findsNWidgets(2)); // the button + Flint's line
@@ -260,12 +269,14 @@ void main() {
     expect(container(tester).read(libraryProvider).downloaded, {'flint-40b/UD-Q4_K_XL'});
     expect(container(tester).read(libraryProvider).picked, 'flint-40b/UD-Q4_K_XL');
 
-    // Settings → Theme switches light <-> dark; the sidebar hides to a narrow bar of icons and comes back.
+    // Settings → Theme (its light or dark side's menu) switches light <-> dark; the sidebar hides to a narrow bar of icons and comes back.
     Brightness brightness() => Theme.of(tester.element(find.byType(Shell))).brightness;
     expect(brightness(), Brightness.light);
     await tester.tap(find.text('Settings').first);
     await wait(tester, 300);
-    await tester.tap(find.byKey(const Key('theme-dark')));
+    await tester.tap(find.byKey(const Key('theme-side')));
+    await wait(tester, 300);
+    await tester.tap(find.byKey(const Key('theme-side-dark')));
     await wait(tester, 400);
     expect(brightness(), Brightness.dark);
     await tester.tap(find.byKey(const Key('sidebar-toggle')));
@@ -293,6 +304,7 @@ void main() {
     expect(find.byKey(const Key('window-close')), findsOneWidget);
     bool maximized() => container(tester).read(windowMaximizedProvider);
     await windowManager.setSize(const Size(1000, 700));
+    await windowResized();
     await wait(tester, 1200);
     var window = Storage(dir).readWindow()!;
     expect((window.width, window.height, window.maximized), (1000.0, 700.0, false));
@@ -547,19 +559,14 @@ void main() {
     expect(find.text('Bravo renamed'), findsOneWidget);
     expect(find.text('not this'), findsNothing);
 
-    // Pin Delta, then Bravo: a Pinned group on top, in the order pinned. Pinned is a shortcut: each also stays
-    // under its day, with a small pin after its title there.
+    // Pin Delta, then Bravo: a Pinned group on top, in the order pinned. A pinned chat is only under Pinned.
     await rightClick('Delta');
     await menu('pin');
     await rightClick('Bravo renamed');
     await menu('pin');
     expect(find.text('Pinned'), findsOneWidget);
-    expect(find.text('Delta'), findsNWidgets(2));
-    expect(find.text('Bravo renamed'), findsNWidgets(2));
-    expect(find.byKey(const Key('pin-mark-d')), findsOneWidget);
-    expect(find.byKey(const Key('pin-mark-b')), findsOneWidget);
-    expect(find.byKey(const Key('pin-mark-a')), findsNothing);
-    expect(top(threeDays), lessThan(tester.getTopLeft(find.text('Delta').last).dy));
+    expect(find.text('Delta'), findsOneWidget);
+    expect(find.text('Bravo renamed'), findsOneWidget);
     expect(top('Pinned'), lessThan(top('Delta')));
     expect(top('Delta'), lessThan(top('Bravo renamed')));
     expect(top('Bravo renamed'), lessThan(top('Today')));
@@ -578,8 +585,8 @@ void main() {
     expect(top('Bravo renamed'), lessThan(top('Delta')));
     expect(await saved(dir, (db) => db.pins()), ['b', 'd']);
 
-    // Unpin Delta from its row under its day (the menu shows the crossed-out pin): only the shortcut goes.
-    await tester.tap(find.text('Delta').last, kind: PointerDeviceKind.mouse, buttons: kSecondaryButton);
+    // Unpin Delta (the menu shows the crossed-out pin): it goes back under its day.
+    await tester.tap(find.text('Delta'), kind: PointerDeviceKind.mouse, buttons: kSecondaryButton);
     await wait(tester, 300);
     expect(find.text('Unpin'), findsOneWidget);
     expect(find.byKey(const Key('unpin-icon')), findsOneWidget);
@@ -587,7 +594,6 @@ void main() {
     await menu('pin');
     expect(await saved(dir, (db) => db.pins()), ['b']);
     expect(find.text('Delta'), findsOneWidget);
-    expect(find.byKey(const Key('pin-mark-d')), findsNothing);
     expect(top('Today'), lessThan(top('Delta')));
     expect(top('Charlie'), lessThan(top('Delta')));
     expect(top('Delta'), lessThan(top('Echo')));
@@ -921,8 +927,8 @@ void main() {
     Section section() => container(tester).read(sectionProvider);
     double top(String text) => tester.getTopLeft(find.text(text).first).dy;
 
-    // Chat shows only its own chats (Paris trip twice: pinned, and under its day).
-    expect(find.text('Paris trip'), findsNWidgets(2));
+    // Chat shows only its own chats (Paris trip under Pinned).
+    expect(find.text('Paris trip'), findsOneWidget);
     expect(find.text('Budget'), findsOneWidget);
     expect(find.text('Fix the parser'), findsNothing);
     expect(find.text('Sort function'), findsNothing);
@@ -1020,7 +1026,7 @@ void main() {
     expect(height('Budget'), closeTo(full, 0.5));
     container(tester).read(chatsProvider.notifier).delete('chat2');
     await tester.pump();
-    expect(find.text('Budget'), findsNWidgets(2), reason: 'still there while closing');
+    expect(find.text('Budget'), findsOneWidget, reason: 'still there while closing');
     await wait(tester, 400);
     expect(find.text('Budget'), findsNothing);
 
@@ -1437,13 +1443,13 @@ void main() {
       await down();
       walk.add(open());
     }
-    expect(walk, ['c', 'a', 'b', 'c', 'c'], reason: 'Pinned, then Today: Alpha, Bravo, Charlie; then the end');
+    expect(walk, ['c', 'a', 'b', 'b', 'b'], reason: 'Pinned, then Today: Alpha, Bravo; then the end');
     walk.clear();
     for (var i = 0; i < 4; i++) {
       await up();
       walk.add(open());
     }
-    expect(walk, ['b', 'a', 'c', 'c'], reason: 'back up to the top, and no further');
+    expect(walk, ['a', 'c', 'c', 'c'], reason: 'back up to the top, and no further');
 
     // A folded group is stepped over (its open chat stays in sight, and is still stepped from).
     await tester.tap(find.byKey(const Key('heading-Today')));
@@ -1638,10 +1644,13 @@ void main() {
 
     await openChat('Long chat');
 
-    // Copy: the buttons show only with the pointer on a message; Copy copies its text and turns into a tick.
-    expect(find.byKey(const Key('copy-29')), findsNothing);
+    // Copy: the buttons show only with the pointer on a message, and always under the latest reply; Copy copies its
+    // text and turns into a tick.
+    expect(find.byKey(const Key('copy-27')), findsNothing);
+    expect(find.byKey(const Key('copy-29')), findsOneWidget, reason: 'the latest reply');
+    await hover(find.text('Answer 27.'));
+    expect(find.byKey(const Key('copy-27')), findsOneWidget);
     await hover(find.text('Answer 29.'));
-    expect(find.byKey(const Key('copy-29')), findsOneWidget);
     expect(find.byKey(const Key('bookmark-29')), findsOneWidget, reason: 'a reply has a bookmark button');
     await tester.tap(find.byKey(const Key('copy-29')));
     await settle(5);
