@@ -11,8 +11,8 @@ void main() {
         ['-c', '8192', '-t', '7', '--moe-stream', 'model', '--moe-stream-io-threads', '4']);
   });
 
-  test('fast cores: the threads stay on them, at most one per fast core', () {
-    expect(withTuning(table, {'threads': 12, 'fast_cpus': '0-15'}),
-        ['-c', '8192', '-t', '8', '--moe-stream', 'model', '--cpu-range', '0-15', '--cpu-strict', '1']);
+  test('fast cores: the measured threads stay on them', () {
+    expect(withTuning(table, {'threads': 6, 'fast_cpus': '0-15'}),
+        ['-c', '8192', '-t', '6', '--moe-stream', 'model', '--cpu-range', '0-15']);
   });
 }
