@@ -5,6 +5,8 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../benchmark/amd_gpu.dart';
+import '../benchmark/hardware.dart';
 import '../benchmark/nvml.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
@@ -20,13 +22,20 @@ import 'backend.dart';
 
 /// The models on this computer and how each one starts.
 class _LocalModel {
-  const _LocalModel({required this.model, required this.path, required this.flags, this.thinkingSwitch = false});
+  const _LocalModel({
+    required this.model,
+    required this.path,
+    required this.flags,
+    required this.smallFlags,
+    required this.cpuFlags,
+    this.thinkingSwitch = false,
+  });
 
   final CatalogModel model;
   final String path;
 
-  /// One command per context length.
-  final Map<int, String> flags;
+  /// One command per context length, for a large GPU, a small one, and none.
+  final Map<int, String> flags, smallFlags, cpuFlags;
 
   /// Its thinking can be turned off.
   final bool thinkingSwitch;
@@ -56,6 +65,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   static const _lingFile = ModelFile(id: 'ling-3.0-flash/MXFP4_MOE', quantization: 'MXFP4', sizeBytes: 70147512048);
   static const _flintFile = ModelFile(id: 'flint-40b/UD-Q4_K_XL', quantization: 'UD-Q4_K_XL', sizeBytes: 25055397324);
+  // two files: the model, and its n-gram table next to it (...-00002-of-00002.gguf)
+  static const _qwenFile =
+      ModelFile(id: 'qwen3.8-flash-next/WV-v5-3.5bpw', quantization: 'WV-v5 3.5bpw', sizeBytes: 55203205120 + 28800138432);
 
   static const _models = [
     _LocalModel(
@@ -71,6 +83,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       ),
       path: 'Ling-3.0-flash-MXFP4_MOE.tokenwing.gguf',
       flags: lingAuto,
+      smallFlags: lingAutoSmall,
+      cpuFlags: lingAutoCpu,
       thinkingSwitch: true,
     ),
     _LocalModel(
@@ -86,8 +100,48 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       ),
       path: 'flint-UD-Q4_K_XL.tokenwing.gguf',
       flags: flintAuto,
+      smallFlags: flintAutoSmall,
+      cpuFlags: flintAutoCpu,
+    ),
+    _LocalModel(
+      model: CatalogModel(
+        id: 'qwen3.8-flash-next',
+        name: 'Qwen3.8 Flash Next',
+        lab: 'Qwen',
+        description: 'Everyday chat, math and code. (Placeholder text.)',
+        parameters: '126B',
+        activeParameters: '7.3B',
+        thinking: ModelThinking.optional,
+        files: [_qwenFile],
+      ),
+      path: 'Qwen3.8-Flash-Next-WV-v5-3.5bpw.tokenwing-00001-of-00002.gguf',
+      flags: qwenAuto,
+      smallFlags: qwenAutoSmall,
+      cpuFlags: qwenAutoCpu,
+      thinkingSwitch: true,
     ),
   ];
+
+  /// The largest graphics card's memory in GiB, read once (NVIDIA through NVML, AMD on Linux); 0 without one.
+  static final double _gpuGiB = () {
+    final nvidia = NvmlReader.open();
+    final amd = AmdGpuReader.open(const DiskFiles(), firstIndex: nvidia?.names.length ?? 0);
+    final gpus = GpuSources([?nvidia, ?amd]);
+    try {
+      return gpus.read().entries.where((e) => e.key.endsWith('.vramTotal')).fold(0.0, (a, e) => max(a, e.value ?? 0));
+    } finally {
+      gpus.close();
+    }
+  }();
+
+  /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none.
+  /// shortcut: three kinds of machine from the card's memory alone; the autotuner replaces this
+  static Map<int, String> _flagsFor(_LocalModel m) {
+    final flags = _gpuGiB >= 10 ? m.flags : (_gpuGiB >= 4 ? m.smallFlags : m.cpuFlags);
+    // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)
+    if (!Platform.isWindows || identical(flags, m.cpuFlags)) return flags;
+    return {for (final e in flags.entries) e.key: '${e.value} --moe-stream-async-h2d 0'};
+  }
 
   static _LocalModel _local(ModelFile file) => _models.firstWhere((m) => m.model.files.contains(file));
 
@@ -128,7 +182,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       : Stream.error(EngineFailure('The model file is not on this computer: ${_modelPath(_local(file))}'));
 
   @override
-  Map<int, String> autoCommands(ModelFile file) => _local(file).flags;
+  Map<int, String> autoCommands(ModelFile file) => _flagsFor(_local(file));
 
   @override
   int maxContext(ModelFile file) => _maxContexts[file.id] ??= () {
@@ -684,7 +738,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           program,
           '-m',
           _modelPath(local),
-          ...flags.arguments,
+          for (final a in flags.arguments) a.replaceAll('{models}', '${_storage.dir.path}${Platform.pathSeparator}models'),
           '--cache-disk',
           states,
           '--cache-disk-gb',
