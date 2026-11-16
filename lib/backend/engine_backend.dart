@@ -39,13 +39,11 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   final Storage _storage;
 
-  static const _root = '/run/media/Harin/Shared/Projects/MoE_Lab';
+  /// Where the chats' saved states and snapshots are kept: one file per state, in the app's data folder.
+  String get _activeStateFolder => '${_storage.dir.path}${Platform.pathSeparator}states';
 
-  /// Where the chats' saved states and snapshots are kept: one file per state, next to the models.
-  static const stateFolder = '$_root/traces/run-my-ai-states';
-
-  String get _activeStateFolder =>
-      Directory(_root).existsSync() ? stateFolder : '${_storage.dir.path}${Platform.pathSeparator}states';
+  /// Where the model files are: the app's data folder.
+  String _modelPath(_LocalModel m) => '${_storage.dir.path}${Platform.pathSeparator}models${Platform.pathSeparator}${m.path}';
 
   /// How many "start of message" snapshots each chat keeps.
   static const _snapshots = 4;
@@ -53,8 +51,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// The chats whose saved states go last.
   List<String> _pinnedChats = const [];
 
-  /// Where the engine is until the user sets another folder.
-  static const defaultEngineFolder = '$_root/llama.cpp/build/bin';
+  /// Where the engine is until the user sets another folder: the app's own folder.
+  static String get defaultEngineFolder => File(Platform.resolvedExecutable).parent.path;
 
   static const _lingFile = ModelFile(id: 'ling-3.0-flash/MXFP4_MOE', quantization: 'MXFP4', sizeBytes: 70147512048);
   static const _flintFile = ModelFile(id: 'flint-40b/UD-Q4_K_XL', quantization: 'UD-Q4_K_XL', sizeBytes: 25055397324);
@@ -71,7 +69,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_lingFile],
       ),
-      path: '$_root/traces/phase1/flash/Ling-3.0-flash-MXFP4_MOE.tokenwing.gguf',
+      path: 'Ling-3.0-flash-MXFP4_MOE.tokenwing.gguf',
       flags: lingAuto,
       thinkingSwitch: true,
     ),
@@ -86,7 +84,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.always,
         files: [_flintFile],
       ),
-      path: '$_root/traces/flint/flint-UD-Q4_K_XL.tokenwing.gguf',
+      path: 'flint-UD-Q4_K_XL.tokenwing.gguf',
       flags: flintAuto,
     ),
   ];
@@ -123,11 +121,11 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   @override
   Future<List<CatalogModel>> loadCatalog() async => [for (final m in _models) m.model];
 
-  /// Models are read from where they already are on this computer; nothing is fetched yet.
+  /// Models are read from the app's models folder; nothing is fetched yet.
   @override
-  Stream<double> download(ModelFile file) => File(_local(file).path).existsSync()
+  Stream<double> download(ModelFile file) => File(_modelPath(_local(file))).existsSync()
       ? Stream.value(1)
-      : Stream.error(EngineFailure('The model file is not on this computer: ${_local(file).path}'));
+      : Stream.error(EngineFailure('The model file is not on this computer: ${_modelPath(_local(file))}'));
 
   @override
   Map<int, String> autoCommands(ModelFile file) => _local(file).flags;
@@ -135,7 +133,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   @override
   int maxContext(ModelFile file) => _maxContexts[file.id] ??= () {
     final local = _local(file);
-    return modelContextLength(local.path) ?? local.flags.keys.reduce(max);
+    return modelContextLength(_modelPath(local)) ?? local.flags.keys.reduce(max);
   }();
 
   /// The longest context each model file says it can run with, once read.
@@ -260,7 +258,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   @override
   Future<({int bytes, DateTime modified})?> modelFileInfo(ModelFile file) async {
-    final stat = File(_local(file).path).statSync();
+    final stat = File(_modelPath(_local(file))).statSync();
     return stat.type == FileSystemEntityType.notFound ? null : (bytes: stat.size, modified: stat.modified);
   }
 
@@ -675,7 +673,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     Directory(states).createSync(recursive: true);
     final program = '$folder/llama-server${Platform.isWindows ? '.exe' : ''}';
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
-    if (!File(local.path).existsSync()) throw EngineFailure('The model file is not on this computer: ${local.path}');
+    if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final flags = EngineFlags.parse(run.flags);
     final port = await EngineProcess.freePort();
     final EngineProcess engine;
@@ -685,7 +683,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           ..._memoryCap(run.memoryCapGiB),
           program,
           '-m',
-          local.path,
+          _modelPath(local),
           ...flags.arguments,
           '--cache-disk',
           states,

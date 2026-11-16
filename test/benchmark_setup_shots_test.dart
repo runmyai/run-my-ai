@@ -93,7 +93,7 @@ class _TabBenchmark extends EngineTabNotifier {
 /// Loads the system's Cantarell as the font the text is drawn in (the theme's first font is named Roboto in a test).
 Future<void> _loadFont() async {
   final icons = FontLoader('MaterialIcons');
-  final iconBytes = await File('/home/Harin/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf').readAsBytes();
+  final iconBytes = await File('${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf').readAsBytes();
   icons.addFont(Future.value(ByteData.sublistView(iconBytes)));
   await icons.load();
   final loader = FontLoader('Roboto');
