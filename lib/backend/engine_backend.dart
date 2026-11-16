@@ -137,36 +137,64 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     }
   }();
 
+  static const _tuneSchemaVersion = 2;
+
   File get _tuneFile => File('${_storage.dir.path}${Platform.pathSeparator}autotuner.json');
 
-  /// The autotuner's saved result, or null before its first run.
+  /// The autotuner's saved store (version 2), or null before its first run / after a schema bump.
   Map<String, dynamic>? get _savedTune {
     try {
-      return _tuneFile.existsSync() ? jsonDecode(_tuneFile.readAsStringSync()) as Map<String, dynamic> : null;
+      if (!_tuneFile.existsSync()) return null;
+      final decoded = jsonDecode(_tuneFile.readAsStringSync());
+      if (decoded is! Map<String, dynamic> || decoded['version'] != _tuneSchemaVersion) return null;
+      return decoded;
     } on Exception {
       return null;
     }
   }
 
-  /// The graphics cards the engine sees (name and MiB), largest first: the autotuner's list once it has run, else the
-  /// largest card read through NVML / AMD's driver files.
-  List<({String name, int mib})> get _cards {
+  /// The graphics cards the engine sees (name, MiB, and whether integrated UMA), largest first: the autotuner's list once
+  /// it has run, else the largest discrete card read through NVML / AMD's driver files.
+  List<({String name, int mib, bool integrated})> get _cards {
     final listed = _savedTune?['gpus'] as List?;
-    if (listed == null) return _gpu.giB > 0 ? [(name: '', mib: (_gpu.giB * 1024).round())] : const [];
-    return [for (final g in listed) (name: (g as Map)['name'] as String, mib: g['mib'] as int)]..sort((a, b) => b.mib - a.mib);
+    if (listed == null) {
+      return _gpu.giB > 0 ? [(name: '', mib: (_gpu.giB * 1024).round(), integrated: false)] : const [];
+    }
+    return [
+      for (final g in listed)
+        if (g is Map && g['name'] is String && g['mib'] is int)
+          (name: g['name'] as String, mib: g['mib'] as int, integrated: g['integrated'] == true),
+    ]..sort((a, b) => b.mib - a.mib);
   }
 
-  /// What the autotuner measured on this PC without a model (the cards, threads, fast cores, SSD readers): run once,
-  /// kept in autotuner.json.
+  /// Runs `autotuner` once per model file (keyed by filename + byte size + tool mtime) and stores results in
+  /// `autotuner.json` (version 2), with a 30-second timeout and safe last-JSON-line parsing.
   Future<Map<String, dynamic>?> _tuned(String folder, String model) async {
     final saved = _tuneFile;
     try {
-      if (saved.existsSync()) return jsonDecode(saved.readAsStringSync()) as Map<String, dynamic>;
-      final tool = '$folder/autotuner${Platform.isWindows ? '.exe' : ''}';
-      if (!File(tool).existsSync()) return null;
-      final r = await Process.run(tool, ['--file', model], workingDirectory: folder);
-      final t = jsonDecode((r.stdout as String).trim()) as Map<String, dynamic>;
-      saved.writeAsStringSync(jsonEncode(t));
+      final tool = File('$folder/autotuner${Platform.isWindows ? '.exe' : ''}');
+      if (!tool.existsSync()) return null;
+      final modelStat = File(model).statSync();
+      final toolStat = tool.statSync();
+      final modelKey = '${File(model).uri.pathSegments.last}:${modelStat.size}:${toolStat.size}';
+
+      final store = _savedTune ?? <String, dynamic>{'version': _tuneSchemaVersion, 'models': <String, dynamic>{}};
+      final models = (store['models'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+      if (models[modelKey] case final Map<String, dynamic> cached) return cached;
+
+      final r = await Process.run(tool.path, ['--file', model], workingDirectory: folder)
+          .timeout(const Duration(seconds: 30));
+      if (r.exitCode != 0) return null;
+      final t = parseAutotunerJson(r.stdout as String);
+      if (t == null) return null;
+
+      models[modelKey] = t;
+      final updated = <String, dynamic>{
+        'version': _tuneSchemaVersion,
+        'gpus': t['gpus'] ?? store['gpus'] ?? const <Object?>[],
+        'models': models,
+      };
+      saved.writeAsStringSync(jsonEncode(updated));
       return t;
     } on Exception {
       return null;   // the table's values then stand
@@ -175,16 +203,17 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
   /// largest card. With several cards only the largest is used (without a layout for them two cards run slower than one).
-  /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
   Map<int, String> _flagsFor(_LocalModel m) {
     final cards = _cards;
     final gib = cards.isEmpty ? 0.0 : cards.first.mib / 1024;
     final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
     if (identical(flags, m.cpuFlags)) return flags;
     // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)
+    final devName = cards.length > 1 ? cards.first.name : '';
+    final devArg = devName.contains(' ') ? '"$devName"' : devName;
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
-      if (cards.length > 1 && cards.first.name.isNotEmpty) '--device ${cards.first.name}',
+      if (devArg.isNotEmpty) '--device $devArg',
     ].join(' ');
     return extra.isEmpty ? flags : {for (final e in flags.entries) e.key: '${e.value} $extra'};
   }
@@ -773,10 +802,19 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     Directory(states).createSync(recursive: true);
     final program = '$folder/llama-server${Platform.isWindows ? '.exe' : ''}';
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
-    if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
-    final tuned = await _tuned(folder, _modelPath(local));
-    // the table's row as the autotuner's card list now picks it (the first start may have shown another)
-    final flags = EngineFlags.parse(_flagsFor(local)[run.contextLength] ?? run.flags);
+    final modelPath = _modelPath(local);
+    if (!File(modelPath).existsSync()) throw EngineFailure('The model file is not on this computer: $modelPath');
+    final wasAuto = run.flags == _flagsFor(local)[run.contextLength];
+    final tuned = await _tuned(folder, modelPath);
+    // Only refresh from the Auto table (and apply autotuned flags) when the run actually came from the Auto profile;
+    // custom profiles and Benchmark-tab flag overrides stay untouched.
+    final resolvedFlags = wasAuto ? (_flagsFor(local)[run.contextLength] ?? run.flags) : run.flags;
+    final flags = EngineFlags.parse(resolvedFlags);
+    final rawArgs = [
+      for (final a in flags.arguments) a.replaceAll('{models}', '${_storage.dir.path}${Platform.pathSeparator}models'),
+    ];
+    final finalArgs = wasAuto ? withTuning(rawArgs, tuned) : rawArgs;
+    final discreteVramMiB = _cards.where((c) => !c.integrated).fold<int>(0, (sum, c) => sum + c.mib);
     final port = await EngineProcess.freePort();
     final EngineProcess engine;
     try {
@@ -785,10 +823,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           ..._memoryCap(run.memoryCapGiB),
           program,
           '-m',
-          _modelPath(local),
-          ...withTuning([
-            for (final a in flags.arguments) a.replaceAll('{models}', '${_storage.dir.path}${Platform.pathSeparator}models'),
-          ], tuned),
+          modelPath,
+          ...finalArgs,
           '--cache-disk',
           states,
           '--cache-disk-gb',
@@ -806,7 +842,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         startedWith: startedWith(run),
         environment: flags.environment,
         workingDirectory: folder,
-        memoryCapBytes: _windowsJobCap(run.memoryCapGiB),
+        memoryCapBytes: _windowsJobCap(run.memoryCapGiB, discreteVramMiB: discreteVramMiB),
         onOutput: _logChanged.changed,
       );
       _lastEngine = engine;
@@ -836,15 +872,17 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   }
 
   /// The Windows job's memory limit that leaves [headroomGiB] of RAM free (default 1 GB), as [_memoryCap] does on Linux:
-  /// all the RAM but the headroom, at least 4 GiB and at most all but 0.5 GiB. Windows counts what a program puts in the
-  /// graphics card's memory against the job's limit too, and the engine fills the card, so the job also gets the cards'
-  /// video memory: the headroom then stays free in RAM.
-  /// shortcut: NVIDIA cards only (their memory read through NVML); with other cards their video memory comes out of the RAM.
-  static int? _windowsJobCap(double? headroomGiB) {
+  /// all the RAM but the headroom, at least 4 GiB and at most all but 0.5 GiB. Windows counts what a program puts in a
+  /// discrete graphics card's memory against the job's commit limit too, so discrete cards' VRAM (from the autotuner across
+  /// CUDA, ROCm, Vulkan, or NVML before the first tune; excluding integrated UMA APUs) is added to the job cap.
+  static int? _windowsJobCap(double? headroomGiB, {int discreteVramMiB = 0}) {
     if (!Platform.isWindows) return null;
     final totalGiB = Win32Metrics().memory()?.totalGiB;
     if (totalGiB == null) return null;
     var bytes = ((totalGiB - (headroomGiB ?? 1.0)).clamp(4.0, totalGiB - 0.5) * 1073741824).round();
+    if (discreteVramMiB > 0) {
+      return bytes + discreteVramMiB * 1048576;
+    }
     final gpus = NvmlReader.open();
     if (gpus == null) return bytes;
     try {
