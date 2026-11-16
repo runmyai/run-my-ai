@@ -537,6 +537,8 @@ Future<void> showAbove(WidgetTester tester, Finder finder) async {
 void _tab() {
   late Directory dir;
   late ChatStore store;
+  // every store a test opened (some pump the tab several times): Windows cannot delete the folder while one is open
+  final stores = <ChatStore>[];
 
   /// The tab, with [state] as what the benchmark notifier holds, in a window [width] wide.
   Future<void> pump(WidgetTester tester, BenchmarkState state, {double width = 1300, bool runTab = false}) async {
@@ -544,7 +546,7 @@ void _tab() {
       ..physicalSize = Size(width, 3000)
       ..devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.runAsync(() async => store = await ChatStore.open(dir));
+    await tester.runAsync(() async => stores.add(store = await ChatStore.open(dir)));
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -564,7 +566,10 @@ void _tab() {
 
   setUp(() => dir = Directory.systemTemp.createTempSync('runmyai-tab-'));
   tearDown(() async {
-    await store.close();
+    for (final s in stores) {
+      await s.close();
+    }
+    stores.clear();
     dir.deleteSync(recursive: true);
   });
 
