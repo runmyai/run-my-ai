@@ -84,6 +84,8 @@ app_command () {   # preset file, size, case
             -m) model=1; i=$((i + 2)) ;;
             --host) [ "${words[i + 1]:-}" = 127.0.0.1 ] || die "$file $size: --host is not 127.0.0.1, the app's address"; i=$((i + 2)) ;;
             --port) i=$((i + 2)) ;;
+            # the preset's whole layers were picked for its own card: the engine fits as many as each machine's card holds
+            --moe-stream-gpu-layers-list) i=$((i + 2)) ;;
             *)
                 [[ $supplied == *" ${word%%=*} "* ]] && die "$file $size: $word is set by the app, a preset cannot use it"
                 [ "$word" = -c ] && context=${words[i + 1]:-}
