@@ -67,10 +67,11 @@ app_command () {   # preset file, size, case
     fi
     [ "${words[i]:-}" = env ] && i=$((i + 1))
     local -a settings=() flags=()
+    local no_gpu=0
     while [[ ${words[i]:-} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
         [[ ${words[i]} =~ $unsafe ]] && die "$file $size: ${words[i]%%=*} is a setting the app refuses"
-        # a hidden GPU: -1 hides every card on Linux and Windows alike (Windows cannot set an empty value)
-        [ "${words[i]}" = CUDA_VISIBLE_DEVICES= ] && words[i]=CUDA_VISIBLE_DEVICES=-1
+        # a hidden GPU becomes --device none: no card of any backend (CUDA, ROCm, Vulkan) is used
+        if [ "${words[i]}" = CUDA_VISIBLE_DEVICES= ]; then no_gpu=1; i=$((i + 1)); continue; fi
         settings+=("${words[i]}")
         i=$((i + 1))
     done
@@ -91,6 +92,7 @@ app_command () {   # preset file, size, case
                 ;;
         esac
     done
+    [ "$no_gpu" = 1 ] && flags+=(--device none)
     [ "$model" = 1 ] || die "$file $size: no -m model file"
     [[ $context =~ ^[0-9]+$ ]] || die "$file $size: no context length (-c N)"
     local text="${settings[*]:-} ${flags[*]}"

@@ -123,33 +123,45 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     ),
   ];
 
-  /// The largest graphics card's memory in GiB (0 without one), its NVIDIA number, and how many NVIDIA cards there are;
-  /// read once (NVIDIA through NVML, AMD on Linux).
-  static final ({double giB, int nvidia, int nvidias}) _gpu = () {
+  /// The largest graphics card's memory, read once through NVML / AMD's driver files: the cards before the autotuner's
+  /// first run.
+  static final ({double giB}) _gpu = () {
     final nvidia = NvmlReader.open();
     final amd = AmdGpuReader.open(const DiskFiles(), firstIndex: nvidia?.names.length ?? 0);
     final gpus = GpuSources([?nvidia, ?amd]);
     try {
-      var best = (giB: 0.0, nvidia: -1, nvidias: nvidia?.names.length ?? 0);
-      for (final e in gpus.read().entries) {
-        if (!e.key.endsWith('.vramTotal') || (e.value ?? 0) <= best.giB) continue;
-        final n = RegExp(r'^gpu\.(\d+)\.').firstMatch(e.key);
-        best = (giB: e.value!, nvidia: n != null && int.parse(n[1]!) < best.nvidias ? int.parse(n[1]!) : -1, nvidias: best.nvidias);
-      }
-      return best;
+      return (giB: gpus.read().entries.where((e) => e.key.endsWith('.vramTotal')).fold(0.0, (a, e) => max(a, e.value ?? 0)));
     } finally {
       gpus.close();
     }
   }();
 
-  static double get _gpuGiB => _gpu.giB;
+  File get _tuneFile => File('${_storage.dir.path}${Platform.pathSeparator}autotuner.json');
 
-  /// What llama-tune measured on this PC without a model (threads, fast cores, SSD readers): run once, kept in tune.json.
+  /// The autotuner's saved result, or null before its first run.
+  Map<String, dynamic>? get _savedTune {
+    try {
+      return _tuneFile.existsSync() ? jsonDecode(_tuneFile.readAsStringSync()) as Map<String, dynamic> : null;
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// The graphics cards the engine sees (name and MiB), largest first: the autotuner's list once it has run, else the
+  /// largest card read through NVML / AMD's driver files.
+  List<({String name, int mib})> get _cards {
+    final listed = _savedTune?['gpus'] as List?;
+    if (listed == null) return _gpu.giB > 0 ? [(name: '', mib: (_gpu.giB * 1024).round())] : const [];
+    return [for (final g in listed) (name: (g as Map)['name'] as String, mib: g['mib'] as int)]..sort((a, b) => b.mib - a.mib);
+  }
+
+  /// What the autotuner measured on this PC without a model (the cards, threads, fast cores, SSD readers): run once,
+  /// kept in autotuner.json.
   Future<Map<String, dynamic>?> _tuned(String folder, String model) async {
-    final saved = File('${_storage.dir.path}${Platform.pathSeparator}tune.json');
+    final saved = _tuneFile;
     try {
       if (saved.existsSync()) return jsonDecode(saved.readAsStringSync()) as Map<String, dynamic>;
-      final tool = '$folder/llama-tune${Platform.isWindows ? '.exe' : ''}';
+      final tool = '$folder/autotuner${Platform.isWindows ? '.exe' : ''}';
       if (!File(tool).existsSync()) return null;
       final r = await Process.run(tool, ['--file', model], workingDirectory: folder);
       final t = jsonDecode((r.stdout as String).trim()) as Map<String, dynamic>;
@@ -160,20 +172,20 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     }
   }
 
-  /// With several NVIDIA cards, only the largest one: without a layout for them, two cards run slower than one.
-  /// shortcut: NVIDIA only (AMD cards would need HIP_VISIBLE_DEVICES)
-  static Map<String, String> _oneCard(Map<String, String> env) =>
-      _gpu.nvidias < 2 || _gpu.nvidia < 0 || env.containsKey('CUDA_VISIBLE_DEVICES')
-          ? env
-          : {...env, 'CUDA_DEVICE_ORDER': 'PCI_BUS_ID', 'CUDA_VISIBLE_DEVICES': '${_gpu.nvidia}'};
-
-  /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none.
-  /// shortcut: three kinds of machine from the card's memory alone; the autotuner replaces this
-  static Map<int, String> _flagsFor(_LocalModel m) {
-    final flags = _gpuGiB >= 10 ? m.flags : (_gpuGiB >= 4 ? m.smallFlags : m.cpuFlags);
+  /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
+  /// largest card. With several cards only the largest is used (without a layout for them two cards run slower than one).
+  /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
+  Map<int, String> _flagsFor(_LocalModel m) {
+    final cards = _cards;
+    final gib = cards.isEmpty ? 0.0 : cards.first.mib / 1024;
+    final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
+    if (identical(flags, m.cpuFlags)) return flags;
     // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)
-    if (!Platform.isWindows || identical(flags, m.cpuFlags)) return flags;
-    return {for (final e in flags.entries) e.key: '${e.value} --moe-stream-async-h2d 0'};
+    final extra = [
+      if (Platform.isWindows) '--moe-stream-async-h2d 0',
+      if (cards.length > 1 && cards.first.name.isNotEmpty) '--device ${cards.first.name}',
+    ].join(' ');
+    return extra.isEmpty ? flags : {for (final e in flags.entries) e.key: '${e.value} $extra'};
   }
 
   static _LocalModel _local(ModelFile file) => _models.firstWhere((m) => m.model.files.contains(file));
@@ -761,8 +773,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final program = '$folder/llama-server${Platform.isWindows ? '.exe' : ''}';
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
-    final flags = EngineFlags.parse(run.flags);
     final tuned = await _tuned(folder, _modelPath(local));
+    // the table's row as the autotuner's card list now picks it (the first start may have shown another)
+    final flags = EngineFlags.parse(_flagsFor(local)[run.contextLength] ?? run.flags);
     final port = await EngineProcess.freePort();
     final EngineProcess engine;
     try {
@@ -790,7 +803,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         contextLength: run.contextLength,
         port: port,
         startedWith: startedWith(run),
-        environment: _oneCard(flags.environment),
+        environment: flags.environment,
         workingDirectory: folder,
         memoryCapBytes: _windowsJobCap(run.memoryCapGiB),
         onOutput: _logChanged.changed,
