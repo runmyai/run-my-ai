@@ -47,7 +47,11 @@ Future<void> setUpWindow(Storage storage) async {
   if (saved != null) await _restore(saved);
   // The Mac window starts hidden (macos/Runner/MainFlutterWindow.swift), so the system bar never flashes.
   if (Platform.isMacOS) await windowManager.show();
-  windowManager.addListener(_WindowSaver(storage, saved));
+  final saver = _WindowSaver(storage, saved);
+  windowManager.addListener(saver);
+  // On Windows the window reports a new size only while the user drags an edge, so the starting size and place are
+  // saved once now: maximizing before any drag then still has a normal size to keep.
+  saver._later();
 }
 
 /// Linux on Wayland does not let programs choose where their window goes.

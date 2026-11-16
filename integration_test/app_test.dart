@@ -303,6 +303,14 @@ void main() {
     expect(find.byKey(const Key('window-minimize')), findsOneWidget);
     expect(find.byKey(const Key('window-close')), findsOneWidget);
     bool maximized() => container(tester).read(windowMaximizedProvider);
+    // Maximized before the window was ever resized: still saved (on Windows nothing reports the starting size).
+    await tester.tap(find.byKey(const Key('window-maximize')));
+    await waitUntil(tester, maximized, timeoutMs: 5000);
+    await wait(tester, 1200);
+    expect(Storage(dir).readWindow()?.maximized, isTrue);
+    await tester.tap(find.byKey(const Key('window-maximize')));
+    await waitUntil(tester, () => !maximized(), timeoutMs: 5000);
+    await wait(tester, 1200);
     await windowManager.setSize(const Size(1000, 700));
     await windowResized();
     await wait(tester, 1200);
