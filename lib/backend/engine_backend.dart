@@ -18,6 +18,7 @@ import '../engine/engine_flags.dart';
 import '../engine/engine_process.dart';
 import '../engine/gguf.dart';
 import '../engine/live_speed.dart';
+import '../engine/tuning.dart';
 import 'backend.dart';
 
 /// The models on this computer and how each one starts.
@@ -122,17 +123,49 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     ),
   ];
 
-  /// The largest graphics card's memory in GiB, read once (NVIDIA through NVML, AMD on Linux); 0 without one.
-  static final double _gpuGiB = () {
+  /// The largest graphics card's memory in GiB (0 without one), its NVIDIA number, and how many NVIDIA cards there are;
+  /// read once (NVIDIA through NVML, AMD on Linux).
+  static final ({double giB, int nvidia, int nvidias}) _gpu = () {
     final nvidia = NvmlReader.open();
     final amd = AmdGpuReader.open(const DiskFiles(), firstIndex: nvidia?.names.length ?? 0);
     final gpus = GpuSources([?nvidia, ?amd]);
     try {
-      return gpus.read().entries.where((e) => e.key.endsWith('.vramTotal')).fold(0.0, (a, e) => max(a, e.value ?? 0));
+      var best = (giB: 0.0, nvidia: -1, nvidias: nvidia?.names.length ?? 0);
+      for (final e in gpus.read().entries) {
+        if (!e.key.endsWith('.vramTotal') || (e.value ?? 0) <= best.giB) continue;
+        final n = RegExp(r'^gpu\.(\d+)\.').firstMatch(e.key);
+        best = (giB: e.value!, nvidia: n != null && int.parse(n[1]!) < best.nvidias ? int.parse(n[1]!) : -1, nvidias: best.nvidias);
+      }
+      return best;
     } finally {
       gpus.close();
     }
   }();
+
+  static double get _gpuGiB => _gpu.giB;
+
+  /// What llama-tune measured on this PC without a model (threads, fast cores, SSD readers): run once, kept in tune.json.
+  Future<Map<String, dynamic>?> _tuned(String folder, String model) async {
+    final saved = File('${_storage.dir.path}${Platform.pathSeparator}tune.json');
+    try {
+      if (saved.existsSync()) return jsonDecode(saved.readAsStringSync()) as Map<String, dynamic>;
+      final tool = '$folder/llama-tune${Platform.isWindows ? '.exe' : ''}';
+      if (!File(tool).existsSync()) return null;
+      final r = await Process.run(tool, ['--file', model], workingDirectory: folder);
+      final t = jsonDecode((r.stdout as String).trim()) as Map<String, dynamic>;
+      saved.writeAsStringSync(jsonEncode(t));
+      return t;
+    } on Exception {
+      return null;   // the table's values then stand
+    }
+  }
+
+  /// With several NVIDIA cards, only the largest one: without a layout for them, two cards run slower than one.
+  /// shortcut: NVIDIA only (AMD cards would need HIP_VISIBLE_DEVICES)
+  static Map<String, String> _oneCard(Map<String, String> env) =>
+      _gpu.nvidias < 2 || _gpu.nvidia < 0 || env.containsKey('CUDA_VISIBLE_DEVICES')
+          ? env
+          : {...env, 'CUDA_DEVICE_ORDER': 'PCI_BUS_ID', 'CUDA_VISIBLE_DEVICES': '${_gpu.nvidia}'};
 
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none.
   /// shortcut: three kinds of machine from the card's memory alone; the autotuner replaces this
@@ -729,6 +762,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final flags = EngineFlags.parse(run.flags);
+    final tuned = await _tuned(folder, _modelPath(local));
     final port = await EngineProcess.freePort();
     final EngineProcess engine;
     try {
@@ -738,7 +772,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           program,
           '-m',
           _modelPath(local),
-          for (final a in flags.arguments) a.replaceAll('{models}', '${_storage.dir.path}${Platform.pathSeparator}models'),
+          ...withTuning([
+            for (final a in flags.arguments) a.replaceAll('{models}', '${_storage.dir.path}${Platform.pathSeparator}models'),
+          ], tuned),
           '--cache-disk',
           states,
           '--cache-disk-gb',
@@ -754,7 +790,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         contextLength: run.contextLength,
         port: port,
         startedWith: startedWith(run),
-        environment: flags.environment,
+        environment: _oneCard(flags.environment),
         workingDirectory: folder,
         memoryCapBytes: _windowsJobCap(run.memoryCapGiB),
         onOutput: _logChanged.changed,
