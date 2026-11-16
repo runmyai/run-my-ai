@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../benchmark/amd_gpu.dart';
 import '../benchmark/hardware.dart';
 import '../benchmark/nvml.dart';
+import '../benchmark/win32_metrics.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
 import '../engine/auto_commands.dart';
@@ -834,13 +835,16 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=${capKiB}K', '-p', 'MemorySwapMax=0', '--'];
   }
 
-  /// The Windows job's memory limit for a cap of [capGiB] of RAM (null: no limit). Windows counts what a program puts
-  /// in the graphics card's memory against the job's limit too, and the engine fills the card, so the job gets the cap
-  /// plus the cards' video memory: the cap then means RAM, as on Linux.
-  /// shortcut: NVIDIA cards only (their memory read through NVML); with other cards the cap also covers video memory.
-  static int? _windowsJobCap(double? capGiB) {
-    if (!Platform.isWindows || capGiB == null) return null;
-    var bytes = (capGiB * 1073741824).round();
+  /// The Windows job's memory limit that leaves [headroomGiB] of RAM free (default 1 GB), as [_memoryCap] does on Linux:
+  /// all the RAM but the headroom, at least 4 GiB and at most all but 0.5 GiB. Windows counts what a program puts in the
+  /// graphics card's memory against the job's limit too, and the engine fills the card, so the job also gets the cards'
+  /// video memory: the headroom then stays free in RAM.
+  /// shortcut: NVIDIA cards only (their memory read through NVML); with other cards their video memory comes out of the RAM.
+  static int? _windowsJobCap(double? headroomGiB) {
+    if (!Platform.isWindows) return null;
+    final totalGiB = Win32Metrics().memory()?.totalGiB;
+    if (totalGiB == null) return null;
+    var bytes = ((totalGiB - (headroomGiB ?? 1.0)).clamp(4.0, totalGiB - 0.5) * 1073741824).round();
     final gpus = NvmlReader.open();
     if (gpus == null) return bytes;
     try {
