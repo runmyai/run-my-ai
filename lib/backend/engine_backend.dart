@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../benchmark/nvml.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
 import '../engine/auto_commands.dart';
@@ -703,7 +704,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         startedWith: startedWith(run),
         environment: flags.environment,
         workingDirectory: folder,
-        memoryCapBytes: Platform.isWindows && run.memoryCapGiB != null ? (run.memoryCapGiB! * 1073741824).round() : null,
+        memoryCapBytes: _windowsJobCap(run.memoryCapGiB),
         onOutput: _logChanged.changed,
       );
       _lastEngine = engine;
@@ -730,6 +731,26 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final headroomKiB = ((headroomGiB ?? 1.0) * 1048576).round();
     final capKiB = (totalKiB - headroomKiB).clamp(4 * 1048576, totalKiB - 524288);
     return ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=${capKiB}K', '-p', 'MemorySwapMax=0', '--'];
+  }
+
+  /// The Windows job's memory limit for a cap of [capGiB] of RAM (null: no limit). Windows counts what a program puts
+  /// in the graphics card's memory against the job's limit too, and the engine fills the card, so the job gets the cap
+  /// plus the cards' video memory: the cap then means RAM, as on Linux.
+  /// shortcut: NVIDIA cards only (their memory read through NVML); with other cards the cap also covers video memory.
+  static int? _windowsJobCap(double? capGiB) {
+    if (!Platform.isWindows || capGiB == null) return null;
+    var bytes = (capGiB * 1073741824).round();
+    final gpus = NvmlReader.open();
+    if (gpus == null) return bytes;
+    try {
+      for (final reading in gpus.read().entries) {
+        final gib = reading.value;
+        if (reading.key.endsWith('.vramTotal') && gib != null) bytes += (gib * 1073741824).round();
+      }
+    } finally {
+      gpus.close();
+    }
+    return bytes;
   }
 }
 
