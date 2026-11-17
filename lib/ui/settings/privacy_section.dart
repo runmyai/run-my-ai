@@ -3,10 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/prefs.dart';
 import '../../theme.dart';
-import '../buttons.dart';
-import '../welcome.dart' show shareBenchmarksNote;
 
-/// Settings: whether benchmark results may be shared (the same choice as on the welcome screen).
+/// Settings: whether benchmark results and app stats may be shared (the same choice as on the welcome screen).
 class PrivacySection extends ConsumerWidget {
   const PrivacySection({super.key});
 
@@ -15,25 +13,42 @@ class PrivacySection extends ConsumerWidget {
     final c = context.colors;
     final share = ref.watch(prefsProvider.select((p) => p.shareBenchmarks));
     final notifier = ref.read(prefsProvider.notifier);
-    Widget choice(String id, String label, bool on) => OptionPill(
-      key: Key(id),
-      label: label,
-      chosen: share == on,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-      onTap: () => notifier.setShareBenchmarks(on),
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Share benchmark results',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(shareBenchmarksNote, style: TextStyle(fontSize: 13, color: c.textSecondary)),
-        const SizedBox(height: 12),
-        Wrap(spacing: 8, children: [choice('share-on', 'On', true), choice('share-off', 'Off', false)]),
-      ],
+    return InkWell(
+      key: const Key('share-check'),
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => notifier.setShareBenchmarks(!share),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Checkbox(
+            value: share,
+            onChanged: (v) => notifier.setShareBenchmarks(v ?? false),
+            activeColor: c.mainFill,
+            checkColor: c.mainText,
+            side: BorderSide(color: c.buttonBorder, width: 1.5),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Share benchmark results and app stats to help improve Run My AI',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Anonymous, never your chats. You can turn this off anytime in Settings.',
+                    style: TextStyle(fontSize: 13, color: c.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

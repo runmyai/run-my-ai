@@ -22,6 +22,8 @@ import 'package:runmyai/system/firebase.dart';
 import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/settings/feedback_section.dart';
 
+final _refProvider = Provider<Ref>((ref) => ref);
+
 /// Records what would be sent, and answers with [status].
 class _Post {
   _Post([this.status = 200]);
@@ -477,15 +479,50 @@ void main() {
         expect(jsonEncode(post.bodies.last), isNot(contains(dir.path)));
       });
 
-      test('a failed send is only logged', () async {
+      test('a failed send is tried once more, then dropped quietly', () async {
+        final failing = _Post(503);
         final container = ProviderContainer(
           overrides: [
             storageProvider.overrideWithValue(Storage(dir)),
-            firestoreProvider.overrideWithValue(Firestore(post: _Post(503).call)),
+            firestoreProvider.overrideWithValue(Firestore(post: failing.call)),
+            benchmarkSharerProvider.overrideWith((ref) => BenchmarkSharer(ref, retryAfter: Duration.zero)),
           ],
         );
         addTearDown(container.dispose);
         await container.read(benchmarkSharerProvider).share(_result(), file: _file, kvCache: 'q8_0');
+        expect(failing.bodies, hasLength(2));
+      });
+
+      test('a send that works on the second try is sent twice in all, and sharing turned off meanwhile stops it', () async {
+        var calls = 0;
+        final container = ProviderContainer(
+          overrides: [
+            storageProvider.overrideWithValue(Storage(dir)),
+            firestoreProvider.overrideWithValue(
+              Firestore(
+                post: (url, body) async {
+                  calls++;
+                  return (calls == 1 ? 503 : 200, '{}');
+                },
+              ),
+            ),
+            benchmarkSharerProvider.overrideWith((ref) => BenchmarkSharer(ref, retryAfter: Duration.zero)),
+          ],
+        );
+        addTearDown(container.dispose);
+        await container.read(benchmarkSharerProvider).share(_result(), file: _file, kvCache: 'q8_0');
+        expect(calls, 2);
+
+        calls = 0;
+        final sharer = BenchmarkSharer(
+          container.read(_refProvider),
+          retryAfter: const Duration(milliseconds: 50),
+        );
+        final running = sharer.share(_result(), file: _file, kvCache: 'q8_0');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        container.read(prefsProvider.notifier).setShareBenchmarks(false);
+        await running;
+        expect(calls, 1, reason: 'the retry saw that sharing was turned off');
       });
     });
   });

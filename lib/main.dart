@@ -8,6 +8,7 @@ import 'backend/engine_backend.dart';
 import 'data/chat_store.dart';
 import 'data/storage.dart';
 import 'dev/screenshot.dart';
+import 'state/app_stats.dart';
 import 'state/prefs.dart';
 import 'state/providers.dart';
 import 'state/section.dart';
@@ -67,6 +68,7 @@ class RunMyAiApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(appStatsProvider);
     return RepaintBoundary(
       key: screenshotKey,
       child: MaterialApp(
