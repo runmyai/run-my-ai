@@ -18,6 +18,7 @@ import 'serve_panel.dart';
 import 'shortcuts.dart';
 import 'sidebar.dart';
 import 'title_bar.dart';
+import 'update_page.dart';
 
 /// The whole window: the sidebar on the left, the chosen section on the right, and no system title bar.
 class Shell extends ConsumerWidget {
@@ -123,6 +124,7 @@ class _PageTopRow extends StatelessWidget {
               else
                 const Spacer(),
               if (showPicker) const Padding(padding: EdgeInsets.only(right: 12), child: FindBar()),
+              const UpdateButton(),
               const Padding(padding: EdgeInsets.only(right: 8), child: ServeButton()),
               const Padding(padding: EdgeInsets.only(right: 8), child: _Bell()),
               if (!isMacLook) const WindowButtons() else const SizedBox(width: 8),

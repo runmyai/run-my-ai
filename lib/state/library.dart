@@ -13,6 +13,7 @@ import 'chats.dart';
 import 'profiles.dart';
 import 'providers.dart';
 import 'tuning_runs.dart';
+import 'updates.dart';
 
 /// Where a model's download is.
 enum DownloadPhase { queued, downloading, paused, checking, failed }
@@ -225,6 +226,10 @@ class LibraryNotifier extends Notifier<LibraryState> {
           bytesPerSecond: p.bytesPerSecond,
         ),
       ),
+      // kept, so looking for model updates does not hash the file again
+      onVerified: (path, f) {
+        if (f.sha256 != null) ref.read(fileHashesProvider).remember(path, f.sha256!);
+      },
     );
     _stopActive = download.stop;
     return download.run();

@@ -193,6 +193,7 @@ class ModelDownload {
     this.partBytes = 128 << 20,
     this.free = freeBytes,
     this.onProgress,
+    this.onVerified,
     this.retryDelay = const Duration(seconds: 1),
   }) : server = server ?? huggingFace;
 
@@ -208,6 +209,9 @@ class ModelDownload {
   /// Free bytes on a drive (tests give their own).
   final Future<int?> Function(String path) free;
   final void Function(DownloadProgress progress)? onProgress;
+
+  /// Called for each file that passed its check and got its name, with its path (updates keep its checksum from it).
+  final void Function(String path, RemoteFile file)? onVerified;
 
   /// The wait before the first retry of a part; each retry waits twice as long.
   final Duration retryDelay;
@@ -329,6 +333,7 @@ class ModelDownload {
     if (whole.existsSync()) whole.deleteSync();
     part.renameSync(whole.path);
     recordFile.deleteSync();
+    onVerified?.call(whole.path, f);
     return true;
   }
 
