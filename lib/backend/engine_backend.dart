@@ -435,7 +435,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     EngineRun run, {
     required int port,
     required String alias,
-    String? apiKey,
+    required String apiKey,
     void Function(EngineFailure ended)? onEnded,
   }) async {
     await stopEngine();
@@ -980,7 +980,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   Future<EngineProcess> _start(
     _LocalModel local,
     EngineRun run, {
-    ({int port, String alias, String? apiKey})? serve,
+    ({int port, String alias, String apiKey})? serve,
   }) async {
     final prefs = _storage.readPrefs();
     final folder = _engineFolder;
@@ -993,6 +993,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     // the table's row as the autotuner's card list now picks it (the first start may have shown another)
     final flags = EngineFlags.parse(_flagsFor(local)[run.contextLength] ?? run.flags);
     final port = serve?.port ?? await EngineProcess.freePort();
+    final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
     final EngineProcess engine;
     try {
       engine = await EngineProcess.start(
@@ -1015,14 +1016,14 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           '127.0.0.1',
           '--port',
           '$port',
-          if (serve != null) ...['--alias', serve.alias, if (serve.apiKey != null) ...['--api-key', serve.apiKey!]],
+          ...?hosting?.arguments,
         ],
         modelId: local.model.files.first.id,
         contextLength: run.contextLength,
         port: port,
         // (Never the engine a chat would reuse: it answers only to its key.)
         startedWith: serve == null ? startedWith(run) : 'serve\n${startedWith(run)}',
-        environment: flags.environment,
+        environment: hosting?.environment ?? flags.environment,
         workingDirectory: folder,
         memoryCapBytes: _windowsJobCap(run.memoryCapGiB, tuned),
         onOutput: _logChanged.changed,
@@ -1040,6 +1041,15 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     }
     return engine;
   }
+
+  /// What hosting adds to the engine's start: the model name other programs use, the counters the hosting screen reads
+  /// (GET /metrics), and the key in the engine's environment (LLAMA_API_KEY), not on its command line, so other
+  /// programs on this computer cannot read it from the process list.
+  static ({List<String> arguments, Map<String, String> environment}) serveSetup({
+    required String alias,
+    required String apiKey,
+    Map<String, String> environment = const {},
+  }) => (arguments: ['--alias', alias, '--metrics'], environment: {...environment, 'LLAMA_API_KEY': apiKey});
 
   /// Keeps the engine within headroom of RAM (default: all the RAM but 1 GB), so running out of memory ends only the
   /// engine.
