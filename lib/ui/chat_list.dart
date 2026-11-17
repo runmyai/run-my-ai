@@ -13,6 +13,7 @@ import '../state/archive_view.dart';
 import '../state/chats.dart';
 import '../state/delete_guard.dart';
 import '../state/folds.dart';
+import '../state/providers.dart';
 import '../state/section.dart';
 import '../state/today.dart';
 import '../theme.dart';
@@ -283,14 +284,18 @@ class _ChatListState extends ConsumerState<ChatList> {
       ]);
     }
 
+    final note = UnreadableNote(ref.watch(chatStoreProvider).unreadable);
     if (chats.isEmpty) {
       return Align(
         alignment: Alignment.topLeft,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
-          child: Text(state.kind == ChatKind.code ? 'Your code chats will show here.' : 'Your chats will show here.',
-              style: TextStyle(fontSize: 13, color: c.sideMuted)),
-        ),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
+            child: Text(state.kind == ChatKind.code ? 'Your code chats will show here.' : 'Your chats will show here.',
+                style: TextStyle(fontSize: 13, color: c.sideMuted)),
+          ),
+          note,
+        ]),
       );
     }
 
@@ -411,11 +416,34 @@ class _ChatListState extends ConsumerState<ChatList> {
         // Keeps each day's rows (and their state: hover, renaming) with that day when the list changes.
         findChildIndexCallback: (key) => key is ValueKey<String> ? place[key.value] : null,
       ),
+      SliverToBoxAdapter(child: note),
     ]);
   }
 }
 
 const _rowMotion = Duration(milliseconds: 150);
+
+/// A quiet line at the end of the list when chat files could not be read ("1 chat file could not be read"); hovering
+/// it names the files. Nothing when there are none.
+class UnreadableNote extends StatelessWidget {
+  const UnreadableNote(this.files, {super.key});
+
+  final List<String> files;
+
+  @override
+  Widget build(BuildContext context) {
+    if (files.isEmpty) return const SizedBox.shrink();
+    final text = files.length == 1 ? '1 chat file could not be read' : '${files.length} chat files could not be read';
+    return Tooltip(
+      message: files.join('\n'),
+      triggerMode: TooltipTriggerMode.tap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+        child: Text(text, key: const Key('unreadable-note'), style: TextStyle(fontSize: 11, color: context.colors.sideMuted)),
+      ),
+    );
+  }
+}
 
 /// A row or group that grows from nothing and fades in when [open] as it is first built; otherwise just [child].
 class _Opening extends StatefulWidget {
