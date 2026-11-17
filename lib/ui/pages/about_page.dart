@@ -39,6 +39,14 @@ const authorLinks = [
   ('LinkedIn', 'https://www.linkedin.com/in/harinmani/'),
 ];
 
+/// The co-founder's card: no photo (a plain person icon instead).
+const grawnchName = 'Grawnch';
+const grawnchQuote = 'Make no mistakes, run the benchmark again';
+const grawnchBio =
+    'Math and systems tinkerer obsessed with extreme model compression and optimization. '
+    'Built the Grawnch quants to make frontier models actually runnable on normal hardware.';
+const grawnchLinks = [('Hugging Face', 'https://huggingface.co/Grawnch')];
+
 /// One licence: whose it is and its text.
 typedef Licence = ({String name, String text});
 
@@ -108,7 +116,22 @@ class _AboutPageState extends ConsumerState<AboutPage> {
           style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500, color: c.text),
         ),
         const SizedBox(height: 24),
-        const _AuthorCard(),
+        const _AuthorCard(
+          id: 'about-author',
+          name: authorName,
+          quote: authorQuote,
+          bio: authorBio,
+          links: authorLinks,
+          photo: 'assets/author/author.png',
+        ),
+        const SizedBox(height: 12),
+        const _AuthorCard(
+          id: 'about-grawnch',
+          name: grawnchName,
+          quote: grawnchQuote,
+          bio: grawnchBio,
+          links: grawnchLinks,
+        ),
         const SizedBox(height: 28),
         const _Heading('Versions'),
         const SizedBox(height: 12),
@@ -169,9 +192,24 @@ class _Paragraph extends StatelessWidget {
       Text(text, style: TextStyle(fontSize: 13.5, height: 1.45, color: context.colors.textSecondary));
 }
 
-/// The author: his round photo, name, a quote, a few words about him and links that open in the browser.
+/// One of the makers: a round photo (or a plain person icon), the name, a quote, a few words and links that open in
+/// the browser.
 class _AuthorCard extends StatelessWidget {
-  const _AuthorCard();
+  const _AuthorCard({
+    required this.id,
+    required this.name,
+    required this.quote,
+    required this.bio,
+    required this.links,
+    this.photo,
+  });
+
+  final String id;
+  final String name;
+  final String quote;
+  final String bio;
+  final List<(String, String)> links;
+  final String? photo;
 
   static const _photo = 96.0;
 
@@ -179,7 +217,7 @@ class _AuthorCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     return DecoratedBox(
-      key: const Key('about-author'),
+      key: Key(id),
       decoration: BoxDecoration(
         color: c.inputFill,
         border: Border.all(color: c.border),
@@ -196,15 +234,24 @@ class _AuthorCard extends StatelessWidget {
                 border: Border.all(color: c.border, width: 2),
               ),
               child: ClipOval(
-                child: Image.asset(
-                  'assets/author/author.png',
-                  key: const Key('about-author-photo'),
-                  width: _photo,
-                  height: _photo,
-                  fit: BoxFit.cover,
-                  filterQuality: FilterQuality.medium,
-                  semanticLabel: authorName,
-                ),
+                child: photo == null
+                    ? SizedBox(
+                        width: _photo,
+                        height: _photo,
+                        child: ColoredBox(
+                          color: c.page,
+                          child: Icon(Icons.person, size: _photo * 0.55, color: c.textMuted, semanticLabel: name),
+                        ),
+                      )
+                    : Image.asset(
+                        photo!,
+                        key: Key('$id-photo'),
+                        width: _photo,
+                        height: _photo,
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.medium,
+                        semanticLabel: name,
+                      ),
               ),
             ),
             const SizedBox(width: 22),
@@ -213,7 +260,7 @@ class _AuthorCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    authorName,
+                    name,
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: c.text),
                   ),
                   const SizedBox(height: 10),
@@ -223,21 +270,21 @@ class _AuthorCard extends StatelessWidget {
                       border: Border(left: BorderSide(color: c.textMuted, width: 2)),
                     ),
                     child: Text(
-                      '“$authorQuote”',
+                      '“$quote”',
                       style: TextStyle(fontSize: 14, height: 1.4, fontWeight: FontWeight.w500, color: c.text),
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const _Paragraph(authorBio),
+                  _Paragraph(bio),
                   const SizedBox(height: 14),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      for (final (name, url) in authorLinks)
+                      for (final (label, url) in links)
                         AppButton(
-                          key: Key('about-link-$name'),
-                          label: name,
+                          key: Key('about-link-$label'),
+                          label: label,
                           trailingIcon: Icons.north_east,
                           dense: true,
                           onTap: () => openUrl(url),

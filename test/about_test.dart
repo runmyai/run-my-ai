@@ -84,10 +84,10 @@ void main() {
       expect(File('assets/author/author.png').existsSync(), isTrue);
       expect(File('pubspec.yaml').readAsStringSync(), contains('- assets/author/'));
       expect([for (final (name, _) in authorLinks) name], ['GitHub', 'LinkedIn']);
-      expect([for (final (_, url) in authorLinks) url], [
-        'https://github.com/HarinManiK',
-        'https://www.linkedin.com/in/harinmani/',
-      ]);
+      expect(
+        [for (final (_, url) in authorLinks) url],
+        ['https://github.com/HarinManiK', 'https://www.linkedin.com/in/harinmani/'],
+      );
     });
   });
 
@@ -135,6 +135,9 @@ void main() {
       expect(find.text(authorBio), findsOneWidget);
       expect(find.byKey(const Key('about-link-GitHub')), findsOneWidget);
       expect(find.byKey(const Key('about-link-LinkedIn')), findsOneWidget);
+      expect(find.text(grawnchName), findsOneWidget);
+      expect(find.text('“$grawnchQuote”'), findsOneWidget);
+      expect(find.byKey(const Key('about-link-Hugging Face')), findsOneWidget);
       expect(tester.widget<SelectableText>(find.byKey(const Key('about-app-version'))).data, appVersion);
       expect(
         tester.widget<SelectableText>(find.byKey(const Key('about-engine-version'))).data,
