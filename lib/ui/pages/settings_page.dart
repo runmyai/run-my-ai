@@ -67,27 +67,30 @@ class _SettingsList extends ConsumerWidget {
         ),
         const SizedBox(height: 12),
         if (!devBuild)
-          _Menu(
-            id: 'theme-mode',
-            label: switch (prefs.theme) {
-              ThemeMode.system => 'System',
-              ThemeMode.light => 'Light',
-              ThemeMode.dark => 'Dark',
-            },
-            items: [
-              for (final (mode, label) in const [
-                (ThemeMode.system, 'System'),
-                (ThemeMode.light, 'Light'),
-                (ThemeMode.dark, 'Dark'),
-              ])
-                (
-                  id: 'theme-mode-${mode.name}',
-                  label: label,
-                  chosen: prefs.theme == mode,
-                  onTap: () =>
-                      notifier.setTheme(mode, darkStyle: _families.first.dark, lightStyle: _families.first.light),
-                ),
-            ],
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _Menu(
+              id: 'theme-mode',
+              label: switch (prefs.theme) {
+                ThemeMode.system => 'System',
+                ThemeMode.light => 'Light',
+                ThemeMode.dark => 'Dark',
+              },
+              items: [
+                for (final (mode, label) in const [
+                  (ThemeMode.system, 'System'),
+                  (ThemeMode.light, 'Light'),
+                  (ThemeMode.dark, 'Dark'),
+                ])
+                  (
+                    id: 'theme-mode-${mode.name}',
+                    label: label,
+                    chosen: prefs.theme == mode,
+                    onTap: () =>
+                        notifier.setTheme(mode, darkStyle: _families.first.dark, lightStyle: _families.first.light),
+                  ),
+              ],
+            ),
           )
         else
           // Two menus: the family, then its light or dark side (switching the family keeps the side).
