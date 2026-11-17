@@ -13,9 +13,11 @@ import '../../search/chat_search.dart';
 import '../../state/benchmark.dart';
 import '../../state/chats.dart';
 import '../../state/drafts.dart';
+import '../../state/first_run.dart';
 import '../../state/library.dart';
 import '../../state/motion.dart';
 import '../../state/prefs.dart';
+import '../../state/providers.dart';
 import '../../state/queue.dart';
 import '../../state/search.dart';
 import '../../state/section.dart';
@@ -346,10 +348,11 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
     final writingShown = replyingPath.isNotEmpty && messages.lastOrNull?.node == replyingPath.last.node;
     final loadingModel = ref.watch(chatsProvider.select((s) => s.loadingModel));
     final model = ref.watch(shownModelProvider);
+    final firstMessage = !ref.watch(firstRunProvider.select((f) => f.firstMessageSent));
     // Why Edit and Regenerate cannot be pressed now, in the words of the Send button's tooltip.
     final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
     final blocked = ref.watch(chatsProvider.select((s) => _sendBlock(s, benchmarking))) ??
-        (model == null ? 'Download a model from the Store to start chatting.' : null);
+        (model == null ? noModelText : null);
     final editedNode = ref.watch(chatsProvider.select((s) => s.editing?.chatId == s.openId ? s.editing?.node : null));
     final latestReply = messages.lastIndexWhere((m) => m.role == Role.assistant);
     final motion = ref.watch(motionProvider);
@@ -479,7 +482,7 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
                           ),
                         ),
                       Text(
-                        'Start a new chat',
+                        model == null ? noModelText : (firstMessage ? sendToLoad(model) : 'Start a new chat'),
                         style: TextStyle(fontSize: 24, fontWeight: FontWeight.w500, color: c.text),
                       ),
                     ],
@@ -1081,6 +1084,12 @@ ChatMessage? _answers(List<ChatMessage> messages, int index) =>
 /// Moves to the next bookmark of the open chat ([step] 1) or back (-1), when a chat page is on screen.
 void stepBookmark(int step) => _ChatPageState._shown?._stepBookmark(step);
 
+/// What the chat says while no model has been downloaded.
+const noModelText = 'Download a model from the Store to start';
+
+/// What the chat says before the very first message: sending it loads the model.
+String sendToLoad(CatalogEntry model) => 'Send a message to load ${model.model.name}';
+
 /// Why nothing can be sent now: a benchmark is running, or a reply is being written (in any chat); null when
 /// something can. The words of the Send button's tooltip ([hereToo] false: not for the reply of the open chat, whose
 /// Send button is the Stop button).
@@ -1579,6 +1588,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
     // Emptied first, so the draft it came from (a new chat's, which becomes this chat) is gone too.
     _text.clear();
     ref.read(chatsProvider.notifier).send(text, model.file);
+    ref.read(firstRunProvider.notifier).firstMessageDone();
     _focus.requestFocus();
   }
 
@@ -1619,6 +1629,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
       }
     });
     final model = ref.watch(shownModelProvider);
+    final firstMessage = !ref.watch(firstRunProvider.select((f) => f.firstMessageSent));
     final chats = ref.watch(chatsProvider);
     final replyingHere = chats.replyingId != null && chats.replyingId == chats.openId;
     final replyingElsewhere = chats.replyingId != null && !replyingHere;
@@ -1627,7 +1638,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
     // Why Send cannot be pressed now: the engine is busy with something else.
     final String? busy = _sendBlock(chats, benchmarking, hereToo: false);
     final String? hint = model == null
-        ? 'Download a model from the Store to start chatting.'
+        ? noModelText
         : benchmarking
         ? 'A benchmark is running.'
         : replyingElsewhere
@@ -1734,7 +1745,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
                     style: TextStyle(fontSize: 15, color: c.text),
                     cursorColor: c.text,
                     decoration: InputDecoration(
-                      hintText: 'Type a message',
+                      hintText: model != null && firstMessage ? sendToLoad(model) : 'Type a message',
                       hintStyle: TextStyle(color: c.textMuted),
                       border: InputBorder.none,
                       isDense: true,

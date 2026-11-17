@@ -27,6 +27,7 @@ class PrefsData {
     this.engineFolder,
     this.speedHighlighted = false,
     this.stateLimitGiB = defaultStateLimitGiB,
+    this.shareBenchmarks = true,
   });
 
   static const defaultStateLimitGiB = 10.0;
@@ -57,6 +58,9 @@ class PrefsData {
 
   /// The most the chats' saved states may take on the disk.
   final double stateLimitGiB;
+
+  /// The benchmark numbers (the hardware and the speeds, never a chat) may be shared.
+  final bool shareBenchmarks;
 }
 
 /// Where the window was when it was last moved or resized: its normal size and place (also kept
@@ -83,6 +87,7 @@ class WindowData {
 ///   window.json        the window's size, place and maximized state
 ///   library.json       downloaded model files and the picked one
 ///   folds.json         the chat list's folded groups, by section
+///   first_run.json     which first-start screens and hints have been seen
 /// The chats are in chats.db, next to them (lib/data/chat_db.dart).
 class Storage {
   Storage(this.dir) {
@@ -113,6 +118,7 @@ class Storage {
       engineFolder: json['engineFolder'] as String?,
       speedHighlighted: json['speedHighlighted'] as bool? ?? false,
       stateLimitGiB: (json['stateLimitGiB'] as num?)?.toDouble() ?? PrefsData.defaultStateLimitGiB,
+      shareBenchmarks: json['shareBenchmarks'] as bool? ?? true,
     );
   }
 
@@ -127,6 +133,7 @@ class Storage {
     'engineFolder': data.engineFolder,
     'speedHighlighted': data.speedHighlighted,
     'stateLimitGiB': data.stateLimitGiB,
+    'shareBenchmarks': data.shareBenchmarks,
   });
 
   WindowData? readWindow() {
@@ -193,6 +200,11 @@ class Storage {
   }
 
   void writeDrafts(Map<String, String> drafts) => _writeJson(File(_path('drafts.json')), drafts);
+
+  /// Which first-start screens have been seen, as written by [writeFirstRun].
+  Map<String, Object?> readFirstRun() => _readJson(File(_path('first_run.json'))) ?? const {};
+
+  void writeFirstRun(Map<String, Object?> seen) => _writeJson(File(_path('first_run.json')), seen);
 
   /// Each model's engine profiles, as written by [writeProfiles].
   Map<String, Object?> readProfiles() => _readJson(File(_path('profiles.json'))) ?? const {};

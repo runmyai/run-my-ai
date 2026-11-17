@@ -15,6 +15,7 @@ import 'theme.dart';
 import 'ui/close_guard.dart';
 import 'ui/shell.dart';
 import 'ui/title_bar.dart';
+import 'ui/welcome.dart';
 import 'window/app_window.dart';
 
 Future<void> main() async {
@@ -94,7 +95,7 @@ class RunMyAiApp extends ConsumerWidget {
             child: WindowShape(child: child!),
           );
         },
-        home: const CloseGuard(child: Shell()),
+        home: const CloseGuard(child: FirstRunGate(child: Shell())),
       ),
     );
   }
