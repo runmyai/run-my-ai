@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,6 +13,7 @@ import 'state/providers.dart';
 import 'state/section.dart';
 import 'system/appearance.dart';
 import 'system/chime.dart';
+import 'system/folders.dart';
 import 'theme.dart';
 import 'ui/close_guard.dart';
 import 'ui/shell.dart';
@@ -21,7 +24,7 @@ import 'window/app_window.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final storage = await Storage.open();
-  final (chatStore, _) = await (ChatStore.open(storage.dir, folder: storage.chatsDir), setUpWindow(storage)).wait;
+  final (chatStore, _) = await (ChatStore.open(storage.dir, folder: Directory(FolderSet.load(storage.dir).chats)), setUpWindow(storage)).wait;
   final section = Section.values.where((s) => s.name == forcedSection).firstOrNull;
   final themeMode = switch (forcedTheme) {
     'light' || 'silklight' || 'dusk' => ThemeMode.light,

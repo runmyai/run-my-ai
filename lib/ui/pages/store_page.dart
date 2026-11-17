@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/models.dart';
 import '../../state/library.dart';
 import '../../state/providers.dart';
+import '../../system/folders.dart';
 import '../../theme.dart';
 import '../buttons.dart';
 
@@ -73,7 +74,7 @@ class _ModelCard extends StatelessWidget {
             _Fact('${model.activeParameters} active'),
           ]),
           const SizedBox(height: 12),
-          for (final f in model.files) _FileRow(file: f),
+          for (final f in model.files) _FileRow(file: f, model: model),
         ],
       ),
     );
@@ -96,63 +97,155 @@ class _Fact extends StatelessWidget {
   }
 }
 
-/// One downloadable file: quantization, size, and Download / progress / Downloaded.
+/// One downloadable file: quantization, size, and Download / its download's progress, speed and time left, with
+/// Pause / Resume / Cancel / Checking / Downloaded + Delete.
 class _FileRow extends ConsumerWidget {
-  const _FileRow({required this.file});
+  const _FileRow({required this.file, required this.model});
 
   final ModelFile file;
+  final CatalogModel model;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
-    final library = ref.watch(libraryProvider);
+    final downloaded = ref.watch(libraryProvider.select((l) => l.downloaded.contains(file.id)));
+    final status = ref.watch(libraryProvider.select((l) => l.downloads[file.id]));
+    final folders = ref.watch(foldersProvider);
     final notifier = ref.read(libraryProvider.notifier);
-    final progress = library.progress[file.id];
+    // Delete only removes what is in the models folder; a model read from another folder stays the user's.
+    final deletable = file.repo == null || folders.folderWith(file.parts) == folders.models;
 
-    final Widget action;
-    if (library.downloaded.contains(file.id)) {
-      action = Row(mainAxisSize: MainAxisSize.min, children: [
+    final List<Widget> actions;
+    if (downloaded) {
+      actions = [
         const Icon(Icons.check, size: 16, color: Color(0xFF1D9E75)),
         const SizedBox(width: 4),
         const Text('Downloaded', style: TextStyle(fontSize: 13, color: Color(0xFF1D9E75))),
-        const SizedBox(width: 8),
-        _TextAction(label: 'Delete', onTap: () => notifier.delete(file)),
-      ]);
-    } else if (progress != null) {
-      action = Row(mainAxisSize: MainAxisSize.min, children: [
-        SizedBox(
-          width: 110,
-          child: LinearProgressIndicator(
-            value: progress,
-            minHeight: 5,
-            borderRadius: BorderRadius.circular(3),
-            color: c.text,
-            backgroundColor: c.switchTrack,
+        if (deletable) ...[
+          const SizedBox(width: 8),
+          _TextAction(
+            label: 'Delete',
+            onTap: () async {
+              if (await _confirmDelete(context, model.name, file.sizeBytes) == true) await notifier.delete(file);
+            },
           ),
-        ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 36,
-          child: Text('${(progress * 100).round()} %', style: TextStyle(fontSize: 12, color: c.textSecondary)),
-        ),
-        _TextAction(label: 'Cancel', onTap: () => notifier.cancel(file.id)),
-      ]);
+        ],
+      ];
+    } else if (status == null) {
+      actions = [AppButton(label: 'Download', icon: Icons.download, dense: true, onTap: () => notifier.download(file))];
     } else {
-      action = AppButton(label: 'Download', icon: Icons.download, dense: true, onTap: () => notifier.download(file));
+      actions = [
+        switch (status.phase) {
+          DownloadPhase.downloading => _TextAction(label: 'Pause', onTap: () => notifier.pause(file.id)),
+          DownloadPhase.paused => _TextAction(label: 'Resume', onTap: () => notifier.download(file)),
+          DownloadPhase.failed => _TextAction(
+            label: status.broken ? 'Download again' : 'Resume',
+            onTap: () => notifier.download(file),
+          ),
+          DownloadPhase.queued || DownloadPhase.checking => const SizedBox.shrink(),
+        },
+        if (status.phase != DownloadPhase.checking) ...[
+          const SizedBox(width: 6),
+          _TextAction(label: 'Cancel', onTap: () => notifier.cancel(file.id)),
+        ],
+      ];
     }
 
     return Padding(
       padding: const EdgeInsets.only(top: 6),
-      child: Row(children: [
-        Text(file.quantization, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text)),
-        const SizedBox(width: 8),
-        Text('${(file.sizeBytes / 1e9).round()} GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
-        const Spacer(),
-        action,
-      ]),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                file.quantization,
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text),
+              ),
+              const SizedBox(width: 8),
+              Text('${(file.sizeBytes / 1e9).round()} GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
+              const Spacer(),
+              ...actions,
+            ],
+          ),
+          if (status != null && !downloaded) ...[
+            const SizedBox(height: 8),
+            if (status.phase != DownloadPhase.failed && status.phase != DownloadPhase.queued)
+              LinearProgressIndicator(
+                value: status.phase == DownloadPhase.checking ? null : status.fraction,
+                minHeight: 5,
+                borderRadius: BorderRadius.circular(3),
+                color: c.text,
+                backgroundColor: c.switchTrack,
+              ),
+            const SizedBox(height: 4),
+            Text(
+              _statusLine(status),
+              key: Key('download-status-${file.id}'),
+              style: TextStyle(fontSize: 12, color: c.textSecondary),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
+
+/// What a download's line says under its row.
+String _statusLine(DownloadStatus s) {
+  final percent = '${(s.fraction * 100).floor()} %';
+  switch (s.phase) {
+    case DownloadPhase.queued:
+      return 'Waiting for the download before it';
+    case DownloadPhase.checking:
+      return 'Checking...';
+    case DownloadPhase.paused:
+      return 'Paused · $percent';
+    case DownloadPhase.failed:
+      return s.message ?? 'The download stopped.';
+    case DownloadPhase.downloading:
+      final speed = s.bytesPerSecond, left = s.timeLeft;
+      return [
+        percent,
+        if (speed != null) '${(speed / 1e6).toStringAsFixed(1)} MB/s',
+        if (left != null) '${_duration(left)} left',
+      ].join(' · ');
+  }
+}
+
+String _duration(Duration d) => d.inHours > 0
+    ? '${d.inHours} h ${d.inMinutes % 60} min'
+    : d.inMinutes > 0
+    ? '${d.inMinutes} min'
+    : '${d.inSeconds} s';
+
+/// "Delete (the model)?" with Cancel (chosen when it opens) and Delete.
+Future<bool?> _confirmDelete(BuildContext context, String name, int bytes) => showDialog<bool>(
+  context: context,
+  builder: (context) {
+    final c = context.colors;
+    return AlertDialog(
+      backgroundColor: c.page,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      constraints: const BoxConstraints(maxWidth: 400),
+      content: Text(
+        'Delete $name? Its ${(bytes / 1e9).round()} GB will have to be downloaded again to use it.',
+        style: TextStyle(fontSize: 15, height: 1.5, color: c.text),
+      ),
+      actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      actions: [
+        AppButton(label: 'Cancel', autofocus: true, ringAlways: true, onTap: () => Navigator.pop(context, false)),
+        AppButton(
+          key: const Key('delete-model-confirm'),
+          label: 'Delete',
+          danger: true,
+          onTap: () => Navigator.pop(context, true),
+        ),
+      ],
+    );
+  },
+);
 
 class _TextAction extends StatelessWidget {
   const _TextAction({required this.label, required this.onTap});

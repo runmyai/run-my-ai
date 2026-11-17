@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../backend/engine_backend.dart';
 import '../../dev/dev_build.dart';
 import '../../state/motion.dart';
 import '../../state/prefs.dart';
@@ -14,6 +13,7 @@ import '../buttons.dart';
 import '../context_settings.dart';
 import '../settings/privacy_section.dart';
 import '../menu_panel.dart';
+import '../settings/folders_section.dart';
 import 'about_page.dart';
 
 /// Settings: the theme (System, Light or Dark; the developer's build also has the other theme families, reply motion and
@@ -179,7 +179,7 @@ class _SettingsList extends ConsumerWidget {
         const SizedBox(height: 20),
         const _Headroom(),
         const SizedBox(height: 28),
-        const _EngineFolder(),
+        const FoldersSection(),
         const SizedBox(height: 28),
         const _Context(),
         const SizedBox(height: 28),
@@ -332,65 +332,6 @@ class _Context extends ConsumerWidget {
           Text('Download a model from the Store first.', style: TextStyle(fontSize: 13, color: c.textMuted))
         else
           ContextSettings(entry: entry),
-      ],
-    );
-  }
-}
-
-/// The folder the engine is in. A change applies the next time the engine starts.
-class _EngineFolder extends ConsumerStatefulWidget {
-  const _EngineFolder();
-
-  @override
-  ConsumerState<_EngineFolder> createState() => _EngineFolderState();
-}
-
-class _EngineFolderState extends ConsumerState<_EngineFolder> {
-  late final _text = TextEditingController(
-    text: ref.read(prefsProvider).engineFolder ?? EngineBackend.defaultEngineFolder,
-  );
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Engine folder',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'Where the engine is. A change applies the next time it starts.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          key: const Key('engine-folder'),
-          controller: _text,
-          onChanged: ref.read(prefsProvider.notifier).setEngineFolder,
-          style: TextStyle(fontSize: 13, color: c.text),
-          cursorColor: c.text,
-          decoration: InputDecoration(
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: c.inputBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: c.text.withValues(alpha: 0.35)),
-            ),
-          ),
-        ),
       ],
     );
   }

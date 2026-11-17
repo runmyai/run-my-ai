@@ -28,11 +28,25 @@ enum ModelThinking { none, always, optional }
 
 /// One downloadable file of a model: one quantization.
 class ModelFile {
-  const ModelFile({required this.id, required this.quantization, required this.sizeBytes});
+  const ModelFile({
+    required this.id,
+    required this.quantization,
+    required this.sizeBytes,
+    this.repo,
+    this.parts = const [],
+  });
 
   final String id;
   final String quantization;
   final int sizeBytes;
+
+  /// The Hugging Face repo it is downloaded from ("owner/name"); null for a model that is not downloaded (the
+  /// stand-in).
+  final String? repo;
+
+  /// The files it is made of in [repo], used together from one folder: the weights first (the file the engine loads),
+  /// then its data files.
+  final List<String> parts;
 }
 
 enum Role { user, assistant }
