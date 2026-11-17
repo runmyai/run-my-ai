@@ -82,6 +82,9 @@ void main() {
     addTearDown(container.dispose);
     await tester.pumpWidget(
       UncontrolledProviderScope(
+        // A new scope for each start: one kept from the last start would not flush the new container's providers
+        // before its frame (it registers with its first container only), as the app's one scope does.
+        key: ObjectKey(container),
         container: container,
         child: MaterialApp(
           theme: buildTheme(brightness),
