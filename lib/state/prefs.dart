@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/storage.dart';
+import '../dev/dev_build.dart';
 import 'providers.dart';
 
 class Prefs {
@@ -106,10 +107,11 @@ class PrefsNotifier extends Notifier<Prefs> {
           : ThemeMode.values.where((m) => m.name == saved.theme).firstOrNull ?? ThemeMode.system,
       // ("mist" and "stone" were themes once, now gone: Run My AI Light.)
       // ("pick1" ... were trials for the lights' colours: Run My AI Light.)
-      lightStyle: saved.theme == 'silklight' || saved.theme == 'dusk' ? saved.theme : 'light',
+      // (The shipped app has only Run My AI Light and Dark; the other families are the developer's build's.)
+      lightStyle: devBuild && (saved.theme == 'silklight' || saved.theme == 'dusk') ? saved.theme : 'light',
       // ("dark4" and "dpick1" ... were trials, now gone: Run My AI Dark.)
       darkStyle: switch (saved.theme) {
-        'dark' || 'dark2' || 'dark3' => saved.theme,
+        'dark' || 'dark2' when devBuild => saved.theme,
         _ => 'dark3',
       },
       sidebarHidden: saved.sidebarHidden,

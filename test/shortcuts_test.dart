@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
+import 'package:runmyai/dev/dev_build.dart';
 import 'package:runmyai/state/chats.dart';
 import 'package:runmyai/state/prefs.dart';
 import 'package:runmyai/state/providers.dart';
@@ -78,6 +79,16 @@ void main() {
       expect(Storage(dir).readPrefs().textScale, Prefs.textScales.first);
     });
 
+    test('the shipped app reads any saved theme family back as Run My AI Dark / Light', () {
+      for (final (saved, mode) in [('dark2', ThemeMode.dark), ('dark', ThemeMode.dark), ('silklight', ThemeMode.light), ('dusk', ThemeMode.light)]) {
+        Storage(dir).writePrefs(PrefsData(theme: saved));
+        final again = ProviderContainer(overrides: [storageProvider.overrideWithValue(Storage(dir))]);
+        final p = again.read(prefsProvider);
+        expect((p.theme, p.darkStyle, p.lightStyle), (mode, 'dark3', 'light'), reason: saved);
+        again.dispose();
+      }
+    }, skip: devBuild ? 'the developer\'s build keeps the other families' : false);
+
     test('Dark 2 and 3 are saved as the theme ("dark2", "dark3") and read back; Dark is plain dark', () {
       final prefs = container.read(prefsProvider.notifier);
       for (final style in ['dark2', 'dark3']) {
@@ -89,7 +100,7 @@ void main() {
       }
       prefs.setTheme(ThemeMode.dark);
       expect((Storage(dir).readPrefs().theme, container.read(prefsProvider).darkStyle), ('dark', 'dark'));
-    });
+    }, skip: devBuild ? false : 'the other theme families are the developer\'s build\'s');
 
     test('nothing picked: following the computer, with Run My AI Dark as the dark; the old Dark 4 and dark Pick trials are it too', () {
       expect(
@@ -113,7 +124,7 @@ void main() {
         expect((again.read(prefsProvider).theme, again.read(prefsProvider).lightStyle), (ThemeMode.light, style));
         again.dispose();
       }
-    });
+    }, skip: devBuild ? false : 'the other theme families are the developer\'s build\'s');
 
     test('a saved size is used at start; one between the steps goes to the nearest', () {
       Storage(dir).writePrefs(const PrefsData(textScale: 1.18));
