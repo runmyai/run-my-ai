@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/models.dart';
@@ -121,11 +122,12 @@ class LibraryNotifier extends Notifier<LibraryState> {
     }
     final ids = {for (final f in files) f.id};
     final downloaded = {...state.downloaded.difference(ids), ...found};
-    _update(
-      downloaded: downloaded,
-      downloads: downloads..removeWhere((id, _) => found.contains(id)),
-      picked: state.picked,
-    );
+    downloads.removeWhere((id, _) => found.contains(id));
+    // A picked model whose files are gone: the first one there instead (as after a delete).
+    final picked = ids.contains(state.picked) && !found.contains(state.picked) ? downloaded.firstOrNull : state.picked;
+    // Nothing changed: no new state, so nothing watching the library builds again.
+    if (setEquals(downloaded, state.downloaded) && mapEquals(downloads, state.downloads) && picked == state.picked) return;
+    _update(downloaded: downloaded, downloads: downloads, picked: picked);
   }
 
   /// Downloads [file], or puts it in line behind the one downloading; also continues a paused one.
