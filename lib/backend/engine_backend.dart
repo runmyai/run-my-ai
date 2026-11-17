@@ -172,12 +172,17 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     }
   }();
 
+  static const _tuneVersion = 2;
+
   File get _tuneFile => File('${_storage.dir.path}${Platform.pathSeparator}autotuner.json');
 
-  /// The autotuner's saved result, or null before its first run.
+  /// The autotuner's saved results (the cards, and per model what it measured), or null before its first run; a file
+  /// from an older app is ignored (measured again).
   Map<String, dynamic>? get _savedTune {
     try {
-      return _tuneFile.existsSync() ? jsonDecode(_tuneFile.readAsStringSync()) as Map<String, dynamic> : null;
+      if (!_tuneFile.existsSync()) return null;
+      final decoded = jsonDecode(_tuneFile.readAsStringSync());
+      return decoded is Map<String, dynamic> && decoded['version'] == _tuneVersion ? decoded : null;
     } on Exception {
       return null;
     }
@@ -191,17 +196,36 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return cardsFrom(tune);
   }
 
-  /// What the autotuner measured on this PC without a model (the cards, threads, fast cores, SSD readers): run once,
-  /// kept in autotuner.json.
+  /// What the autotuner measured on this PC for this model (the cards, threads, fast cores, SSD readers at the model's
+  /// expert size): kept in autotuner.json per model, measured again when the model file or the autotuner changes.
   Future<Map<String, dynamic>?> _tuned(String folder, String model) async {
-    final saved = _tuneFile;
     try {
-      if (saved.existsSync()) return jsonDecode(saved.readAsStringSync()) as Map<String, dynamic>;
-      final tool = '$folder/autotuner${Platform.isWindows ? '.exe' : ''}';
-      if (!File(tool).existsSync()) return null;
-      final r = await Process.run(tool, ['--file', model], workingDirectory: folder);
-      final t = jsonDecode((r.stdout as String).trim()) as Map<String, dynamic>;
-      saved.writeAsStringSync(jsonEncode(t));
+      final tool = File('$folder/autotuner${Platform.isWindows ? '.exe' : ''}');
+      if (!tool.existsSync()) return null;
+      final m = File(model).statSync(), a = tool.statSync();
+      final key = '${File(model).uri.pathSegments.last}:${m.size}:${a.size}:${a.modified.millisecondsSinceEpoch}';
+      final store = _savedTune;
+      final models = <String, dynamic>{...?(store?['models'] as Map<String, dynamic>?)};
+      if (models[key] case final Map<String, dynamic> kept) return kept;
+
+      final p = await Process.start(tool.path, ['--file', model], workingDirectory: folder);
+      final out = p.stdout.transform(utf8.decoder).join();
+      unawaited(p.stderr.drain<void>());
+      // a hung autotuner (a broken driver, a stalled disk) is stopped: the engine then starts with the table's values
+      final code = await p.exitCode.timeout(const Duration(seconds: 30), onTimeout: () {
+        p.kill();
+        return -1;
+      });
+      if (code != 0) return null;
+      final t = parseAutotunerJson(await out);
+      if (t == null) return null;
+      models[key] = t;
+      _tuneFile.writeAsStringSync(jsonEncode({
+        'version': _tuneVersion,
+        'gpus': t['gpus'] ?? store?['gpus'] ?? const [],
+        'igpus': t['igpus'] ?? store?['igpus'] ?? const [],
+        'models': models,
+      }));
       return t;
     } on Exception {
       return null;   // the table's values then stand
@@ -845,7 +869,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         startedWith: startedWith(run),
         environment: flags.environment,
         workingDirectory: folder,
-        memoryCapBytes: _windowsJobCap(run.memoryCapGiB),
+        memoryCapBytes: _windowsJobCap(run.memoryCapGiB, tuned),
         onOutput: _logChanged.changed,
       );
       _lastEngine = engine;
@@ -877,13 +901,16 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// The Windows job's memory limit that leaves [headroomGiB] of RAM free (default 1 GB), as [_memoryCap] does on Linux:
   /// all the RAM but the headroom, at least 4 GiB and at most all but 0.5 GiB. Windows counts what a program puts in the
   /// graphics card's memory against the job's limit too, and the engine fills the card, so the job also gets the cards'
-  /// video memory: the headroom then stays free in RAM.
-  /// shortcut: NVIDIA cards only (their memory read through NVML); with other cards their video memory comes out of the RAM.
-  static int? _windowsJobCap(double? headroomGiB) {
+  /// video memory: the headroom then stays free in RAM. The cards are the autotuner's (every discrete card, any make;
+  /// built-in GPUs share the RAM and are listed apart), else NVIDIA's read through NVML.
+  static int? _windowsJobCap(double? headroomGiB, Map<String, dynamic>? tuned) {
     if (!Platform.isWindows) return null;
     final totalGiB = Win32Metrics().memory()?.totalGiB;
     if (totalGiB == null) return null;
     var bytes = ((totalGiB - (headroomGiB ?? 1.0)).clamp(4.0, totalGiB - 0.5) * 1073741824).round();
+    if (tuned?['gpus'] case final List cards when cards.isNotEmpty) {
+      return bytes + cards.fold<int>(0, (sum, g) => sum + ((g as Map)['mib'] as int)) * 1048576;
+    }
     final gpus = NvmlReader.open();
     if (gpus == null) return bytes;
     try {

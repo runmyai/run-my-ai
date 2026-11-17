@@ -48,4 +48,13 @@ void main() {
     expect(needsCuda12('8.6, 615.71.09\n6.1, 615.71.09\n'), true);
     expect(needsCuda12('unreadable'), true);
   });
+
+  test("the autotuner's result is its last JSON line; driver lines and broken output are ignored", () {
+    const noisy = 'ggml_vulkan: Found 1 Vulkan devices:\n{"threads": 6, "io_threads": 4}\n';
+    expect(parseAutotunerJson(noisy), {'threads': 6, 'io_threads': 4});
+    expect(parseAutotunerJson('{"threads": 6}\n{"threads": 8}\n'), {'threads': 8});
+    expect(parseAutotunerJson('not json at all\n'), isNull);
+    expect(parseAutotunerJson('{"threads": 6\n'), isNull);   // cut off
+    expect(parseAutotunerJson('{"gpus": []}\n'), isNull);    // no thread count
+  });
 }

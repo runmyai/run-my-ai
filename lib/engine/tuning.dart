@@ -1,4 +1,20 @@
+import 'dart:convert';
 import 'dart:math';
+
+/// The autotuner's result: the last JSON line it printed (a driver may print its own lines before it), or null.
+Map<String, dynamic>? parseAutotunerJson(String stdout) {
+  for (final raw in const LineSplitter().convert(stdout).reversed) {
+    final line = raw.trim();
+    if (!line.startsWith('{') || !line.endsWith('}')) continue;
+    try {
+      final decoded = jsonDecode(line);
+      if (decoded is Map<String, dynamic> && decoded['threads'] is int) return decoded;
+    } on FormatException {
+      continue;
+    }
+  }
+  return null;
+}
 
 /// The table's command with the measured settings put in: -t, the fast cores, the SSD readers.
 List<String> withTuning(List<String> args, Map<String, dynamic>? t) {
