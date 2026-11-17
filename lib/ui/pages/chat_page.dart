@@ -21,6 +21,7 @@ import '../../state/providers.dart';
 import '../../state/queue.dart';
 import '../../state/search.dart';
 import '../../state/section.dart';
+import '../../state/serve.dart';
 import '../../theme.dart';
 import '../buttons.dart';
 import '../folded_text.dart';
@@ -351,7 +352,8 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
     final firstMessage = !ref.watch(firstRunProvider.select((f) => f.firstMessageSent));
     // Why Edit and Regenerate cannot be pressed now, in the words of the Send button's tooltip.
     final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
-    final blocked = ref.watch(chatsProvider.select((s) => _sendBlock(s, benchmarking))) ??
+    final hosting = ref.watch(serveProvider.select((s) => s.hosting));
+    final blocked = ref.watch(chatsProvider.select((s) => _sendBlock(s, benchmarking, hosting: hosting))) ??
         (model == null ? noModelText : null);
     final editedNode = ref.watch(chatsProvider.select((s) => s.editing?.chatId == s.openId ? s.editing?.node : null));
     final latestReply = messages.lastIndexWhere((m) => m.role == Role.assistant);
@@ -1090,10 +1092,13 @@ const noModelText = 'Download a model from the Store to start';
 /// What the chat says before the very first message: sending it loads the model.
 String sendToLoad(CatalogEntry model) => 'Send a message to load ${model.model.name}';
 
+const _hostingHint = 'Stop hosting to chat here';
+
 /// Why nothing can be sent now: a benchmark is running, or a reply is being written (in any chat); null when
 /// something can. The words of the Send button's tooltip ([hereToo] false: not for the reply of the open chat, whose
 /// Send button is the Stop button).
-String? _sendBlock(ChatsState chats, bool benchmarking, {bool hereToo = true}) {
+String? _sendBlock(ChatsState chats, bool benchmarking, {bool hereToo = true, bool hosting = false}) {
+  if (hosting) return _hostingHint;
   if (benchmarking) return 'A benchmark is running.';
   final id = chats.replyingId;
   if (id == null || (!hereToo && id == chats.openId)) return null;
@@ -1572,6 +1577,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
     final chats = ref.read(chatsProvider);
     final text = _text.text;
     if (model == null || chats.replyingId != null || ref.read(benchmarkProvider).running) return;
+    if (ref.read(serveProvider).hosting) return;
     if (chats.editing != null && chats.editing!.chatId == chats.openId) {
       // The new version of the message being edited (the box returns to its draft once it is sent).
       if (text.trim().isNotEmpty) ref.read(chatsProvider.notifier).sendEdit(text, model.file);
@@ -1636,9 +1642,12 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
 
     final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
     // Why Send cannot be pressed now: the engine is busy with something else.
-    final String? busy = _sendBlock(chats, benchmarking, hereToo: false);
+    final hosting = ref.watch(serveProvider.select((s) => s.hosting));
+    final String? busy = _sendBlock(chats, benchmarking, hereToo: false, hosting: hosting);
     final String? hint = model == null
         ? noModelText
+        : hosting
+        ? _hostingHint
         : benchmarking
         ? 'A benchmark is running.'
         : replyingElsewhere
@@ -1657,7 +1666,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
           _QueueRows(
             chatId: chats.openId!,
             queue: queue,
-            canSend: model != null && chats.replyingId == null && !benchmarking,
+            canSend: model != null && chats.replyingId == null && !benchmarking && !hosting,
             onSendNext: () => ref.read(chatsProvider.notifier).sendQueued(model!.file),
             onEdit: (message) => _editQueued(chats.openId!, message),
           ),
@@ -1913,7 +1922,8 @@ class _EngineFailureCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
     // (Writing the reply again starts the engine, which a benchmark has.)
-    final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
+    final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running)) ||
+        ref.watch(serveProvider.select((s) => s.hosting));
     return Container(
       key: const Key('engine-failure'),
       width: double.infinity,

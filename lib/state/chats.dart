@@ -16,6 +16,7 @@ import 'library.dart';
 import 'providers.dart';
 import 'queue.dart';
 import 'section.dart';
+import 'serve.dart';
 import 'thinking.dart';
 
 /// The speed shown under a chat's last reply: while it is written, or its average once [done].
@@ -354,8 +355,9 @@ class ChatsNotifier extends Notifier<ChatsState> {
     _saveReply(chat, chat.messages.last.asStopped(thinkingMillis: _thinkingMillis()));
   }
 
-  /// Whether a benchmark is running: it owns the engine, so no reply may start or swap it.
-  bool get _benchmarking => ref.read(benchmarkProvider).running;
+  /// Whether a benchmark is running or the model is hosted for other programs: either owns the engine, so no reply
+  /// may start or swap it.
+  bool get _benchmarking => ref.read(benchmarkProvider).running || ref.read(serveProvider).hosting;
 
   /// Sends [text] in the open chat (a new chat if none is open). Switching chats does not stop the reply.
   void send(String text, ModelFile model) {

@@ -53,7 +53,7 @@ class _LocalModel {
 
 /// The real engine: TokenWing's llama-server, started directly by the app. One model is loaded at a time: the first
 /// message loads it, a message for another model swaps it.
-class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsight {
+class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsight, ServeControl {
   EngineBackend(this._storage);
 
   final Storage _storage;
@@ -327,6 +327,47 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       // Stopped while it loaded: nothing went wrong.
     }
   }
+
+  @override
+  Future<void> startServing(
+    ModelFile file,
+    EngineRun run, {
+    required int port,
+    required String alias,
+    String? apiKey,
+    void Function(EngineFailure ended)? onEnded,
+  }) async {
+    await stopEngine();
+    final stops = _stops;
+    try {
+      final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, port);
+      await socket.close();
+    } on SocketException {
+      throw PortInUse(port);
+    }
+    final id = file.id;
+    _engineState.value = EngineState(EnginePhase.loading, modelId: id, run: run);
+    try {
+      final engine = await _start(_local(file), run, serve: (port: port, alias: alias, apiKey: apiKey));
+      if (stops != _stops) {
+        await engine.stop();
+        throw const EngineStopped();
+      }
+      _engine = engine;
+      _engineState.value = EngineState(EnginePhase.ready, modelId: id, run: run);
+      unawaited(engine.exited.then((_) {
+        if (identical(_engine, engine)) _engineState.value = const EngineState(EnginePhase.stopped);
+        onEnded?.call(EngineFailure('The engine stopped.', log: engine.lastLines(4)));
+      }));
+    } on Exception {
+      _engineState.value = const EngineState(EnginePhase.stopped);
+      if (stops != _stops) throw const EngineStopped();
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> stopServing() => stopEngine();
 
   @override
   Future<void> eraseChatState(String chatId) async {
@@ -830,7 +871,12 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     }();
   }
 
-  Future<EngineProcess> _start(_LocalModel local, EngineRun run) async {
+  /// Starts the engine for [local]. [serve]: for other programs instead of the app's chats (see [startServing]).
+  Future<EngineProcess> _start(
+    _LocalModel local,
+    EngineRun run, {
+    ({int port, String alias, String? apiKey})? serve,
+  }) async {
     final prefs = _storage.readPrefs();
     final folder = _engineFolder;
     final states = _activeStateFolder;
@@ -841,7 +887,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final tuned = await _tuned(folder, _modelPath(local));
     // the table's row as the autotuner's card list now picks it (the first start may have shown another)
     final flags = EngineFlags.parse(_flagsFor(local)[run.contextLength] ?? run.flags);
-    final port = await EngineProcess.freePort();
+    final port = serve?.port ?? await EngineProcess.freePort();
     final EngineProcess engine;
     try {
       engine = await EngineProcess.start(
@@ -863,11 +909,13 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           '127.0.0.1',
           '--port',
           '$port',
+          if (serve != null) ...['--alias', serve.alias, if (serve.apiKey != null) ...['--api-key', serve.apiKey!]],
         ],
         modelId: local.model.files.first.id,
         contextLength: run.contextLength,
         port: port,
-        startedWith: startedWith(run),
+        // (Never the engine a chat would reuse: it answers only to its key.)
+        startedWith: serve == null ? startedWith(run) : 'serve\n${startedWith(run)}',
         environment: flags.environment,
         workingDirectory: folder,
         memoryCapBytes: _windowsJobCap(run.memoryCapGiB, tuned),

@@ -14,6 +14,7 @@ import 'pages/settings_page.dart';
 import 'pages/engine_page.dart';
 import 'pages/simple_pages.dart';
 import 'pages/store_page.dart';
+import 'serve_panel.dart';
 import 'shortcuts.dart';
 import 'sidebar.dart';
 import 'title_bar.dart';
@@ -122,6 +123,7 @@ class _PageTopRow extends StatelessWidget {
               else
                 const Spacer(),
               if (showPicker) const Padding(padding: EdgeInsets.only(right: 12), child: FindBar()),
+              const Padding(padding: EdgeInsets.only(right: 8), child: ServeButton()),
               const Padding(padding: EdgeInsets.only(right: 8), child: _Bell()),
               if (!isMacLook) const WindowButtons() else const SizedBox(width: 8),
             ],
