@@ -9,6 +9,7 @@ import 'package:crypto/crypto.dart';
 
 import '../data/models.dart';
 import 'folders.dart';
+import 'hashing.dart';
 
 /// Where the models are downloaded from.
 final huggingFace = Uri.parse('https://huggingface.co');
@@ -106,6 +107,15 @@ class PartRecord {
       done.fold(0, (sum, i) => sum + range(i).$2 - range(i).$1 + 1) +
       started.values.fold(0, (sum, bytes) => sum + bytes);
 
+  /// Where the stretch of parts written from the file's start ends: the first byte of the first part not written.
+  int get prefixBytes {
+    var i = 0;
+    while (done.contains(i)) {
+      i++;
+    }
+    return min(size, i * partBytes);
+  }
+
   /// The parts still to fetch, in order.
   List<int> get missing => [
     for (var i = 0; i < parts; i++)
@@ -187,15 +197,21 @@ void deleteModelFiles(String folder, ModelFile file) {
   for (final name in file.parts) {
     for (final path in [name, '$name.part', '$name.part.json', '$name.part.json.tmp', '$name.usage.json']) {
       final f = File(_join(folder, path));
+      _hashers.remove(f.path)?.close();
       if (f.existsSync()) f.deleteSync();
     }
   }
 }
 
-/// Whether the file at [path] matches [f]'s checksum. Read in its own isolate: a large file takes minutes.
-Future<bool> checksumMatches(String path, RemoteFile f) => Isolate.run(() async {
+/// Whether the file at [path] matches [f]'s checksum. Read in its own isolate (SHA-256 at several GB/s with the
+/// system's crypto library; slower where it is missing).
+Future<bool> checksumMatches(String path, RemoteFile f) async {
+  if (f.sha256 != null) return await sha256OfFile(path) == f.sha256;
+  return _gitSha1Matches(path, f);
+}
+
+Future<bool> _gitSha1Matches(String path, RemoteFile f) => Isolate.run(() async {
   final stream = File(path).openRead();
-  if (f.sha256 != null) return (await sha256.bind(stream).first).toString() == f.sha256;
   // git's SHA-1 of a file is that of "blob <size>\0" followed by the file
   late Digest digest;
   final sink = sha1.startChunkedConversion(ChunkedConversionSink<Digest>.withCallback((d) => digest = d.single));
@@ -204,6 +220,11 @@ Future<bool> checksumMatches(String path, RemoteFile f) => Isolate.run(() async 
   sink.close();
   return digest.toString() == f.gitSha1;
 });
+
+/// The running checksums of the unfinished downloads, by the path of their `.part` file. They stay while a download is
+/// paused, so Resume in the same run of the app continues each where it was; after a restart the stretch written is
+/// hashed again from its start, in the background while the rest comes.
+final _hashers = <String, FileHasher>{};
 
 /// One model's download into [folder]: its files one after another, each fetched in parts over [connections]
 /// connections at once, written next to where it goes as `<name>.part` with its [PartRecord] (saved twice a second
@@ -245,6 +266,9 @@ class ModelDownload {
   var _stopped = false;
   var _base = 0, _total = 0, _flowing = 0, _saved = 0;
   PartRecord? _record;
+  FileHasher? _hasher;
+  // the last file's check after its last part: the Store says "Checking..." then
+  var _checking = false;
   // the records of the files not finished yet, so their written parts count from the first progress on
   final _kept = <String, PartRecord>{};
   File? _recordFile;
@@ -331,7 +355,7 @@ class ModelDownload {
     }
   }
 
-  void _tell({bool checking = false}) {
+  void _tell() {
     final now = DateTime.now().millisecondsSinceEpoch;
     _speed
       ..add((now, _done))
@@ -343,7 +367,7 @@ class ModelDownload {
         done: _done,
         total: _total,
         bytesPerSecond: seconds >= 1 ? (last.$2 - first.$2) / seconds : null,
-        checking: checking,
+        checking: _checking,
       ),
     );
   }
@@ -354,6 +378,7 @@ class ModelDownload {
     final recordFile = File('${part.path}.json');
     var record = PartRecord.read(recordFile);
     if (record == null || !record.isFor(f) || !part.existsSync()) {
+      _hashers.remove(part.path)?.close();
       if (part.existsSync()) part.deleteSync();
       part.createSync();
       record = PartRecord(size: f.size, partBytes: partBytes, sha256: f.sha256, gitSha1: f.gitSha1)..write(recordFile);
@@ -361,6 +386,9 @@ class ModelDownload {
     _record = _kept[f.name] = record;
     _recordFile = recordFile;
     _saved = record.doneBytes;
+    // git's checksum is for small files only: those are checked whole at the end
+    final hasher = _hasher = f.sha256 == null ? null : _hashers.putIfAbsent(part.path, () => FileHasher(part.path));
+    hasher?.feed(record.prefixBytes);
     final url = server.resolve('/${file.repo}/resolve/main/${f.name}');
     final todo = record.missing;
     try {
@@ -375,11 +403,19 @@ class ModelDownload {
     } finally {
       _save();
       _recordFile = null;
+      _hasher = null;
     }
     if (_stopped) return false;
 
-    _tell(checking: true);
-    if (!await checksumMatches(part.path, f)) {
+    _checking = true;
+    _tell();
+    final bool matches;
+    try {
+      matches = await _matches(part.path, f, hasher);
+    } finally {
+      _checking = false;
+    }
+    if (!matches) {
       part.deleteSync();
       recordFile.deleteSync();
       throw DownloadFailure('${f.name} was damaged in the download.', broken: true);
@@ -390,6 +426,18 @@ class ModelDownload {
     recordFile.deleteSync();
     onVerified?.call(whole.path, f);
     return true;
+  }
+
+  /// Whether the finished `.part` file matches its checksum: what the running hash has not taken yet is hashed now;
+  /// if the running hash failed, the file is hashed again whole.
+  Future<bool> _matches(String path, RemoteFile f, FileHasher? hasher) async {
+    if (hasher == null) return checksumMatches(path, f);
+    _hashers.remove(path);
+    try {
+      return await hasher.digest(f.size) == f.sha256;
+    } on FileSystemException {
+      return checksumMatches(path, f);
+    }
   }
 
   /// Takes parts from [todo] until none is left, writing each where it goes in the file.
@@ -424,6 +472,7 @@ class ModelDownload {
       if (at > last) {
         record.started.remove(i);
         record.done.add(i);
+        _hasher?.feed(record.prefixBytes);
       } else if (at > first) {
         record.started[i] = at - first;
       }
