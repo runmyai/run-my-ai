@@ -83,7 +83,9 @@ class WindowData {
 ///   window.json        the window's size, place and maximized state
 ///   library.json       downloaded model files and the picked one
 ///   folds.json         the chat list's folded groups, by section
-/// The chats are in chats.db, next to them (lib/data/chat_db.dart).
+///   chat-index.db      the index of the chats (the list and the search), made from the chat files
+///   benchmarks.db      the Benchmark page's history of runs
+/// The chats themselves are files in the chats folder ([chatsDir], lib/data/chat_db.dart).
 class Storage {
   Storage(this.dir) {
     dir.createSync(recursive: true);
@@ -98,6 +100,9 @@ class Storage {
   }
 
   String _path(String name) => '${dir.path}${Platform.pathSeparator}$name';
+
+  /// The folder the chats are saved in, one file each: "chats" in the data folder.
+  Directory get chatsDir => Directory(_path('chats'));
 
   PrefsData readPrefs() {
     final json = _readJson(File(_path('settings.json')));

@@ -20,7 +20,7 @@ import 'window/app_window.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final storage = await Storage.open();
-  final (chatStore, _) = await (ChatStore.open(storage.dir), setUpWindow(storage)).wait;
+  final (chatStore, _) = await (ChatStore.open(storage.dir, folder: storage.chatsDir), setUpWindow(storage)).wait;
   final section = Section.values.where((s) => s.name == forcedSection).firstOrNull;
   final themeMode = switch (forcedTheme) {
     'light' || 'silklight' || 'dusk' => ThemeMode.light,

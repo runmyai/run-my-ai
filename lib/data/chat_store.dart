@@ -5,10 +5,11 @@ import 'dart:isolate';
 import '../search/chat_search.dart';
 import 'chat_db.dart';
 import 'models.dart';
+import 'storage.dart';
 
-/// The chats database, run on its own background worker (a Dart isolate) so the screen never waits for the disk:
-/// loading, saving and searching all happen there. Saves are sent and not waited for; the worker does them in the
-/// order they were sent.
+/// The chats (their files and the index of them, lib/data/chat_db.dart), run on its own background worker (a Dart
+/// isolate) so the screen never waits for the disk: loading, saving and searching all happen there. Saves are sent and
+/// not waited for; the worker does them in the order they were sent.
 class ChatStore {
   ChatStore._(this._requests, this._replies, this.chats, this.pins, this.branches);
 
@@ -26,8 +27,9 @@ class ChatStore {
   final List<String> pins;
   final Map<String, List<String>> branches;
 
-  /// Starts the worker on [dir]/chats.db (moving in the chats older versions saved as files).
-  static Future<ChatStore> open(Directory dir) async {
+  /// Starts the worker on the chats in [folder] (default: the chats folder of [dir], the app's data folder), with
+  /// their index and the benchmark runs in [dir]. Chats older versions kept in [dir] are moved into files first.
+  static Future<ChatStore> open(Directory dir, {Directory? folder}) async {
     final replies = ReceivePort();
     final first = Completer<List<Object?>>();
     late final ChatStore store;
@@ -39,7 +41,7 @@ class ChatStore {
         store._waiting.remove(id)?.complete(result);
       }
     });
-    await Isolate.spawn(_worker, (replies.sendPort, '${dir.path}${Platform.pathSeparator}chats.db'),
+    await Isolate.spawn(_worker, (replies.sendPort, dir.path, (folder ?? Storage(dir).chatsDir).path),
         debugName: 'chats database');
     final [port, chats, pins, branches] = await first.future;
     store = ChatStore._(port! as SendPort, replies, chats! as List<ChatInfo>, pins! as List<String>,
@@ -107,7 +109,7 @@ class ChatStore {
   /// [hits] with the lines under their titles filled in (results further down the list than the first ones).
   Future<List<ChatHit>> fillLines(String text, List<ChatHit> hits) => _ask(_FillLines(_id, text, hits));
 
-  /// Waits until every save sent so far is done (tests, and before closing).
+  /// Waits until every save sent so far is done, in the index and in the chats' files (tests, and before closing).
   Future<void> flush() => _ask(_Flush(_id));
 
   /// Finishes the saves sent so far, then stops the worker.
@@ -119,9 +121,9 @@ class ChatStore {
 
 // ---- The worker ----------------------------------------------------------------------------------------------------
 
-Future<void> _worker((SendPort, String) start) async {
-  final (replies, path) = start;
-  final db = ChatDb.open(path);
+Future<void> _worker((SendPort, String, String) start) async {
+  final (replies, data, chats) = start;
+  final db = ChatDb.open(Directory(data), Directory(chats));
   final requests = ReceivePort();
   replies.send([requests.sendPort, db.chats(), db.pins(), db.branches()]);
   var latestSearch = -1;
@@ -176,6 +178,7 @@ Future<void> _worker((SendPort, String) start) async {
         case _FillLines(:final id, :final text, :final hits):
           replies.send((id, db.fillLines(SearchQuery.parse(text), hits)));
         case _Flush(:final id):
+          db.writeFiles();
           replies.send((id, null));
         case _Close(:final id):
           latestSearch = -1;

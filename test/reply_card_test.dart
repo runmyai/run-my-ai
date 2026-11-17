@@ -200,8 +200,8 @@ void main() {
     test('a reply saved again as it grows keeps its stats; a database from before them keeps every message', () {
       final dir = Directory.systemTemp.createTempSync('runmyai-card-db-');
       addTearDown(() => dir.deleteSync(recursive: true));
-      final path = '${dir.path}/chats.db';
-      final db = ChatDb.open(path);
+      final folder = Directory('${dir.path}/chats');
+      final db = ChatDb.open(dir, folder);
       final now = DateTime(2026);
       db.createChat(ChatInfo(id: 'c', title: 't', createdAt: now, updatedAt: now));
       db.addMessage('c', 0, const ChatMessage(Role.user, 'q'));
@@ -211,12 +211,15 @@ void main() {
       expect(db.path('c').messages.last.text, 'a longer');
       db.close();
 
-      // An older app's database: without the column.
-      final raw = sqlite3.open(path);
+      // An older app's chats.db, without the column (and without chat files).
+      File('${dir.path}/chat-index.db').renameSync('${dir.path}/chats.db');
+      folder.deleteSync(recursive: true);
+      final raw = sqlite3.open('${dir.path}/chats.db');
       raw.execute('ALTER TABLE messages DROP COLUMN stats');
+      raw.execute('DROP TABLE files');
       raw.execute('PRAGMA user_version = 12');
       raw.close();
-      final again = ChatDb.open(path);
+      final again = ChatDb.open(dir, folder);
       addTearDown(again.close);
       final messages = again.path('c').messages;
       expect(messages.map((m) => m.text), ['q', 'a longer']);

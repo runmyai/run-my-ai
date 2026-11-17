@@ -104,15 +104,15 @@ void main() {
     test('what was chosen is there when the database is opened again', () {
       final dir = Directory.systemTemp.createTempSync('runmyai-tree-');
       addTearDown(() => dir.deleteSync(recursive: true));
-      final path = '${dir.path}/chats.db';
-      var db = ChatDb.open(path)..createChat(_info('a'));
+      final folder = Directory('${dir.path}/chats');
+      var db = ChatDb.open(dir, folder)..createChat(_info('a'));
       db
         ..addMessage('a', 0, _user('q'))
         ..addMessage('a', 1, _bot('first answer'))
         ..addMessage('a', 2, _bot('second answer', conv: 'a-b1'), parent: 0);
       db.flip('a', 2, -1);
       db.close();
-      db = ChatDb.open(path);
+      db = ChatDb.open(dir, folder);
       expect(_texts(db, 'a'), ['q', 'first answer']);
       expect(db.path('a').nextNode, 3);
       expect(db.branches(), {
@@ -214,7 +214,7 @@ void main() {
       old.userVersion = 11;
       old.close();
 
-      final db = ChatDb.open(file);
+      final db = ChatDb.open(dir, Directory('${dir.path}/chats'));
       final a = db.path('a');
       expect(a.messages.map((m) => m.text), ['hello zebra', 'hi there', 'second question', 'second answer']);
       expect(a.messages.map((m) => m.node), [0, 1, 2, 3]);
@@ -238,7 +238,7 @@ void main() {
       db.close();
 
       // Opening it again does not run the upgrade a second time.
-      final again = ChatDb.open(file);
+      final again = ChatDb.open(dir, Directory('${dir.path}/chats'));
       expect(_texts(again, 'a'), hasLength(5));
       again.close();
     });
