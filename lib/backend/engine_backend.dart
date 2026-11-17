@@ -30,6 +30,9 @@ class _LocalModel {
     required this.flags,
     required this.smallFlags,
     required this.cpuFlags,
+    required this.layers,
+    required this.firstMoe,
+    required this.layerGiB,
     this.thinkingSwitch = false,
   });
 
@@ -38,6 +41,10 @@ class _LocalModel {
 
   /// One command per context length, for a large GPU, a small one, and none.
   final Map<int, String> flags, smallFlags, cpuFlags;
+
+  /// Its layer count, its first MoE layer, and one layer's experts in GiB (for the two-card layout).
+  final int layers, firstMoe;
+  final double layerGiB;
 
   /// Its thinking can be turned off.
   final bool thinkingSwitch;
@@ -84,6 +91,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         files: [_lingFile],
       ),
       path: 'Ling-3.0-flash-MXFP4_MOE.tokenwing.gguf',
+      layers: 42,
+      firstMoe: 2,
+      layerGiB: 1.494,
       flags: lingAuto,
       smallFlags: lingAutoSmall,
       cpuFlags: lingAutoCpu,
@@ -101,6 +111,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         files: [_flintFile],
       ),
       path: 'flint-UD-Q4_K_XL.tokenwing.gguf',
+      layers: 49,
+      firstMoe: 2,
+      layerGiB: 0.49,
       flags: flintAuto,
       smallFlags: flintAutoSmall,
       cpuFlags: flintAutoCpu,
@@ -117,6 +130,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         files: [_qwenFile],
       ),
       path: 'Qwen3.8-Flash-Next-WV-v5-3.5bpw.tokenwing-00001-of-00002.gguf',
+      layers: 48,
+      firstMoe: 0,
+      layerGiB: 1.1,
       flags: qwenAuto,
       smallFlags: qwenAutoSmall,
       cpuFlags: qwenAutoCpu,
@@ -174,7 +190,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   }
 
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
-  /// largest card. With several cards only the largest is used (without a layout for them two cards run slower than one).
+  /// largest card. With several cards the two largest share the model (twoCardFlags).
   /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
   Map<int, String> _flagsFor(_LocalModel m) {
     final cards = _cards;
@@ -184,7 +200,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
-      if (cards.length > 1 && cards.first.name.isNotEmpty) '--device ${cards.first.name}',
+      if (cards.length > 1 && cards[0].name.isNotEmpty && cards[1].name.isNotEmpty)
+        ...twoCardFlags(cards, m.layers, m.firstMoe, m.layerGiB),
     ].join(' ');
     return extra.isEmpty ? flags : {for (final e in flags.entries) e.key: '${e.value} $extra'};
   }
