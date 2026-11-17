@@ -13,6 +13,7 @@ import '../engine/tuning.dart';
 import '../state/prefs.dart';
 import '../state/providers.dart';
 import '../system/firebase.dart';
+import '../system/folders.dart';
 import 'benchmark.dart';
 
 // A finished Benchmark run, shared (when the user allows it) so the engine can be made faster on every kind of PC:
@@ -348,7 +349,7 @@ class BenchmarkSharer {
       if (!_ref.read(prefsProvider).shareBenchmarks) return;
       final dir = _ref.read(storageProvider).dir;
       final firestore = _ref.read(firestoreProvider);
-      final modelsFolder = '${dir.path}${Platform.pathSeparator}models';
+      final modelsFolder = _ref.read(foldersProvider).models;
       final machine = await Isolate.run(() => readMachine(modelsFolder));
       final tuneFile = File('${dir.path}${Platform.pathSeparator}autotuner.json');
       final tuned = tuneFile.existsSync() ? tunedFor(await tuneFile.readAsString(), result.environment.modelFileBytes) : null;
