@@ -218,15 +218,14 @@ class PortInUse extends EngineFailure {
 /// server).
 abstract class ServeControl {
   /// Stops whatever engine is running, then loads [file] the way [run] says and answers other programs on this
-  /// computer's own address, at [port], under the model name [alias] and, when [apiKey] is not null, only with that
-  /// key. Returns when the model is loaded. Throws [PortInUse] or an [EngineFailure]. [onEnded]: the engine ended
+  /// computer's own address, at [port], under the model name [alias] and only with the key [apiKey]. Returns when the model is loaded. Throws [PortInUse] or an [EngineFailure]. [onEnded]: the engine ended
   /// later on its own (or another start replaced it), with the failure that says so.
   Future<void> startServing(
     ModelFile file,
     EngineRun run, {
     required int port,
     required String alias,
-    String? apiKey,
+    required String apiKey,
     void Function(EngineFailure ended)? onEnded,
   });
 

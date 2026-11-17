@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/prefs.dart';
 import '../state/section.dart';
+import '../state/serve.dart';
 import '../theme.dart';
 import '../window/app_window.dart';
 import 'buttons.dart';
@@ -20,7 +21,8 @@ import 'sidebar.dart';
 import 'title_bar.dart';
 import 'update_page.dart';
 
-/// The whole window: the sidebar on the left, the chosen section on the right, and no system title bar.
+/// The whole window: the sidebar on the left, the chosen section on the right, and no system title bar. While a model
+/// is hosted the hosting screen covers all of it; the app stays as the user left it underneath and comes back after.
 class Shell extends ConsumerWidget {
   const Shell({super.key});
 
@@ -37,7 +39,14 @@ class Shell extends ConsumerWidget {
       Section.engine => const EnginePage(),
       Section.settings => const SettingsPage(),
     };
-    return AppShortcuts(
+    final hosting = ref.watch(serveProvider.select((s) => s.hosting));
+    // Hosting that ends on its own brings the app back with the panel saying why.
+    ref.listen(serveProvider, (before, now) {
+      if (before?.hosting == true && now.phase == ServePhase.idle && now.error != null) {
+        showDialog<void>(context: context, builder: (_) => const ServePanel());
+      }
+    });
+    final app = AppShortcuts(
       child: Scaffold(
         body: Stack(
           children: [
@@ -93,6 +102,19 @@ class Shell extends ConsumerWidget {
           ],
         ),
       ),
+    );
+    // The app is kept (hidden, without keys or animations) so Stop hosting returns to it as it was.
+    return Stack(
+      children: [
+        Offstage(
+          offstage: hosting,
+          child: TickerMode(
+            enabled: !hosting,
+            child: ExcludeFocus(excluding: hosting, child: app),
+          ),
+        ),
+        if (hosting) const Positioned.fill(child: HostingScreen()),
+      ],
     );
   }
 }
