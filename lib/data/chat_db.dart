@@ -878,10 +878,15 @@ class ChatDb {
     }
   }
 
+  /// The files ("Chat/Name.json") the last scan could not read (not valid, or saved by a newer version of the app).
+  /// They are left as they are; the list says how many there are.
+  final unreadable = <String>[];
+
   /// Brings the chats folder into the index: files that are new or changed since they were last read or written are
   /// read (a file wins over the index), chats whose files are gone are taken out, and chats whose files are behind
   /// (or that have none yet) are written.
   void scanFiles() {
+    unreadable.clear();
     final onDisk = <String, (FileStat, ChatKind)>{};
     for (final kind in ChatKind.values) {
       final dir = Directory(_onDisk(_folderOf(kind)))..createSync(recursive: true);
@@ -919,10 +924,12 @@ class ChatDb {
         chat = _ChatFile.parse(File(_onDisk(path)).readAsStringSync());
       } catch (e) {
         stderr.writeln('Run My AI: the chat file $path could not be read and is left out: $e');
+        unreadable.add(path);
         continue;
       }
       if (chat.format > fileFormat) {
         stderr.writeln('Run My AI: the chat file $path was saved by a newer version of the app and is left out');
+        unreadable.add(path);
         continue;
       }
       var id = chat.id;
@@ -953,13 +960,14 @@ class ChatDb {
   /// Puts [chat], read from its file at [path], into the index as chat [id] (a new id when the file's is taken),
   /// in place of what the index had for it.
   void _import(_ChatFile chat, String id, String path, ChatKind kind, FileStat stat) {
+    final title = _titleOfFile(path, chat.title);
     // A chat given a new id gets new conversation ids too, so the engine's saved states of the two are not mixed.
     String? conv(String? c) =>
         id != chat.id && c != null && c.startsWith(chat.id) ? '$id${c.substring(chat.id.length)}' : c;
     _inTransaction(() {
       var num = _num[id];
       if (num == null) {
-        num = _insertChat(id, chat.title, chat.created, chat.updated, kind);
+        num = _insertChat(id, title, chat.created, chat.updated, kind);
       } else {
         _db.execute('DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE id BETWEEN ? AND ?)',
             [_first(num), _last(num)]);
@@ -969,7 +977,7 @@ class ChatDb {
       _db.execute(
           'UPDATE chats SET title = ?, created = ?, updated = ?, kind = ?, pin = ?, sort = ?, archived = ?, model = ?, '
           'context = ?, sel = ? WHERE id = ?',
-          [chat.title, chat.created, chat.updated, kind.index, chat.pin, chat.sort, chat.archived, chat.model,
+          [title, chat.created, chat.updated, kind.index, chat.pin, chat.sort, chat.archived, chat.model,
               chat.context, chat.shown == null ? null : first | chat.shown!, id]);
       final insert = _db.prepare('INSERT INTO messages (id, role, text, bookmark, thinking, thinking_ms, stopped, parent, '
           'sel, conv, stats) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -985,10 +993,19 @@ class ChatDb {
         insert.close();
         words.close();
       }
-      // (A chat given a new id is written again at once, with that id.)
-      _record(id, path, stat, dirty: id != chat.id);
+      // (A chat given a new id, or a new title from its file's name, is written again at once.)
+      _record(id, path, stat, dirty: id != chat.id || title != chat.title);
     });
-    if (id != chat.id) _dirty.add(id);
+    if (id != chat.id || title != chat.title) _dirty.add(id);
+  }
+
+  /// The title of the chat in the file at [path]: [title], the one inside the file, while the file's name still fits it
+  /// (as "Title" or "Title (2)", see [_pathFor]); else the file was renamed by hand, and the chat is named after it.
+  static String _titleOfFile(String path, String title) {
+    final stem = path.substring(path.indexOf('/') + 1, path.length - 5);
+    final base = chatFileName(title);
+    if (stem == base || RegExp('^${RegExp.escape(base)} \\(\\d+\\)\$').hasMatch(stem)) return title;
+    return stem.trim().isEmpty ? title : stem.trim();
   }
 
   // ---- Chats saved by older versions -----------------------------------------------------------------------------

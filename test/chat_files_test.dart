@@ -194,10 +194,11 @@ void main() {
     expect(db.messages(copy).map((m) => m.text), ['one', 'two']);
     expect(db.branches()[copy], ['$copy-b5'], reason: 'its own conversations for the engine');
     expect(db.branches()['a'], ['a-b5']);
+    expect(db.chats().firstWhere((c) => c.id == copy).title, 'Notes copy');
     db.close();
-    // Written again with its new id, under its title's name like any chat.
-    expect(names(), ['Notes (2).json', 'Notes.json']);
-    expect(jsonDecode(chatFile('Notes (2).json').readAsStringSync())['id'], copy);
+    // Written again with its new id; the copy's name was chosen by hand, so it is the chat's title too.
+    expect(names(), ['Notes copy.json', 'Notes.json']);
+    expect(jsonDecode(chatFile('Notes copy.json').readAsStringSync())['id'], copy);
     db = open();
     expect(db.chats(), hasLength(2), reason: 'stable from then on');
     db.close();
@@ -286,5 +287,59 @@ void main() {
       ..close();
     expect(names(), ['Future (2).json', 'Future.json', 'broken.json']);
     expect(jsonDecode(chatFile('Future.json').readAsStringSync())['format'], ChatDb.fileFormat + 1);
+  });
+
+  test('a file renamed by hand renames the chat; a duplicate suffix does not; an app rename renames the file', () {
+    var db = open();
+    db
+      ..createChat(info('a', 'Trip plan'))
+      ..createChat(info('b', 'Plan'))
+      ..createChat(info('c', 'Plan'))
+      ..createChat(info('d', 'Budget: May'))
+      ..close();
+    expect(names(), ['Budget_ May.json', 'Plan (2).json', 'Plan.json', 'Trip plan.json']);
+    chatFile('Trip plan.json').renameSync(chatFile('Holiday.json').path);
+    db = open();
+    expect({for (final c in db.chats()) c.id: c.title},
+        {'a': 'Holiday', 'b': 'Plan', 'c': 'Plan', 'd': 'Budget: May'},
+        reason: 'a suffix like (2) and a name made from the title keep the title');
+    db
+      ..addMessage('a', 0, const ChatMessage(Role.user, 'hi'))
+      ..close();
+    expect(names(), ['Budget_ May.json', 'Holiday.json', 'Plan (2).json', 'Plan.json'],
+        reason: 'the name stays what the user gave it');
+    expect(jsonDecode(chatFile('Holiday.json').readAsStringSync())['title'], 'Holiday');
+    db = open();
+    expect(db.chats().firstWhere((c) => c.id == 'a').title, 'Holiday', reason: 'stable from then on');
+    // Renamed inside the app: the file follows as before.
+    db
+      ..rename('a', 'Summer')
+      ..writeFiles();
+    expect(names(), contains('Summer.json'));
+    expect(names(), isNot(contains('Holiday.json')));
+    db.close();
+  });
+
+  test('unreadable files are listed by name, counted again each start, and never touched', () {
+    open().close();
+    const broken = '{"format": 1, "id": "x", "title"';
+    chatFile('broken.json').writeAsStringSync(broken);
+    final newer = jsonEncode({'format': ChatDb.fileFormat + 1, 'id': 'y', 'title': 'Future',
+        'created': '2030-01-01T00:00:00.000Z', 'updated': '2030-01-01T00:00:00.000Z', 'messages': []});
+    chatFile('Future.json').writeAsStringSync(newer);
+    chatFile('Odd.json', kind: 'Code').writeAsStringSync('[1, 2]');
+    var db = open();
+    expect(db.unreadable..sort(), ['Chat/Future.json', 'Chat/broken.json', 'Code/Odd.json']);
+    db.close();
+    db = open();
+    expect(db.unreadable, hasLength(3));
+    db.close();
+    expect(chatFile('broken.json').readAsStringSync(), broken);
+    expect(chatFile('Future.json').readAsStringSync(), newer);
+    expect(chatFile('Odd.json', kind: 'Code').readAsStringSync(), '[1, 2]');
+    chatFile('broken.json').deleteSync();
+    db = open();
+    expect(db.unreadable, hasLength(2), reason: 'a file that is removed no longer counts');
+    db.close();
   });
 }

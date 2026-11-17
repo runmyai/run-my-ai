@@ -11,7 +11,7 @@ import 'storage.dart';
 /// isolate) so the screen never waits for the disk: loading, saving and searching all happen there. Saves are sent and
 /// not waited for; the worker does them in the order they were sent.
 class ChatStore {
-  ChatStore._(this._requests, this._replies, this.chats, this.pins, this.branches);
+  ChatStore._(this._requests, this._replies, this.chats, this.pins, this.branches, this.unreadable);
 
   final SendPort _requests;
   final ReceivePort _replies;
@@ -26,6 +26,9 @@ class ChatStore {
   final List<ChatInfo> chats;
   final List<String> pins;
   final Map<String, List<String>> branches;
+
+  /// The chat files ("Chat/Name.json") that could not be read when the store was opened; they are left untouched.
+  final List<String> unreadable;
 
   /// Starts the worker on the chats in [folder] (default: the chats folder of [dir], the app's data folder), with
   /// their index and the benchmark runs in [dir]. Chats older versions kept in [dir] are moved into files first.
@@ -43,9 +46,9 @@ class ChatStore {
     });
     await Isolate.spawn(_worker, (replies.sendPort, dir.path, (folder ?? Storage(dir).chatsDir).path),
         debugName: 'chats database');
-    final [port, chats, pins, branches] = await first.future;
+    final [port, chats, pins, branches, unreadable] = await first.future;
     store = ChatStore._(port! as SendPort, replies, chats! as List<ChatInfo>, pins! as List<String>,
-        branches! as Map<String, List<String>>);
+        branches! as Map<String, List<String>>, unreadable! as List<String>);
     return store;
   }
 
@@ -125,7 +128,7 @@ Future<void> _worker((SendPort, String, String) start) async {
   final (replies, data, chats) = start;
   final db = ChatDb.open(Directory(data), Directory(chats));
   final requests = ReceivePort();
-  replies.send([requests.sendPort, db.chats(), db.pins(), db.branches()]);
+  replies.send([requests.sendPort, db.chats(), db.pins(), db.branches(), [...db.unreadable]]);
   var latestSearch = -1;
   Future<void>? running;
   await for (final r in requests) {
