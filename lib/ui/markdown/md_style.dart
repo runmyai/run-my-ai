@@ -88,6 +88,9 @@ class MdLook {
   /// The text inside a quote: quieter.
   MdLook get quoted => MdLook(base.copyWith(color: colors.textSecondary), colors);
 
+  /// The footnotes at the end of a reply: smaller and quieter.
+  MdLook get note => MdLook(base.copyWith(fontSize: fontSize * 0.85, color: colors.textSecondary), colors);
+
   late final Color codeFill = colors.inputFill;
   late final Color codeBorder = colors.border;
 
@@ -95,7 +98,7 @@ class MdLook {
   /// dark themes (the app's themes are greys only; these hues are read easily on their code fills).
   late final Map<String, TextStyle> syntax = _syntax(colors.isLight);
 
-  /// [of] with a run's [bits] (bold, italic, struck, code) added.
+  /// [of] with a run's [bits] (bold, italic, struck, code, underlined, raised, lowered) added.
   TextStyle styleFor(int bits, TextStyle of) {
     var s = of;
     if (bits & MdRun.code != 0) {
@@ -108,7 +111,16 @@ class MdLook {
     }
     if (bits & MdRun.bold != 0) s = s.copyWith(fontWeight: FontWeight.w700);
     if (bits & MdRun.italic != 0) s = s.copyWith(fontStyle: FontStyle.italic);
-    if (bits & MdRun.strike != 0) s = s.copyWith(decoration: TextDecoration.lineThrough, decorationColor: s.color);
+    if (bits & (MdRun.strike | MdRun.underline) != 0) {
+      s = s.copyWith(
+        decoration: TextDecoration.combine([
+          if (bits & MdRun.strike != 0) TextDecoration.lineThrough,
+          if (bits & MdRun.underline != 0) TextDecoration.underline,
+        ]),
+        decorationColor: s.color,
+      );
+    }
+    if (bits & (MdRun.sup | MdRun.sub) != 0) s = s.copyWith(fontSize: (s.fontSize ?? fontSize) * 0.75);
     return s;
   }
 }

@@ -2,11 +2,13 @@
 /// text. The places are what let search marks (found in the raw text) and the edge of a reply being written (a place
 /// in the raw text) land on the drawn text.
 ///
-/// What is read: paragraphs (a single line break stays a line break, as chat replies mean it), # headings, ``` / ~~~
-/// code blocks, > quotes, - * + and 1. 1) lists (nested by indentation, - [ ] task items), pipe tables, --- *** ___
-/// rules, $$ ... $$ and \[ ... \] formulas; inside text: **bold**, *italic*, ~~struck~~, `code`, [links](url),
-/// <https://...>, bare https:// addresses, $ ... $ and \( ... \) formulas, backslash escapes, <br>. Anything else
-/// stays plain text. Reading never throws: half-written markdown is read as far as it goes.
+/// What is read: paragraphs (a single line break stays a line break, as chat replies mean it), # headings and
+/// headings underlined with === or ---, ``` / ~~~ code blocks and code indented by four spaces, > quotes, - * + and
+/// 1. 1) lists (nested by indentation, - [ ] task items), pipe tables, --- *** ___ rules, $$ ... $$ and \[ ... \]
+/// formulas, [^1]: footnotes; inside text: **bold**, *italic*, ~~struck~~, `code`, [links](url), [^1] footnote
+/// marks, <https://...>, bare https:// addresses, $ ... $ and \( ... \) formulas, backslash escapes, and the HTML
+/// tags models write: <br>, <b> <strong>, <i> <em>, <u>, <s> <del>, <sup>, <sub>, <kbd>. Anything else stays plain
+/// text. Reading never throws: half-written markdown is read as far as it goes.
 library;
 
 /// A part of the message's text: from [start] up to [end] (not included).
@@ -89,6 +91,13 @@ class MdRule extends MdBlock {
   MdRule(super.start, super.end);
 }
 
+/// A footnote's text ("[^1]: ..."), drawn with the other notes at the end of the reply: its [label] and its blocks.
+class MdFootnote extends MdBlock {
+  MdFootnote(super.start, super.end, this.label, this.children);
+  final Seg label;
+  final List<MdBlock> children;
+}
+
 enum RunKind { text, newline, math, displayMath }
 
 /// A piece of drawn text. A text run shows the message's text from [from] to [to]; a newline run is one line break
@@ -101,7 +110,7 @@ class MdRun {
   final int from;
   final int to;
 
-  /// [bold], [italic], [strike], [code] combined.
+  /// [bold], [italic], [strike], [code], [underline], [sup], [sub] combined.
   final int style;
   final String? link;
   final String? tex;
@@ -113,6 +122,9 @@ class MdRun {
   static const italic = 2;
   static const strike = 4;
   static const code = 8;
+  static const underline = 16;
+  static const sup = 32;
+  static const sub = 64;
 
   @override
   String toString() => '$kind($from-$to s$style${link != null ? ' $link' : ''}${tex != null ? ' $tex' : ''})';
@@ -145,6 +157,7 @@ final _rule = RegExp(r'^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$');
 final _quote = RegExp(r'^ {0,3}>');
 final _item = RegExp(r'^( {0,3})([-*+]|\d{1,9}[.)])(?=[ \t]|$)');
 final _delimCell = RegExp(r'^:?-+:?$');
+final _note = RegExp(r'^ {0,3}\[\^([^\]\s]+)\]:[ \t]?');
 
 class _Blocks {
   _Blocks(this.text, this.live);
@@ -289,12 +302,28 @@ class _Blocks {
     final l = lines[i];
     if (_indent(l) >= 4) return false;
     final s = _s(l);
-    if (_fence.hasMatch(s) || _heading.hasMatch(s) || _rule.hasMatch(s) || _quote.hasMatch(s) || _mathStart(l)) {
+    if (_fence.hasMatch(s) ||
+        _heading.hasMatch(s) ||
+        _rule.hasMatch(s) ||
+        _quote.hasMatch(s) ||
+        _note.hasMatch(s) ||
+        _mathStart(l)) {
       return true;
     }
     final item = _itemAt(l);
     if (item != null && !item.empty && (!item.ordered || item.number == 1)) return true;
     return _tableAt(lines, i);
+  }
+
+  /// The level of a heading underlined by line [j] (=== 1, --- 2), or 0 when [j] is not such an underline. While
+  /// written, a last line of one or two dashes may still become a list item, so it waits.
+  int _underline(List<Seg> lines, int j) {
+    final l = lines[j];
+    if (_indent(l) >= 4) return 0;
+    final t = _s(_trim(l));
+    if (RegExp(r'^=+$').hasMatch(t)) return 1;
+    if (RegExp(r'^-+$').hasMatch(t) && !(live && l.end >= text.length && t.length < 3)) return 2;
+    return 0;
   }
 
   List<MdBlock> parse(List<Seg> lines) {
@@ -308,6 +337,23 @@ class _Blocks {
       }
       final s = _s(l);
       final indent = _indent(l);
+
+      // Code indented by four spaces (or a tab), blank lines inside it kept.
+      if (indent >= 4) {
+        final content = <Seg>[];
+        var j = i;
+        while (j < lines.length && (_blank(lines[j]) || _indent(lines[j]) >= 4)) {
+          content.add(_strip(lines[j], 4));
+          j++;
+        }
+        while (_blank(lines[j - 1])) {
+          content.removeLast();
+          j--;
+        }
+        blocks.add(MdCode(l.start, lines[j - 1].end, '', content, !live || j < lines.length));
+        i = j;
+        continue;
+      }
 
       // A code block.
       final fence = indent < 4 ? _fence.firstMatch(s) : null;
@@ -389,6 +435,39 @@ class _Blocks {
         continue;
       }
 
+      // A footnote's text: its first line, lines indented under it, and lines that carry on its paragraph.
+      final note = indent < 4 ? _note.firstMatch(s) : null;
+      if (note != null) {
+        final at = l.start + s.indexOf('[^') + 2;
+        final inner = <Seg>[(start: l.start + note.end, end: l.end)];
+        var end = l.end;
+        var j = i + 1;
+        var blankBefore = false;
+        while (j < lines.length) {
+          final n = lines[j];
+          if (_blank(n)) {
+            inner.add((start: n.start, end: n.start));
+            blankBefore = true;
+          } else if (_indent(n) >= 4) {
+            inner.add(_strip(n, 4));
+            blankBefore = false;
+            end = n.end;
+          } else if (!blankBefore && !_interrupts(lines, j)) {
+            inner.add(n);
+            end = n.end;
+          } else {
+            break;
+          }
+          j++;
+        }
+        while (inner.length > 1 && inner.last.start == inner.last.end) {
+          inner.removeLast();
+        }
+        blocks.add(MdFootnote(l.start, end, (start: at, end: at + note.group(1)!.length), parse(inner)));
+        i = j;
+        continue;
+      }
+
       // A quote: its lines without the ">".
       if (indent < 4 && _quote.hasMatch(s)) {
         final inner = <Seg>[];
@@ -429,10 +508,14 @@ class _Blocks {
         continue;
       }
 
-      // A paragraph: its first line without the indentation, the next ones as written.
+      // A paragraph: its first line without the indentation, the next ones as written. Underlined by === or ---,
+      // it is a heading.
       final content = <Seg>[_trim(l)];
       var j = i + 1;
-      while (j < lines.length && !_blank(lines[j]) && !_interrupts(lines, j)) {
+      var underline = 0;
+      while (j < lines.length && !_blank(lines[j])) {
+        underline = _underline(lines, j);
+        if (underline > 0 || _interrupts(lines, j)) break;
         final t = lines[j];
         var b = t.end;
         while (b > t.start && _isSpace(text.codeUnitAt(b - 1))) {
@@ -440,6 +523,11 @@ class _Blocks {
         }
         content.add((start: t.start, end: b));
         j++;
+      }
+      if (underline > 0) {
+        blocks.add(MdHeading(l.start, lines[j].end, underline, content));
+        i = j + 1;
+        continue;
       }
       blocks.add(MdParagraph(l.start, lines[j - 1].end, content));
       i = j;
@@ -551,6 +639,45 @@ class _Link extends _Tok {
 class _Break extends _Tok {
   _Break(this.from, this.to);
   final int from, to;
+}
+
+/// A footnote mark: its label.
+class _Note extends _Tok {
+  _Note(this.from, this.to);
+  final int from, to;
+}
+
+/// An HTML tag that styles text: the style it gives, whether it closes, and the tag itself.
+class _Tag extends _Tok {
+  _Tag(this.bit, this.close, this.from, this.to);
+  final int bit;
+  final bool close;
+  final int from, to;
+  bool used = false;
+}
+
+const _tagStyles = {
+  'b': MdRun.bold,
+  'strong': MdRun.bold,
+  'i': MdRun.italic,
+  'em': MdRun.italic,
+  'u': MdRun.underline,
+  's': MdRun.strike,
+  'del': MdRun.strike,
+  'strike': MdRun.strike,
+  'sup': MdRun.sup,
+  'sub': MdRun.sub,
+  'kbd': MdRun.code,
+};
+
+final _tagRe = RegExp(r'^(/?)([a-z]+)(?:\s[^<>]*)?$', caseSensitive: false);
+
+/// Whether [rest] (the text from a "<" to its end) is the start of a tag that is read: "<", "<su", "</b", "<br".
+bool _halfTag(String rest) {
+  final m = RegExp(r'^</?([A-Za-z]*)$').firstMatch(rest);
+  if (m == null) return false;
+  final name = m.group(1)!.toLowerCase();
+  return 'br'.startsWith(name) || _tagStyles.keys.any((t) => t.startsWith(name));
 }
 
 /// A run in places of the joined text.
@@ -758,6 +885,24 @@ class _Inline {
         i = text = n;
         continue;
       }
+      // A footnote mark: [^label]. While written, a half-written one at the end is not shown yet.
+      if (c == 0x5B && _c(i + 1) == 0x5E) {
+        var e = i + 2;
+        while (e < to && !_isSpace(s.codeUnitAt(e)) && s.codeUnitAt(e) != 0x5D && s.codeUnitAt(e) != 0x5B) {
+          e++;
+        }
+        if (e > i + 2 && e < to && s.codeUnitAt(e) == 0x5D) {
+          flush(i);
+          toks.add(_Note(i + 2, e));
+          i = text = e + 1;
+          continue;
+        }
+        if (live && e == to) {
+          flush(i);
+          i = text = to;
+          continue;
+        }
+      }
       // Links and images.
       if (c == 0x5B || (c == 0x21 && _c(i + 1) == 0x5B)) {
         final open = c == 0x21 ? i + 1 : i;
@@ -775,7 +920,8 @@ class _Inline {
         i++;
         continue;
       }
-      // <https://...> and <br>.
+      // <https://...>, <br> and the tags that style text. While written, a half-written tag at the end is not
+      // shown yet.
       if (c == 0x3C) {
         final close = s.indexOf('>', i + 1);
         if (close > 0 && close < to) {
@@ -786,12 +932,24 @@ class _Inline {
             i = text = close + 1;
             continue;
           }
+          final tag = _tagRe.firstMatch(inside);
+          final bit = tag == null ? null : _tagStyles[tag.group(2)!.toLowerCase()];
+          if (bit != null && !(tag!.group(1)!.isNotEmpty && inside.contains(' '))) {
+            flush(i);
+            toks.add(_Tag(bit, tag.group(1)!.isNotEmpty, i, close + 1));
+            i = text = close + 1;
+            continue;
+          }
           if (RegExp(r'^https?://[^\s<>]+$').hasMatch(inside)) {
             flush(i);
             toks.add(_Link([_SRun(RunKind.text, i + 1, close, 0, inside)], inside));
             i = text = close + 1;
             continue;
           }
+        } else if (live && _halfTag(s.substring(i, to))) {
+          flush(i);
+          i = text = to;
+          continue;
         }
         i++;
         continue;
@@ -932,6 +1090,30 @@ class _Inline {
       }
     }
 
+    // The HTML tags: a closing tag styles what is between it and the nearest unused opening one of its kind. While
+    // written, an opening tag with text after it styles the rest already; else an unpaired tag shows as written.
+    for (var ci = 0; ci < toks.length; ci++) {
+      final closer = toks[ci];
+      if (closer is! _Tag || !closer.close) continue;
+      for (var oi = ci - 1; oi >= 0; oi--) {
+        final o = toks[oi];
+        if (o is _Tag && !o.close && !o.used && o.bit == closer.bit) {
+          o.used = closer.used = true;
+          apply(oi + 1, ci, closer.bit);
+          break;
+        }
+      }
+    }
+    if (live) {
+      for (var t = 0; t < toks.length - 1; t++) {
+        final o = toks[t];
+        if (o is _Tag && !o.close && !o.used) {
+          o.used = true;
+          apply(t + 1, toks.length, o.bit);
+        }
+      }
+    }
+
     final runs = <_SRun>[];
     for (var t = 0; t < toks.length; t++) {
       final st = style[t];
@@ -951,6 +1133,10 @@ class _Inline {
           }
         case _Break(:final from, :final to):
           runs.add(_SRun(RunKind.newline, from, to, 0));
+        case _Note(:final from, :final to):
+          runs.add(_SRun(RunKind.text, from, to, st | MdRun.sup));
+        case final _Tag tag:
+          if (!tag.used) runs.add(_SRun(RunKind.text, tag.from, tag.to, st));
       }
     }
     return runs;

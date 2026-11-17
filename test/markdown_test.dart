@@ -91,6 +91,31 @@ Inline \$e^{i\\pi} + 1 = 0\$ and \\(a^2\\), money \$5 and \$10.
 \\[ \\sum_{k=1}^n k \\]
 ''';
 
+/// Underlined headings, HTML tags, footnotes (written before the end) and indented code.
+const _extra = '''Setext title
+===
+
+Water is H<sub>2</sub>O and E = mc<sup>2</sup>; press <kbd>Ctrl</kbd>+<kbd>C</kbd>.<br>A <b>bold</b>, <i>slanted</i>, <u>underlined</u> and <s>struck</s> line, a <span>plain</span> tag.
+
+A claim with a note[^1] and another[^2].
+
+[^1]: The first note.
+[^2]: The second note,
+    on two lines.
+
+Sub heading
+---
+
+    indented code
+      second line
+
+Last paragraph.
+''';
+
+List<String> _kinds(List<MdBlock> blocks) => [for (final b in blocks) b.runtimeType.toString()];
+
+String _seg(String text, Seg s) => text.substring(s.start, s.end);
+
 void main() {
   group('reading', () {
     test('the blocks of a reply, and where each piece of text is', () {
@@ -164,9 +189,104 @@ void main() {
       expect(runs.last.style, MdRun.bold);
     });
 
+    test('code indented by four spaces, but not a list item\'s indented text or a paragraph\'s next line', () {
+      const text = 'Text\n\n    code line\n\n      more\n\nAfter\n    still after\n\n- item\n\n    item text\n';
+      final blocks = parseBlocks(text);
+      expect(_kinds(blocks), ['MdParagraph', 'MdCode', 'MdParagraph', 'MdList']);
+      final code = blocks[1] as MdCode;
+      expect(code.lines.map((l) => _seg(text, l)).toList(), ['code line', '', '  more']);
+      expect(code.language, '');
+      expect(code.closed, isTrue);
+      expect((blocks[2] as MdParagraph).lines, hasLength(2));
+      expect(_kinds((blocks[3] as MdList).items.single.children), ['MdParagraph', 'MdParagraph']);
+      // While written, the last code line may still grow.
+      expect((parseBlocks('    code', live: true).single as MdCode).closed, isFalse);
+    });
+
+    test('headings underlined with === and ---; --- after a blank line is still a rule, tables are untouched', () {
+      const text = 'Big title\n===\n\nTwo line\nsmall title\n---\n\nText\n\n---\n\n| a | b |\n|---|---|\n| 1 | 2 |\n';
+      final blocks = parseBlocks(text);
+      expect(_kinds(blocks), ['MdHeading', 'MdHeading', 'MdParagraph', 'MdRule', 'MdTable']);
+      final h1 = blocks[0] as MdHeading, h2 = blocks[1] as MdHeading;
+      expect(h1.level, 1);
+      expect(_seg(text, h1.lines.single), 'Big title');
+      expect(h2.level, 2);
+      expect(h2.lines.map((l) => _seg(text, l)).toList(), ['Two line', 'small title']);
+      expect((blocks[4] as MdTable).rows, hasLength(2));
+    });
+
+    test('while written, an underline arriving later makes the line a heading; a dash starting a list does not', () {
+      expect(_kinds(parseBlocks('Title', live: true)), ['MdParagraph']);
+      expect(_kinds(parseBlocks('Title\n', live: true)), ['MdParagraph']);
+      expect((parseBlocks('Title\n=', live: true).single as MdHeading).level, 1);
+      expect((parseBlocks('Title\n---', live: true).single as MdHeading).level, 2);
+      for (final part in ['Steps:\n-', 'Steps:\n- ', 'Steps:\n--']) {
+        expect(_kinds(parseBlocks(part, live: true)), ['MdParagraph'], reason: part);
+      }
+      expect(_kinds(parseBlocks('Steps:\n- one', live: true)), ['MdParagraph', 'MdList']);
+    });
+
+    test('footnotes: the marks as raised labels, the notes as blocks of their own', () {
+      final blocks = parseBlocks(_extra);
+      expect(_kinds(blocks), [
+        'MdHeading', 'MdParagraph', 'MdParagraph', 'MdFootnote', 'MdFootnote', 'MdHeading', 'MdCode', 'MdParagraph', //
+      ]);
+      final claim = parseInline(_extra, (blocks[2] as MdParagraph).lines);
+      expect(_shown(_extra, claim), 'A claim with a note1 and another2.');
+      expect(claim.where((r) => r.style == MdRun.sup).map((r) => _seg(_extra, (start: r.from, end: r.to))), ['1', '2']);
+      final first = blocks[3] as MdFootnote, second = blocks[4] as MdFootnote;
+      expect(_seg(_extra, first.label), '1');
+      expect(_seg(_extra, second.label), '2');
+      final secondText = second.children.single as MdParagraph;
+      expect(secondText.lines.map((l) => _seg(_extra, l)).toList(), ['The second note,', 'on two lines.']);
+      expect((blocks[6] as MdCode).lines.map((l) => _seg(_extra, l)).toList(), ['indented code', '  second line']);
+    });
+
+    test('while written: a half-written mark is not shown, and a note can come after its mark', () {
+      const half = 'A claim[^';
+      expect(_shown(half, parseInline(half, [(start: 0, end: half.length)], live: true)), 'A claim');
+      const mark = 'A claim[^1] here.';
+      final runs = parseInline(mark, (parseBlocks(mark, live: true).single as MdParagraph).lines, live: true);
+      expect(runs.firstWhere((r) => r.style == MdRun.sup).from, mark.indexOf('1'));
+      const later = '$mark\n\n[^1]: The no';
+      expect(_kinds(parseBlocks(later, live: true)), ['MdParagraph', 'MdFootnote']);
+    });
+
+    test('HTML tags: the common ones style the text, others show as written', () {
+      final p = parseBlocks(_extra)[1] as MdParagraph;
+      final runs = parseInline(_extra, p.lines);
+      expect(
+        _shown(_extra, runs),
+        'Water is H2O and E = mc2; press Ctrl+C.\nA bold, slanted, underlined and struck line, a <span>plain</span> tag.',
+      );
+      int styleOf(String t) =>
+          runs.firstWhere((r) => r.kind == RunKind.text && _seg(_extra, (start: r.from, end: r.to)) == t).style;
+      expect(styleOf('2'), MdRun.sub);
+      expect(styleOf('Ctrl'), MdRun.code);
+      expect(styleOf('bold'), MdRun.bold);
+      expect(styleOf('slanted'), MdRun.italic);
+      expect(styleOf('underlined'), MdRun.underline);
+      expect(styleOf('struck'), MdRun.strike);
+      expect(runs.where((r) => r.style == MdRun.sup), hasLength(1));
+      const more = '<strong>s</strong> <em>e</em> <del>d</del> <B>caps</B> <b>open';
+      final r2 = parseInline(more, [(start: 0, end: more.length)]);
+      expect(_shown(more, r2), 's e d caps <b>open', reason: 'an unclosed tag of a finished reply shows as written');
+      expect(r2.firstWhere((r) => _seg(more, (start: r.from, end: r.to)) == 'caps').style, MdRun.bold);
+    });
+
+    test('while written, a half-written tag is not shown and an opened one styles what follows', () {
+      List<MdRun> live(String t) => parseInline(t, [(start: 0, end: t.length)], live: true);
+      expect(_shown('H<su', live('H<su')), 'H');
+      expect(_shown('H</', live('H</')), 'H');
+      expect(_shown('a < b', live('a < b')), 'a < b', reason: 'a comparison is not a tag');
+      final open = live('E = mc<sup>2');
+      expect(_shown('E = mc<sup>2', open), 'E = mc2');
+      expect(open.last.style, MdRun.sup);
+    });
+
     test('every beginning of a reply reads without an error (half-written markdown)', () {
-      for (var n = 0; n <= _sample.length; n++) {
-        final part = _sample.substring(0, n);
+      for (var n = 0; n <= _sample.length + _extra.length; n++) {
+        final part = '$_sample\n$_extra'.substring(0, n);
         for (final live in [false, true]) {
           void walk(List<MdBlock> blocks) {
             for (final b in blocks) {
@@ -181,7 +301,7 @@ void main() {
                       parseInline(part, [cell], live: live);
                     }
                   }
-                case MdQuote(:final children):
+                case MdQuote(:final children) || MdFootnote(:final children):
                   walk(children);
                 case MdList(:final items):
                   for (final i in items) {
@@ -269,6 +389,48 @@ void main() {
       expect(tester.getSize(find.byType(MarkdownView)).width, lessThanOrEqualTo(320));
     });
 
+    testWidgets('a table uses the width it has: a long column gets the room, a short one stays narrow', (tester) async {
+      final long = List.generate(40, (i) => 'word$i').join(' ');
+      final text = '| Key | Description |\n|---|---|\n| a | $long |\n| b | short |\n';
+      Size cell(String start) =>
+          tester.getSize(find.byWidgetPredicate((w) => w is RichText && w.text.toPlainText().startsWith(start)).first);
+      await tester.pumpWidget(_app(MarkdownView(text: text, style: _style), width: 800));
+      expect(tester.takeException(), isNull);
+      expect(cell('word0').width, greaterThan(_style.fontSize! * 24), reason: 'wider than the old cap');
+      expect(tester.getSize(find.byType(Table)).width, lessThanOrEqualTo(800), reason: 'wraps instead of scrolling');
+      expect(cell('Key').width, lessThan(60));
+      // Six words fit beside the short column on one line (the old cap wrapped them; the test font's letters are
+      // as wide as they are high).
+      final six = List.generate(6, (i) => 'word$i').join(' ');
+      await tester.pumpWidget(
+        _app(MarkdownView(text: '| Key | Description |\n|---|---|\n| a | $six |\n', style: _style), width: 800),
+      );
+      expect(cell('word0').width, greaterThan(_style.fontSize! * 24));
+      expect(cell('word0').height, lessThan(30), reason: 'one line');
+    });
+
+    testWidgets('footnotes are drawn at the end, marks raised; tags and underlined headings drawn', (tester) async {
+      await tester.pumpWidget(_app(const MarkdownView(text: _extra, style: _style)));
+      expect(tester.takeException(), isNull);
+      double top(String start) => tester
+          .getTopLeft(find.byWidgetPredicate((w) => w is RichText && w.text.toPlainText().startsWith(start)).first)
+          .dy;
+      expect(top('The first note'), greaterThan(top('Last paragraph')));
+      expect(top('The second note'), greaterThan(top('The first note')));
+      expect(find.text('1.'), findsOneWidget);
+      expect(_styleOf(tester, 'Setext title')!.fontSize, greaterThan(_styleOf(tester, 'Sub heading')!.fontSize!));
+      expect(_styleOf(tester, 'Sub heading')!.fontSize, greaterThan(15));
+      expect(_styleOf(tester, 'underlined')!.decoration, TextDecoration.underline);
+      expect(_styleOf(tester, 'struck')!.decoration, TextDecoration.lineThrough);
+      expect(_styleOf(tester, 'Ctrl')!.fontFamily, 'monospace');
+      expect(find.textContaining('<span>plain</span>'), findsOneWidget);
+      expect(find.text('code'), findsOneWidget, reason: 'the indented code is in a code box');
+      // The raised mark sits higher than the text beside it.
+      final mark = find.text('1').first;
+      expect(tester.getSize(mark).height, lessThan(20));
+      expect(tester.getTopLeft(mark).dy, lessThan(top('A claim') - 1));
+    });
+
     testWidgets('formulas: inline and on their own, drawn as formulas', (tester) async {
       await tester.pumpWidget(_app(MarkdownView(text: _sample, style: _style)));
       expect(tester.takeException(), isNull);
@@ -328,7 +490,8 @@ void main() {
     testWidgets('nothing moves when the finished message takes over (formulas aside)', (tester) async {
       final noMath = _sample.substring(0, _sample.indexOf('Inline'));
       final longCode = '```dart\n${List.generate(70, (k) => 'final v$k = $k;').join('\n')}\n```\n\nAfter it.';
-      for (final text in [noMath, longCode]) {
+      const notesLast = 'Text with a note[^1].\n\n[^1]: The note, written last.';
+      for (final text in [noMath, longCode, _extra, notesLast]) {
         for (final width in [600.0, 300.0]) {
           Widget box(Widget child) => _app(
             Align(alignment: Alignment.topLeft, child: child),
@@ -346,15 +509,15 @@ void main() {
     });
 
     testWidgets('half-written markdown draws sensibly at every step and never throws', (tester) async {
-      for (final width in [600.0, 260.0]) {
+      for (final (width, all) in [(600.0, _sample), (260.0, _sample), (600.0, _extra)]) {
         await tester.pumpWidget(reply('', live: true, width: width));
         // A few characters at a time, as tokens come.
-        for (var n = 0; n <= _sample.length; n += 3) {
-          await tester.pumpWidget(reply(_sample.substring(0, n), live: true, width: width));
+        for (var n = 0; n <= all.length; n += 3) {
+          await tester.pumpWidget(reply(all.substring(0, n), live: true, width: width));
           await tester.pump(const Duration(milliseconds: 16));
-          expect(tester.takeException(), isNull, reason: 'after ${_sample.substring(0, n)}');
+          expect(tester.takeException(), isNull, reason: 'after ${all.substring(0, n)}');
         }
-        await tester.pumpWidget(reply(_sample, live: false, width: width));
+        await tester.pumpWidget(reply(all, live: false, width: width));
         for (var i = 0; i < 60; i++) {
           await tester.pump(const Duration(milliseconds: 16));
         }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -77,9 +78,21 @@ class _MarkdownViewState extends State<MarkdownView> {
     if (_built == null) {
       _dropTaps();
       final b = MdBuilder(text: widget.text, marks: widget.marks, markStyle: widget.markStyle, taps: _taps);
-      _built = SelectionArea(
-        child: mdColumn(b.blocks(_blocks, look), look.gap, empty: b.leaf(const [], look.base, 0, look)),
-      );
+      // Footnotes go at the end, whatever place they were written in.
+      final body = [
+        for (final x in _blocks)
+          if (x is! MdFootnote) x,
+      ];
+      final notes = [
+        for (final x in _blocks)
+          if (x is MdFootnote) x,
+      ];
+      final parts = [
+        if (body.isNotEmpty || notes.isEmpty)
+          mdColumn(b.blocks(body, look), look.gap, empty: b.leaf(const [], look.base, 0, look)),
+        if (notes.isNotEmpty) mdNotes(b.blocks(notes, look), look),
+      ];
+      _built = SelectionArea(child: parts.length == 1 ? parts.single : mdColumn(parts, look.gap));
     }
     return _built!;
   }
@@ -99,6 +112,15 @@ Widget mdColumn(List<Widget> blocks, double gap, {Widget? empty}) => Column(
   crossAxisAlignment: CrossAxisAlignment.start,
   mainAxisSize: MainAxisSize.min,
   children: blocks.isEmpty && empty != null ? [empty] : withGaps(blocks, gap),
+);
+
+/// The footnotes at the end of a reply: under a thin line, close together.
+Widget mdNotes(List<Widget> notes, MdLook look) => Container(
+  padding: EdgeInsets.only(top: look.gap / 2),
+  decoration: BoxDecoration(
+    border: Border(top: BorderSide(color: look.colors.border)),
+  ),
+  child: mdColumn(notes, look.gap / 4),
 );
 
 List<Widget> withGaps(List<Widget> blocks, double gap) => [
@@ -176,6 +198,25 @@ class MdBuilder {
           padding: EdgeInsets.symmetric(vertical: look.gap / 4),
           child: Container(height: 1, color: look.colors.border),
         );
+      case MdFootnote(:final label, :final children):
+        final note = look.note;
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Padding(
+              padding: EdgeInsets.only(right: note.fontSize * 0.45),
+              child: Text('${text.substring(label.start, label.end)}.', style: note.base),
+            ),
+            Expanded(
+              child: mdColumn(
+                blocks(children, note, depth: depth),
+                note.gap,
+                empty: leaf(const [], note.base, b.start, note),
+              ),
+            ),
+          ],
+        );
     }
   }
 
@@ -252,6 +293,18 @@ class MdBuilder {
               alignment: PlaceholderAlignment.baseline,
               baseline: TextBaseline.alphabetic,
               child: _math(r.tex!, look, display: r.kind == RunKind.displayMath, style: style),
+            ),
+          );
+        case RunKind.text when _raised(r):
+          // Raised or lowered a little (a footnote mark, <sup>, <sub>); the text as it is beside it while written.
+          out.add(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.baseline,
+              baseline: TextBaseline.alphabetic,
+              child: Transform.translate(
+                offset: Offset(0, (r.style & MdRun.sup != 0 ? -0.4 : 0.2) * (style.fontSize ?? look.fontSize)),
+                child: Text(text.substring(r.from, r.to), style: _runStyle(r, style, look)),
+              ),
             ),
           );
         case RunKind.text:
@@ -376,11 +429,15 @@ class MdBuilder {
           ],
         ),
     ];
-    return _Sideways(
-      child: Table(
-        defaultColumnWidth: MinColumnWidth(const IntrinsicColumnWidth(), FixedColumnWidth(look.fontSize * 24)),
-        border: TableBorder.all(color: c.border),
-        children: rows,
+    final table = Table(
+      defaultColumnWidth: _ColumnWidth(look.fontSize * 10),
+      border: TableBorder.all(color: c.border),
+      children: rows,
+    );
+    return LayoutBuilder(
+      builder: (context, box) => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: _FitWidth(width: box.maxWidth, child: table),
       ),
     );
   }
@@ -427,7 +484,67 @@ class MdBuilder {
   }
 }
 
-/// Wide content (a table, a code block, a formula) scrolls sideways inside the reply instead of overflowing it.
+bool _raised(MdRun r) => r.style & (MdRun.sup | MdRun.sub) != 0;
+
+/// A table column: as wide as its widest cell's text on one line; when the table must be narrower, it wraps its
+/// text, but not below [floor] (or its longest word), so a column of long text keeps some room.
+class _ColumnWidth extends TableColumnWidth {
+  const _ColumnWidth(this.floor);
+
+  final double floor;
+
+  @override
+  double maxIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) =>
+      cells.fold(0.0, (w, c) => max(w, c.getMaxIntrinsicWidth(double.infinity)));
+
+  @override
+  double minIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) {
+    final word = cells.fold(0.0, (w, c) => max(w, c.getMinIntrinsicWidth(double.infinity)));
+    return min(maxIntrinsicWidth(cells, containerWidth), max(word, floor));
+  }
+}
+
+/// Lays a table out at most [width] (the reply's width) wide, so its columns wrap only when it would be wider; never
+/// narrower than its columns at their narrowest, so in a narrow reply it is wider and scrolls sideways.
+class _FitWidth extends SingleChildRenderObjectWidget {
+  const _FitWidth({required this.width, required super.child});
+
+  final double width;
+
+  @override
+  _RenderFitWidth createRenderObject(BuildContext context) => _RenderFitWidth(width);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderFitWidth renderObject) => renderObject.width = width;
+}
+
+class _RenderFitWidth extends RenderProxyBox {
+  _RenderFitWidth(this._width);
+
+  double _width;
+  set width(double value) {
+    if (value == _width) return;
+    _width = value;
+    markNeedsLayout();
+  }
+
+  BoxConstraints _inner(BoxConstraints constraints) {
+    final w = min(constraints.maxWidth, max(_width, child!.getMinIntrinsicWidth(double.infinity)));
+    return BoxConstraints(maxWidth: w, maxHeight: constraints.maxHeight);
+  }
+
+  @override
+  void performLayout() {
+    child!.layout(_inner(constraints), parentUsesSize: true);
+    size = constraints.constrain(child!.size);
+  }
+
+  @override
+  Size computeDryLayout(covariant BoxConstraints constraints) =>
+      constraints.constrain(child!.getDryLayout(_inner(constraints)));
+}
+
+/// Wide content (a code block, a formula) scrolls sideways inside the reply instead of overflowing it.
 class _Sideways extends StatelessWidget {
   const _Sideways({required this.child, this.center = false});
 
@@ -578,12 +695,14 @@ double? markdownOffsetTop(RenderObject root, int offset) {
   var plain = 0;
   for (final r in leaf.runs) {
     if (offset < r.from) break;
-    final n = r.kind == RunKind.text ? r.to - r.from : 1;
+    // Raised text is one place too (a widget in the line).
+    final whole = r.kind == RunKind.text && !_raised(r);
+    final n = whole ? r.to - r.from : 1;
     if (offset >= r.to) {
       plain += n;
       continue;
     }
-    if (r.kind == RunKind.text) plain += offset - r.from;
+    if (whole) plain += offset - r.from;
     break;
   }
   final caret = paragraph.getOffsetForCaret(TextPosition(offset: plain), Rect.zero);

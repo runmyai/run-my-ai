@@ -26,9 +26,12 @@ class MarkdownLive extends StatefulWidget {
 class _MarkdownLiveState extends State<MarkdownLive> {
   MdLook? _look;
 
-  /// The finished blocks' widgets, and them as one layer (built again only when one is added).
+  /// The finished blocks' widgets, and them as one layer (built again only when one is added). Finished footnotes
+  /// are kept apart: they are drawn at the end, as the finished message draws them.
   final _done = <Widget>[];
   Widget? _doneLayer;
+  final _notes = <Widget>[];
+  bool _openNote = false;
 
   /// Where the block being written starts, where the text read for it ended, and its widget.
   int _from = 0;
@@ -46,6 +49,7 @@ class _MarkdownLiveState extends State<MarkdownLive> {
       _look = look;
       _done.clear();
       _doneLayer = null;
+      _notes.clear();
       _from = 0;
       _readTo = -1;
       _codeGroups.clear();
@@ -60,7 +64,7 @@ class _MarkdownLiveState extends State<MarkdownLive> {
       if (blocks.length > 1) {
         final finished = MdBuilder(text: text);
         for (final b in blocks.take(blocks.length - 1)) {
-          _done.add(finished.block(b, look));
+          (b is MdFootnote ? _notes : _done).add(finished.block(b, look));
         }
         _doneLayer = null;
         _from = blocks.last.start;
@@ -68,17 +72,16 @@ class _MarkdownLiveState extends State<MarkdownLive> {
       }
       final open = MdBuilder(text: text, reveal: widget.reveal, liveEnd: writing ? to : null, codeGroups: _codeGroups);
       _open = blocks.isEmpty ? open.leaf(const [], look.base, _from, look) : open.block(blocks.last, look);
+      _openNote = blocks.isNotEmpty && blocks.last is MdFootnote;
     }
     if (_done.isNotEmpty) {
       _doneLayer ??= RepaintBoundary(child: mdColumn(List.of(_done), look.gap));
     }
+    final notes = [..._notes, if (_openNote) _open!];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
-      children: [
-        if (_doneLayer != null) ...[_doneLayer!, SizedBox(height: look.gap)],
-        _open!,
-      ],
+      children: withGaps([?_doneLayer, if (!_openNote) _open!, if (notes.isNotEmpty) mdNotes(notes, look)], look.gap),
     );
   }
 }
