@@ -153,9 +153,6 @@ class _FeedbackFormState extends ConsumerState<FeedbackForm> {
     ];
 
     return Dialog(
-      backgroundColor: c.page,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
         child: Padding(

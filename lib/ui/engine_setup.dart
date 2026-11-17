@@ -281,9 +281,6 @@ class _EngineSetupState extends ConsumerState<EngineSetup> {
     };
 
     final dialog = Dialog(
-      backgroundColor: c.page,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
         child: SingleChildScrollView(

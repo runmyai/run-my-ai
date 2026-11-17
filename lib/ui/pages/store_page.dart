@@ -283,9 +283,6 @@ Future<bool?> _confirmDelete(BuildContext context, String name, int bytes) => sh
   builder: (context) {
     final c = context.colors;
     return AlertDialog(
-      backgroundColor: c.page,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       constraints: const BoxConstraints(maxWidth: 400),
       content: Text(
         'Delete $name? Its ${(bytes / 1e9).round()} GB will have to be downloaded again to use it.',

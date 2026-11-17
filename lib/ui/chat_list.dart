@@ -1086,9 +1086,6 @@ class _DeleteBoxState extends State<_DeleteBox> {
         const SingleActivator(LogicalKeyboardKey.arrowRight): _delete.requestFocus,
       },
       child: AlertDialog(
-        backgroundColor: c.page,
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         constraints: const BoxConstraints(maxWidth: 400),
         title: Text('Delete this chat?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: c.text)),
         content: Text(

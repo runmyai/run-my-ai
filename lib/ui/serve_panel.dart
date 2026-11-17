@@ -141,9 +141,6 @@ class _ServePanelState extends ConsumerState<ServePanel> {
 
     // (Not an AlertDialog: it measures its content before laying it out, which a select box cannot answer.)
     return Dialog(
-      backgroundColor: c.page,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
         child: Padding(
