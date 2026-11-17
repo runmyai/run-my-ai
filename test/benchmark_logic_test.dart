@@ -950,21 +950,30 @@ void main() {
       expect(ChatDb.maxBenchmarks, 60);
     });
 
-    test('a database from before the graphs opens, and its runs open too', () {
+    test('the runs an older version kept in chats.db are moved to their own database, and stay there', () {
       final dir = Directory.systemTemp.createTempSync('runmyai-bench-db-');
       addTearDown(() => dir.deleteSync(recursive: true));
-      final path = '${dir.path}/chats.db';
-      final first = ChatDb.open(path);
-      first.addBenchmark('{"at":1}');
-      first.close();
-      // Back to the version before the reply stats, as an older app left it.
-      final raw = sqlite3.open(path);
+      final folder = Directory('${dir.path}/chats');
+      ChatDb.open(dir, folder).close();
+      // The version before the reply stats, as an older app left it: its runs in chats.db.
+      File('${dir.path}/chat-index.db').renameSync('${dir.path}/chats.db');
+      File('${dir.path}/benchmarks.db').deleteSync();
+      final raw = sqlite3.open('${dir.path}/chats.db');
       raw.execute('ALTER TABLE messages DROP COLUMN stats');
+      raw.execute('DROP TABLE files');
+      raw.execute('CREATE TABLE benchmarks (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL)');
+      raw.execute('''INSERT INTO benchmarks (data) VALUES ('{"at":1}')''');
       raw.execute('PRAGMA user_version = 12');
       raw.close();
-      final reopened = ChatDb.open(path);
-      addTearDown(reopened.close);
+      final reopened = ChatDb.open(dir, folder);
       expect(reopened.benchmarks().single.$2, '{"at":1}');
+      reopened.addBenchmark('{"at":2}');
+      reopened.close();
+      // The index can be made again from the chat files; the runs are not in it.
+      File('${dir.path}/chat-index.db').deleteSync();
+      final again = ChatDb.open(dir, folder);
+      addTearDown(again.close);
+      expect([for (final (_, data) in again.benchmarks()) data], ['{"at":2}', '{"at":1}']);
     });
   });
 }

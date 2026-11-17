@@ -1,5 +1,5 @@
-// The chats database (lib/data/chat_db.dart): its search gives exactly the in-memory search's results, chats saved
-// as files by older versions are moved in, and saved changes come back.
+// The chats' index (lib/data/chat_db.dart): its search gives exactly the in-memory search's results, chats saved
+// as files by much older versions are moved in, and saved changes come back.
 // Run: flutter test test/chat_db_test.dart
 import 'dart:convert';
 import 'dart:io';
@@ -71,12 +71,16 @@ void main() {
     }
     File('${dir.path}/pins.json').writeAsStringSync(jsonEncode({'pinned': ['a', 'gone']}));
 
-    var db = ChatDb.open('${dir.path}/chats.db');
+    final folder = Directory('${dir.path}/chats');
+    var db = ChatDb.open(dir, folder);
     expect([for (final c in db.chats()) c.title], ['Bravo', 'Alpha']);
     expect(db.pins(), ['a']);
     expect(db.messages('a').map((m) => m.text), ['Hello there', 'Hi!']);
-    expect(Directory('${dir.path}/chats').existsSync(), isFalse);
+    expect(File('${dir.path}/chats/a.json').existsSync(), isFalse);
     expect(File('${dir.path}/pins.json').existsSync(), isFalse);
+    // They are chat files of today now.
+    expect([for (final f in Directory('${dir.path}/chats/Chat').listSync()) f.path.split('/').last]..sort(),
+        ['Alpha.json', 'Bravo.json']);
 
     // Changes are saved: rename, a new message, pins, delete; the index forgets a deleted chat's words.
     db
@@ -86,7 +90,7 @@ void main() {
       ..setPins(['b', 'a'])
       ..delete('a')
       ..close();
-    db = ChatDb.open('${dir.path}/chats.db');
+    db = ChatDb.open(dir, folder);
     expect([for (final c in db.chats()) c.title], ['Bravo renamed']);
     expect(db.pins(), ['b']);
     expect(db.messages('b').last.text, 'zebra crossing');
@@ -124,7 +128,7 @@ void main() {
     ''');
     old.userVersion = 1;
     old.close();
-    final db = ChatDb.open('${dir.path}/chats.db');
+    final db = ChatDb.open(dir, Directory('${dir.path}/chats'));
     expect([for (final c in db.chats()) (c.title, c.kind)], [('Old chat', ChatKind.chat)]);
     expect(db.pins(), ['x']);
     db.close();

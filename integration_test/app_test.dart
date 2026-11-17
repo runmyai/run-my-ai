@@ -117,7 +117,7 @@ class CountingChime extends Chime {
 /// Waits for the app's saves, then reads the chats database the way the app will next time it starts.
 Future<T> saved<T>(Directory dir, T Function(ChatDb db) read) async {
   await _store!.flush();
-  final db = ChatDb.open('${dir.path}/chats.db');
+  final db = ChatDb.open(dir, Storage(dir).chatsDir);
   try {
     return read(db);
   } finally {
@@ -911,7 +911,7 @@ void main() {
     final dir = Directory.systemTemp.createTempSync('runmyai-test-');
     final storage = Storage(dir)..writePrefs(const PrefsData(theme: 'light'));
     // Two chats in each section; every one mentions a zebra.
-    final db = ChatDb.open('${dir.path}/chats.db');
+    final db = ChatDb.open(dir, Storage(dir).chatsDir);
     var time = DateTime.now().subtract(const Duration(minutes: 6));
     for (final (id, title, kind) in [
       ('chat1', 'Paris trip', ChatKind.chat),
@@ -1045,7 +1045,7 @@ void main() {
     final dir = Directory.systemTemp.createTempSync('runmyai-test-');
     final storage = Storage(dir)..writePrefs(const PrefsData(theme: 'light'));
     // 40 chats today (Today 01 the newest), one yesterday.
-    final db = ChatDb.open('${dir.path}/chats.db');
+    final db = ChatDb.open(dir, Storage(dir).chatsDir);
     final now = DateTime.now();
     for (var i = 1; i <= 40; i++) {
       final t = now.subtract(Duration(seconds: i));
