@@ -72,6 +72,25 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// Where the engine is until the user sets another folder: the app's own folder.
   static String get defaultEngineFolder => File(Platform.resolvedExecutable).parent.path;
 
+  /// The engine program's folder: the engine folder, or its cuda12 folder (the engine built with CUDA 12) on a PC whose NVIDIA
+  /// cards or driver the CUDA 13 build cannot run (needsCuda12). Asked once.
+  String get _engineFolder {
+    final base = _storage.readPrefs().engineFolder ?? defaultEngineFolder;
+    final old = '$base${Platform.pathSeparator}cuda12';
+    if (!File('$old/llama-server${Platform.isWindows ? '.exe' : ''}').existsSync()) return base;
+    _cuda12 ??= () {
+      try {
+        final r = Process.runSync('nvidia-smi', ['--query-gpu=compute_cap,driver_version', '--format=csv,noheader']);
+        return needsCuda12(r.exitCode == 0 ? r.stdout as String : 'unreadable');
+      } on ProcessException {
+        return false;   // no NVIDIA driver
+      }
+    }();
+    return _cuda12! ? old : base;
+  }
+
+  bool? _cuda12;
+
   static const _lingFile = ModelFile(id: 'ling-3.0-flash/MXFP4_MOE', quantization: 'MXFP4', sizeBytes: 70147512048);
   static const _flintFile = ModelFile(id: 'flint-40b/UD-Q4_K_XL', quantization: 'UD-Q4_K_XL', sizeBytes: 25055397324);
   // two files: the model, and its n-gram table next to it (...-00002-of-00002.gguf)
@@ -322,7 +341,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   @override
   Future<bool> acceptsFlag(String flag) async {
-    final folder = _storage.readPrefs().engineFolder ?? defaultEngineFolder;
+    final folder = _engineFolder;
     final program = File('$folder/llama-server${Platform.isWindows ? '.exe' : ''}');
     if (!program.existsSync()) return false;
     final stat = program.statSync();
@@ -788,7 +807,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   Future<EngineProcess> _start(_LocalModel local, EngineRun run) async {
     final prefs = _storage.readPrefs();
-    final folder = prefs.engineFolder ?? defaultEngineFolder;
+    final folder = _engineFolder;
     final states = _activeStateFolder;
     Directory(states).createSync(recursive: true);
     final program = '$folder/llama-server${Platform.isWindows ? '.exe' : ''}';

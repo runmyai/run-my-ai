@@ -42,3 +42,20 @@ List<({String name, int mib})> cardsFrom(Map<String, dynamic> tune) {
   return read('igpus').where((g) => g.mib >= 24 * 1024).take(1).toList();
 }
 
+/// Whether this PC's NVIDIA cards need the engine built with CUDA 12, from `nvidia-smi --query-gpu=compute_cap,driver_version
+/// --format=csv,noheader` (one "7.5, 580.65.06" line per card): CUDA 13 runs neither cards older than the RTX 20 series
+/// (compute capability under 7.5: Maxwell, Pascal, Volta) nor drivers older than 580. Null output = no NVIDIA card (no need);
+/// output that does not read as such lines = a driver too old for the query, which CUDA 13 cannot use either.
+bool needsCuda12(String? nvidiaSmi) {
+  if (nvidiaSmi == null) return false;
+  final lines = nvidiaSmi.trim().split('\n').where((l) => l.trim().isNotEmpty).toList();
+  if (lines.isEmpty) return false;
+  for (final l in lines) {
+    final f = l.split(',').map((x) => x.trim()).toList();
+    final cc = f.isNotEmpty ? double.tryParse(f[0]) : null;
+    final driver = f.length > 1 ? int.tryParse(f[1].split('.').first) : null;
+    if (cc == null || driver == null || cc < 7.5 || driver < 580) return true;
+  }
+  return false;
+}
+

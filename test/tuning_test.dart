@@ -29,4 +29,13 @@ void main() {
     expect(cardsFrom({'gpus': [{'name': 'CUDA0', 'mib': 8192}], 'igpus': [{'name': 'Vulkan1', 'mib': 65536}]}),
         [(name: 'CUDA0', mib: 8192)]);
   });
+
+  test('the CUDA 12 engine: old cards or an old driver', () {
+    expect(needsCuda12(null), false);
+    expect(needsCuda12('8.6, 615.71.09\n'), false);
+    expect(needsCuda12('6.1, 580.178.04\n'), true);    // GTX 1080
+    expect(needsCuda12('8.6, 550.144.03\n'), true);    // a driver older than 580
+    expect(needsCuda12('8.6, 615.71.09\n6.1, 615.71.09\n'), true);
+    expect(needsCuda12('unreadable'), true);
+  });
 }
