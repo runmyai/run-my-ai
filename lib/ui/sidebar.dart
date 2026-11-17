@@ -184,7 +184,7 @@ class _FullBody extends ConsumerWidget {
         _Row(
           key: const Key('engine'),
           icon: Icons.memory_outlined,
-          label: 'Engine',
+          label: 'Benchmark',
           selected: section == Section.engine,
           onTap: () => select(Section.engine),
         ),
@@ -262,7 +262,7 @@ class _RailBody extends ConsumerWidget {
         _IconAction(
           key: const Key('engine'),
           icon: Icons.memory_outlined,
-          tooltip: 'Engine',
+          tooltip: 'Benchmark',
           selected: section == Section.engine,
           onTap: () => select(Section.engine),
         ),

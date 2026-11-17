@@ -12,6 +12,7 @@ import '../benchmark/win32_metrics.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
 import '../engine/auto_commands.dart';
+import '../engine/commands.dart';
 import '../engine/chat_states.dart';
 import '../engine/chat_stream.dart';
 import '../engine/context_fit.dart';
@@ -893,12 +894,12 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final total = RegExp(r'MemTotal:\s+(\d+) kB').firstMatch(File('/proc/meminfo').readAsStringSync());
     if (total == null) return const [];
     final totalKiB = int.parse(total[1]!);
-    final headroomKiB = ((headroomGiB ?? 1.0) * 1048576).round();
+    final headroomKiB = ((headroomGiB ?? defaultHeadroomGiB) * 1048576).round();
     final capKiB = (totalKiB - headroomKiB).clamp(4 * 1048576, totalKiB - 524288);
     return ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=${capKiB}K', '-p', 'MemorySwapMax=0', '--'];
   }
 
-  /// The Windows job's memory limit that leaves [headroomGiB] of RAM free (default 1 GB), as [_memoryCap] does on Linux:
+  /// The Windows job's memory limit that leaves [headroomGiB] of RAM free (default [defaultHeadroomGiB]), as [_memoryCap] does on Linux:
   /// all the RAM but the headroom, at least 4 GiB and at most all but 0.5 GiB. Windows counts what a program puts in the
   /// graphics card's memory against the job's limit too, and the engine fills the card, so the job also gets the cards'
   /// video memory: the headroom then stays free in RAM. The cards are the autotuner's (every discrete card, any make;
@@ -907,7 +908,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!Platform.isWindows) return null;
     final totalGiB = Win32Metrics().memory()?.totalGiB;
     if (totalGiB == null) return null;
-    var bytes = ((totalGiB - (headroomGiB ?? 1.0)).clamp(4.0, totalGiB - 0.5) * 1073741824).round();
+    var bytes = ((totalGiB - (headroomGiB ?? defaultHeadroomGiB)).clamp(4.0, totalGiB - 0.5) * 1073741824).round();
     if (tuned?['gpus'] case final List cards when cards.isNotEmpty) {
       return bytes + cards.fold<int>(0, (sum, g) => sum + ((g as Map)['mib'] as int)) * 1048576;
     }

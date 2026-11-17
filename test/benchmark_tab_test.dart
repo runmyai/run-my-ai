@@ -29,6 +29,7 @@ import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/benchmark/fold.dart';
 import 'package:runmyai/ui/benchmark/live_graphs.dart';
 import 'package:runmyai/ui/buttons.dart';
+import 'package:runmyai/ui/context_settings.dart';
 import 'package:runmyai/ui/pages/engine_page.dart';
 import 'package:runmyai/ui/select_box.dart';
 
@@ -92,16 +93,6 @@ class _Fake extends BenchmarkNotifier {
 
   /// Moves the state on, as a run does while the tab is on screen.
   void put(BenchmarkState next) => state = next;
-}
-
-class _TabBenchmark extends EngineTabNotifier {
-  @override
-  bool build() => true;
-}
-
-class _TabRun extends EngineTabNotifier {
-  @override
-  bool build() => false;
 }
 
 /// A run of [seconds] with every series the live view draws.
@@ -541,7 +532,7 @@ void _tab() {
   final stores = <ChatStore>[];
 
   /// The tab, with [state] as what the benchmark notifier holds, in a window [width] wide.
-  Future<void> pump(WidgetTester tester, BenchmarkState state, {double width = 1300, bool runTab = false}) async {
+  Future<void> pump(WidgetTester tester, BenchmarkState state, {double width = 1300}) async {
     tester.view
       ..physicalSize = Size(width, 3000)
       ..devicePixelRatio = 1;
@@ -556,7 +547,6 @@ void _tab() {
           shownModelProvider.overrideWithValue((model: _model, file: _file)),
           shownContextProvider.overrideWithValue((options: const [4096, 65536], value: 65536)),
           benchmarkProvider.overrideWith(() => _Fake(state)),
-          engineTabProvider.overrideWith(runTab ? _TabRun.new : _TabBenchmark.new),
         ],
         child: MaterialApp(theme: buildTheme(Brightness.dark), home: const Scaffold(body: EnginePage())),
       ),
@@ -675,7 +665,12 @@ void _tab() {
   });
 
   testWidgets('a drop-down is as high as the app\'s text boxes', (tester) async {
-    await pump(tester, const BenchmarkState(), runTab: true);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [storageProvider.overrideWithValue(Storage(dir)), backendProvider.overrideWithValue(_Backend())],
+        child: MaterialApp(theme: buildTheme(Brightness.dark), home: const Scaffold(body: HeadroomInput(file: _file))),
+      ),
+    );
     expect(tester.getSize(find.byKey(const Key('memory-cap'))).height, closeTo(SelectBox.height, 0.5));
   });
 

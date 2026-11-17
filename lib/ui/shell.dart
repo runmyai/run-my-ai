@@ -6,6 +6,7 @@ import '../state/section.dart';
 import '../theme.dart';
 import '../window/app_window.dart';
 import 'buttons.dart';
+import '../dev/dev_build.dart';
 import 'dev_speed_control.dart';
 import 'model_picker.dart';
 import 'pages/chat_page.dart';
@@ -111,7 +112,7 @@ class _PageTopRow extends StatelessWidget {
             children: [
               if (showPicker) const Padding(padding: EdgeInsets.only(left: 16), child: ModelPicker()),
               // The stand-in backend's reply speed (a test control; not there with a real engine), in the free room.
-              if (showPicker)
+              if (showPicker && devBuild)
                 const Expanded(
                   child: Align(
                     alignment: Alignment.centerLeft,

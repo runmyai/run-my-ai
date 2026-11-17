@@ -4,17 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../backend/engine_backend.dart';
+import '../../dev/dev_build.dart';
 import '../../state/motion.dart';
 import '../../state/prefs.dart';
+import '../../state/library.dart';
 import '../../system/chime.dart';
 import '../../theme.dart';
 import '../buttons.dart';
+import '../context_settings.dart';
 import '../menu_panel.dart';
 import 'about_page.dart';
 
-/// Settings: the theme (two menus: Run My AI, Silk or Plain, then Light or Dark - Plain's are Dusk and Espresso), saved; Reply motion, two buttons to show the difference
-/// smoothing makes (Smooth, as replies normally move, and Raw, with none), until the app is restarted; and the
-/// sound when a reply finishes. A button at the bottom opens About in place of the settings.
+/// Settings: the theme (System, Light or Dark; the developer's build also has the other theme families, reply motion and
+/// the speed's look), the sound when a reply finishes, the saved chats' disk limit and the RAM left free, the engine folder,
+/// the context length track with each length's cache type, and a button that opens About in place of the settings.
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -61,91 +64,123 @@ class _SettingsList extends ConsumerWidget {
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
         ),
         const SizedBox(height: 12),
-        // Two menus: the family, then its light or dark side (switching the family keeps the side).
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _Menu(
-              id: 'theme-family',
-              label: family.name,
-              items: [
-                for (final f in _families)
-                  (id: 'theme-family-${f.light}', label: f.name, chosen: f == family, onTap: () => pick(f, dark: dark)),
-              ],
-            ),
-            _Menu(
-              id: 'theme-side',
-              label: dark ? family.darkName : family.lightName,
-              items: [
+        if (!devBuild)
+          _Menu(
+            id: 'theme-mode',
+            label: switch (prefs.theme) {
+              ThemeMode.system => 'System',
+              ThemeMode.light => 'Light',
+              ThemeMode.dark => 'Dark',
+            },
+            items: [
+              for (final (mode, label) in const [
+                (ThemeMode.system, 'System'),
+                (ThemeMode.light, 'Light'),
+                (ThemeMode.dark, 'Dark'),
+              ])
                 (
-                  id: 'theme-side-light',
-                  label: family.lightName,
-                  chosen: !dark,
-                  onTap: () => pick(family, dark: false),
+                  id: 'theme-mode-${mode.name}',
+                  label: label,
+                  chosen: prefs.theme == mode,
+                  onTap: () =>
+                      notifier.setTheme(mode, darkStyle: _families.first.dark, lightStyle: _families.first.light),
                 ),
-                (id: 'theme-side-dark', label: family.darkName, chosen: dark, onTap: () => pick(family, dark: true)),
-              ],
-            ),
-          ],
-        ),
-        const SizedBox(height: 28),
-        Text(
-          'Reply motion',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'How a reply comes onto the screen while it is being written.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          children: [
-            _Choice(
-              id: 'motion-smooth',
-              label: 'Smooth',
-              chosen: motion == smoothMotion,
-              onTap: () => set(smoothMotion),
-            ),
-            _Choice(id: 'motion-raw', label: 'Raw', chosen: motion == rawMotion, onTap: () => set(rawMotion)),
-          ],
-        ),
-        const SizedBox(height: 28),
-        Text(
-          'Generation speed',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'How the speed under a reply looks.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          children: [
-            _Choice(
-              id: 'speed-normal',
-              label: 'Normal',
-              chosen: !prefs.speedHighlighted,
-              onTap: () => notifier.setSpeedHighlighted(false),
-            ),
-            _Choice(
-              id: 'speed-highlighted',
-              label: 'Highlighted',
-              chosen: prefs.speedHighlighted,
-              onTap: () => notifier.setSpeedHighlighted(true),
-            ),
-          ],
-        ),
+            ],
+          )
+        else
+          // Two menus: the family, then its light or dark side (switching the family keeps the side).
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _Menu(
+                id: 'theme-family',
+                label: family.name,
+                items: [
+                  for (final f in _families)
+                    (
+                      id: 'theme-family-${f.light}',
+                      label: f.name,
+                      chosen: f == family,
+                      onTap: () => pick(f, dark: dark),
+                    ),
+                ],
+              ),
+              _Menu(
+                id: 'theme-side',
+                label: dark ? family.darkName : family.lightName,
+                items: [
+                  (
+                    id: 'theme-side-light',
+                    label: family.lightName,
+                    chosen: !dark,
+                    onTap: () => pick(family, dark: false),
+                  ),
+                  (id: 'theme-side-dark', label: family.darkName, chosen: dark, onTap: () => pick(family, dark: true)),
+                ],
+              ),
+            ],
+          ),
+        if (devBuild) ...[
+          const SizedBox(height: 28),
+          Text(
+            'Reply motion',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'How a reply comes onto the screen while it is being written.',
+            style: TextStyle(fontSize: 13, color: c.textSecondary),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            children: [
+              _Choice(
+                id: 'motion-smooth',
+                label: 'Smooth',
+                chosen: motion == smoothMotion,
+                onTap: () => set(smoothMotion),
+              ),
+              _Choice(id: 'motion-raw', label: 'Raw', chosen: motion == rawMotion, onTap: () => set(rawMotion)),
+            ],
+          ),
+          const SizedBox(height: 28),
+          Text(
+            'Generation speed',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+          ),
+          const SizedBox(height: 2),
+          Text('How the speed under a reply looks.', style: TextStyle(fontSize: 13, color: c.textSecondary)),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            children: [
+              _Choice(
+                id: 'speed-normal',
+                label: 'Normal',
+                chosen: !prefs.speedHighlighted,
+                onTap: () => notifier.setSpeedHighlighted(false),
+              ),
+              _Choice(
+                id: 'speed-highlighted',
+                label: 'Highlighted',
+                chosen: prefs.speedHighlighted,
+                onTap: () => notifier.setSpeedHighlighted(true),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 28),
         const _Sound(),
         const SizedBox(height: 28),
         const _StateLimit(),
+        const SizedBox(height: 20),
+        const _Headroom(),
         const SizedBox(height: 28),
         const _EngineFolder(),
+        const SizedBox(height: 28),
+        const _Context(),
         const SizedBox(height: 28),
         Text(
           'About',
@@ -234,6 +269,66 @@ class _StateLimitState extends ConsumerState<_StateLimit> {
             Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
           ],
         ),
+      ],
+    );
+  }
+}
+
+/// The RAM left free for the system and other apps while a model runs (shared by all models).
+class _Headroom extends ConsumerWidget {
+  const _Headroom();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final entry = ref.watch(shownModelProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Memory headroom',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'Free memory left for your operating system and other apps, so your computer stays responsive.',
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        if (entry == null)
+          Text('Download a model from the Store first.', style: TextStyle(fontSize: 13, color: c.textMuted))
+        else
+          HeadroomInput(file: entry.file),
+      ],
+    );
+  }
+}
+
+/// The context length new chats load the shown model with, and each length's cache type.
+class _Context extends ConsumerWidget {
+  const _Context();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final entry = ref.watch(shownModelProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Context length',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'How much text a chat can hold, and how its memory is stored at each length. A change applies the next time the model loads.',
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        if (entry == null)
+          Text('Download a model from the Store first.', style: TextStyle(fontSize: 13, color: c.textMuted))
+        else
+          ContextSettings(entry: entry),
       ],
     );
   }

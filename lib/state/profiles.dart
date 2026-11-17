@@ -16,7 +16,7 @@ class EngineProfile {
   final String name;
   final List<String> commands;
 
-  /// The memory cap; null: all the RAM but 1 GB.
+  /// The memory cap; null: all the RAM but [defaultHeadroomGiB].
   final double? memoryCapGiB;
 
   bool get isAuto => id == autoProfileId;
@@ -43,11 +43,22 @@ class EngineProfile {
 
 /// The user's profiles of one model, and which profile is in use.
 class ModelProfiles {
-  const ModelProfiles({this.active = autoProfileId, this.custom = const [], this.memoryCapGiB});
+  const ModelProfiles({this.active = autoProfileId, this.custom = const [], this.memoryCapGiB, this.kv = const {}});
 
   final String active;
   final List<EngineProfile> custom;
   final double? memoryCapGiB;
+
+  /// The context cache type the user picked per context length (one of [kvTypes]); a length not here keeps its command's.
+  final Map<int, String> kv;
+
+  ModelProfiles copyWith({String? active, List<EngineProfile>? custom, double? Function()? memoryCapGiB, Map<int, String>? kv}) =>
+      ModelProfiles(
+        active: active ?? this.active,
+        custom: custom ?? this.custom,
+        memoryCapGiB: memoryCapGiB != null ? memoryCapGiB() : this.memoryCapGiB,
+        kv: kv ?? this.kv,
+      );
 }
 
 /// Each model's profiles, by model file. Saved to profiles.json on every change.
@@ -65,6 +76,10 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
                 EngineProfile.fromJson((p as Map).cast<String, Object?>()),
             ],
             memoryCapGiB: (json['memoryCapGiB'] as num?)?.toDouble(),
+            kv: {
+              for (final MapEntry(:key, :value) in (json['kv'] as Map? ?? const {}).entries)
+                if (int.tryParse('$key') case final length? when kvTypes.contains(value)) length: value as String,
+            },
           ),
     };
   }
@@ -104,10 +119,11 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
     final profile = active(file);
     final length = closestContext(profile.lengths, contextLength);
     var command = profile.commands.firstWhere((c) => contextOf(c) == length);
-    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB ?? 1.0;
+    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB ?? defaultHeadroomGiB;
     if (command.contains('--moe-stream')) {
       command = withRamFree(command, headroom);
     }
+    if (state[file.id]?.kv[length] case final type?) command = withKvType(command, type);
     return EngineRun(flags: command, contextLength: length, memoryCapGiB: profile.memoryCapGiB);
   }
 
@@ -116,10 +132,11 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
     final profile = all(file).where((p) => p.id == id).firstOrNull ?? auto(file);
     final length = closestContext(profile.lengths, contextLength);
     var command = profile.commands.firstWhere((c) => contextOf(c) == length);
-    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB ?? 1.0;
+    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB ?? defaultHeadroomGiB;
     if (command.contains('--moe-stream')) {
       command = withRamFree(command, headroom);
     }
+    if (state[file.id]?.kv[length] case final type?) command = withKvType(command, type);
     return EngineRun(
       flags: command,
       contextLength: length,
@@ -128,6 +145,13 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
   }
 
   void setActive(ModelFile file, String id) => _put(file, active: id);
+
+  /// The context cache type for [file] at [length]; applies the next time the model loads at that length.
+  void setKv(ModelFile file, int length, String type) {
+    final models = state[file.id] ?? const ModelProfiles();
+    state = {...state, file.id: models.copyWith(kv: {...models.kv, length: type})};
+    _write();
+  }
 
   /// A new profile with a full copy of Auto's commands; it comes into use.
   void create(ModelFile file) {
@@ -162,24 +186,13 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
     // Update all models so the headroom setting is shared across all presets
     final updated = <String, ModelProfiles>{};
     for (final entry in state.entries) {
-      updated[entry.key] = ModelProfiles(
-        active: entry.value.active,
-        custom: entry.value.custom,
-        memoryCapGiB: gib,
-      );
+      updated[entry.key] = entry.value.copyWith(memoryCapGiB: () => gib);
     }
     if (!updated.containsKey(file.id)) {
       updated[file.id] = ModelProfiles(memoryCapGiB: gib);
     }
     state = updated;
-    ref.read(storageProvider).writeProfiles({
-      for (final MapEntry(key: id, value: m) in state.entries)
-        id: {
-          'active': m.active,
-          'custom': [for (final p in m.custom) p.toJson()],
-          if (m.memoryCapGiB != null) 'memoryCapGiB': m.memoryCapGiB,
-        },
-    });
+    _write();
   }
 
   void update(ModelFile file, EngineProfile profile) {
@@ -190,24 +203,19 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
 
   void _put(ModelFile file, {String? active, List<EngineProfile>? custom, double? Function()? memoryCapGiB}) {
     final models = state[file.id] ?? const ModelProfiles();
-    final cap = memoryCapGiB != null ? memoryCapGiB() : models.memoryCapGiB;
-    state = {
-      ...state,
-      file.id: ModelProfiles(
-        active: active ?? models.active,
-        custom: custom ?? models.custom,
-        memoryCapGiB: cap,
-      ),
-    };
-    ref.read(storageProvider).writeProfiles({
-      for (final MapEntry(key: id, value: m) in state.entries)
-        id: {
-          'active': m.active,
-          'custom': [for (final p in m.custom) p.toJson()],
-          if (m.memoryCapGiB != null) 'memoryCapGiB': m.memoryCapGiB,
-        },
-    });
+    state = {...state, file.id: models.copyWith(active: active, custom: custom, memoryCapGiB: memoryCapGiB)};
+    _write();
   }
+
+  void _write() => ref.read(storageProvider).writeProfiles({
+    for (final MapEntry(key: id, value: m) in state.entries)
+      id: {
+        'active': m.active,
+        'custom': [for (final p in m.custom) p.toJson()],
+        if (m.memoryCapGiB != null) 'memoryCapGiB': m.memoryCapGiB,
+        if (m.kv.isNotEmpty) 'kv': {for (final MapEntry(:key, :value) in m.kv.entries) '$key': value},
+      },
+  });
 }
 
 final profilesProvider = NotifierProvider<ProfilesNotifier, Map<String, ModelProfiles>>(ProfilesNotifier.new);

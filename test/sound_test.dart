@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:runmyai/data/storage.dart';
+import 'package:runmyai/state/library.dart';
 import 'package:runmyai/state/prefs.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/system/chime.dart';
@@ -51,6 +52,7 @@ void main() {
       overrides: [
         storageProvider.overrideWithValue(Storage(dir)),
         chimeProvider.overrideWith((ref) => Chime(ref, player)),
+        shownModelProvider.overrideWithValue(null),
       ],
     );
   });

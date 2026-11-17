@@ -37,6 +37,23 @@ List<int> contextOptions(int maxContext) {
 String withContextLength(String command, int length) =>
     command.replaceFirstMapped(RegExp(r'(^|\s)(-c|--ctx-size)([ =])\d+'), (m) => '${m[1]}${m[2]}${m[3]}$length');
 
+/// The RAM left free for the system and other apps when the user has not set it.
+const defaultHeadroomGiB = 1.5;
+
+/// The context cache types the app offers: the engine's names.
+const kvTypes = ['q4_0', 'q8_0', 'f16'];
+
+/// [command] with its context cache (keys and values) of type [type] (one of [kvTypes]).
+String withKvType(String command, String type) {
+  for (final flag in ['-ctk', '-ctv']) {
+    final pattern = RegExp('(^|\\s)$flag([ =])\\S+');
+    command = pattern.hasMatch(command)
+        ? command.replaceFirstMapped(pattern, (m) => '${m[1]}$flag${m[2]}$type')
+        : '$command $flag $type';
+  }
+  return command;
+}
+
 /// [command] with its --moe-stream-ram-free set to [gib].
 String withRamFree(String command, double gib) {
   final str = gib == gib.roundToDouble() ? '${gib.round()}GiB' : '${gib}GiB';

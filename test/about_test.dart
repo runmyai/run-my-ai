@@ -12,6 +12,7 @@ import 'package:runmyai/backend/dummy_backend.dart';
 import 'package:runmyai/data/storage.dart';
 import 'package:runmyai/engine/engine_version.dart';
 import 'package:runmyai/state/about.dart';
+import 'package:runmyai/state/library.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/system/open_url.dart';
 import 'package:runmyai/theme.dart';
@@ -108,6 +109,7 @@ void main() {
           overrides: [
             storageProvider.overrideWithValue(Storage(dir)),
             backendProvider.overrideWithValue(DummyBackend()),
+            shownModelProvider.overrideWithValue(null),
           ],
           child: MaterialApp(
             theme: buildTheme(Brightness.light),
