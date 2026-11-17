@@ -204,6 +204,11 @@ class Storage {
 
   void writeBenchmarkSetup(Map<String, Object?> setup) => _writeJson(File(_path('benchmark.json')), setup);
 
+  /// What Serve was last set to ({port, apiKey}), as written by [writeServeSetup]; null: never set.
+  Map<String, Object?>? readServeSetup() => _readJson(File(_path('serve.json')));
+
+  void writeServeSetup(Map<String, Object?> setup) => _writeJson(File(_path('serve.json')), setup);
+
   /// The messages waiting to be sent, by chat.
   Map<String, List<String>> readQueues() {
     final json = _readJson(File(_path('queues.json'))) ?? const {};

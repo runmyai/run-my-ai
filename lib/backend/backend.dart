@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../data/models.dart';
+import '../engine/engine_process.dart';
 
 /// The context length of a fresh install, in tokens.
 const defaultContextLength = 65536;
@@ -204,4 +205,30 @@ abstract class BranchControl {
   /// Stops the read-ahead of conversation [conversationId], if one is going, and erases that conversation's saved
   /// state.
   Future<void> cancelReadAhead(String conversationId);
+}
+
+/// The port asked for is already in use by another program.
+class PortInUse extends EngineFailure {
+  PortInUse(this.port) : super('Port $port is already in use by another program. Pick another port.');
+
+  final int port;
+}
+
+/// A backend that can host a model for other programs on this computer (any tool that takes an OpenAI-compatible
+/// server).
+abstract class ServeControl {
+  /// Stops whatever engine is running, then loads [file] the way [run] says and answers other programs on this
+  /// computer's own address, at [port], under the model name [alias] and, when [apiKey] is not null, only with that
+  /// key. Returns when the model is loaded. Throws [PortInUse] or an [EngineFailure]. [onEnded]: the engine ended
+  /// later on its own (or another start replaced it), with the failure that says so.
+  Future<void> startServing(
+    ModelFile file,
+    EngineRun run, {
+    required int port,
+    required String alias,
+    String? apiKey,
+    void Function(EngineFailure ended)? onEnded,
+  });
+
+  Future<void> stopServing();
 }
