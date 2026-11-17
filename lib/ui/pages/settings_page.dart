@@ -10,6 +10,7 @@ import '../../system/chime.dart';
 import '../../theme.dart';
 import '../buttons.dart';
 import '../menu_panel.dart';
+import '../settings/folders_section.dart';
 import 'about_page.dart';
 
 /// Settings: the theme (two menus: Run My AI, Silk or Plain, then Light or Dark - Plain's are Dusk and Espresso), saved; Reply motion, two buttons to show the difference
@@ -146,6 +147,8 @@ class _SettingsList extends ConsumerWidget {
         const _StateLimit(),
         const SizedBox(height: 28),
         const _EngineFolder(),
+        const SizedBox(height: 28),
+        const FoldersSection(),
         const SizedBox(height: 28),
         Text(
           'About',

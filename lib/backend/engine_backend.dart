@@ -20,13 +20,14 @@ import '../engine/engine_process.dart';
 import '../engine/gguf.dart';
 import '../engine/live_speed.dart';
 import '../engine/tuning.dart';
+import '../system/downloads.dart';
+import '../system/folders.dart';
 import 'backend.dart';
 
 /// The models on this computer and how each one starts.
 class _LocalModel {
   const _LocalModel({
     required this.model,
-    required this.path,
     required this.flags,
     required this.smallFlags,
     required this.cpuFlags,
@@ -37,7 +38,9 @@ class _LocalModel {
   });
 
   final CatalogModel model;
-  final String path;
+
+  /// The file the engine loads: the weights, the first of the model's files.
+  String get path => model.files.first.parts.first;
 
   /// One command per context length, for a large GPU, a small one, and none.
   final Map<int, String> flags, smallFlags, cpuFlags;
@@ -57,11 +60,21 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   final Storage _storage;
 
-  /// Where the chats' saved states and snapshots are kept: one file per state, in the app's data folder.
-  String get _activeStateFolder => '${_storage.dir.path}${Platform.pathSeparator}states';
+  /// The app's folders as last set in Settings.
+  FolderSet get _folders => FolderSet.load(_storage.dir);
 
-  /// Where the model files are: the app's data folder.
-  String _modelPath(_LocalModel m) => '${_storage.dir.path}${Platform.pathSeparator}models${Platform.pathSeparator}${m.path}';
+  /// Where the chats' saved states and snapshots are kept: one file per state, in the cache folder.
+  String get _activeStateFolder => _folders.cache;
+
+  /// The folder holding all of [m]'s files: the models folder, or a folder models are read from; the models folder
+  /// when none has them (where they would be downloaded).
+  String _modelFolder(_LocalModel m) {
+    final folders = _folders;
+    return folders.folderWith(m.model.files.first.parts) ?? folders.models;
+  }
+
+  /// The model file the engine loads.
+  String _modelPath(_LocalModel m) => '${_modelFolder(m)}${Platform.pathSeparator}${m.path}';
 
   /// How many "start of message" snapshots each chat keeps.
   static const _snapshots = 4;
@@ -72,10 +85,18 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// Where the engine is until the user sets another folder: the app's own folder.
   static String get defaultEngineFolder => File(Platform.resolvedExecutable).parent.path;
 
+  /// The engine folder: the user's own ([own]), else the app's (in its main folder) once an engine is there, else
+  /// next to the app.
+  static String engineFolder(String? own, FolderSet folders) {
+    if (own != null) return own;
+    final app = folders.engine;
+    return File('$app/llama-server${Platform.isWindows ? '.exe' : ''}').existsSync() ? app : defaultEngineFolder;
+  }
+
   /// The engine program's folder: the engine folder, or its cuda12 folder (the engine built with CUDA 12) on a PC whose NVIDIA
   /// cards or driver the CUDA 13 build cannot run (needsCuda12). Asked once.
   String get _engineFolder {
-    final base = _storage.readPrefs().engineFolder ?? defaultEngineFolder;
+    final base = engineFolder(_storage.readPrefs().engineFolder, _folders);
     final old = '$base${Platform.pathSeparator}cuda12';
     if (!File('$old/llama-server${Platform.isWindows ? '.exe' : ''}').existsSync()) return base;
     _cuda12 ??= () {
@@ -91,11 +112,35 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   bool? _cuda12;
 
-  static const _lingFile = ModelFile(id: 'ling-3.0-flash/MXFP4_MOE', quantization: 'MXFP4', sizeBytes: 70147512048);
-  static const _flintFile = ModelFile(id: 'flint-40b/UD-Q4_K_XL', quantization: 'UD-Q4_K_XL', sizeBytes: 25055397324);
-  // two files: the model, and its n-gram table next to it (...-00002-of-00002.gguf)
-  static const _qwenFile =
-      ModelFile(id: 'qwen3.8-flash-next/WV-v5-3.5bpw', quantization: 'WV-v5 3.5bpw', sizeBytes: 55203205120 + 28800138432);
+  // Each model's files on Hugging Face (the weights first: the file the engine loads), downloaded into one folder.
+  static const _lingFile = ModelFile(
+    id: 'ling-3.0-flash/MXFP4_MOE',
+    quantization: 'MXFP4',
+    sizeBytes: 70147512048,
+    repo: 'runmyai/Ling-3.0-Flash-TokenWing',
+    parts: ['Ling-3.0-flash-MXFP4_MOE.tokenwing.gguf'],
+  );
+  static const _flintFile = ModelFile(
+    id: 'flint-40b/UD-Q4_K_XL',
+    quantization: 'UD-Q4_K_XL',
+    sizeBytes: 25055397324,
+    repo: 'runmyai/Flint-40B-TokenWing',
+    parts: ['flint-UD-Q4_K_XL.tokenwing.gguf'],
+  );
+  // the model, its n-gram table (...-00002-of-00002.gguf) and its data files
+  static const _qwenFile = ModelFile(
+    id: 'qwen3.8-flash-next/WV-v5-3.5bpw',
+    quantization: 'WV-v5 3.5bpw',
+    sizeBytes: 55203205120 + 28800138432 + 482000000,
+    repo: 'runmyai/Qwen3.8-Flash-Next-TokenWing',
+    parts: [
+      'Qwen3.8-Flash-Next-WV-v5-3.5bpw.tokenwing-00001-of-00002.gguf',
+      'Qwen3.8-Flash-Next-WV-v5-3.5bpw.tokenwing-00002-of-00002.gguf',
+      'Qwen3.8-Flash-Next-WV-v5-3.5bpw.correction',
+      'Qwen3.8-Flash-Next-WV-v5-3.5bpw.vram-experts.json',
+      'Qwen3.8-Flash-Next-WV-v5-3.5bpw.tokenwing-00001-of-00002.gguf.usage-seed.json',
+    ],
+  );
 
   static const _models = [
     _LocalModel(
@@ -109,7 +154,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_lingFile],
       ),
-      path: 'Ling-3.0-flash-MXFP4_MOE.tokenwing.gguf',
       layers: 42,
       firstMoe: 2,
       layerGiB: 1.494,
@@ -129,7 +173,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.always,
         files: [_flintFile],
       ),
-      path: 'flint-UD-Q4_K_XL.tokenwing.gguf',
       layers: 49,
       firstMoe: 2,
       layerGiB: 0.49,
@@ -148,7 +191,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_qwenFile],
       ),
-      path: 'Qwen3.8-Flash-Next-WV-v5-3.5bpw.tokenwing-00001-of-00002.gguf',
       layers: 48,
       firstMoe: 0,
       layerGiB: 1.1,
@@ -284,7 +326,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   @override
   Future<List<CatalogModel>> loadCatalog() async => [for (final m in _models) m.model];
 
-  /// Models are read from the app's models folder; nothing is fetched yet.
+  /// Whether the model is on this computer (in the models folder or a folder models are read from): the Store
+  /// downloads Hugging Face models itself (lib/system/downloads.dart).
   @override
   Stream<double> download(ModelFile file) => File(_modelPath(_local(file))).existsSync()
       ? Stream.value(1)
@@ -294,10 +337,14 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   Map<int, String> autoCommands(ModelFile file) => _flagsFor(_local(file));
 
   @override
-  int maxContext(ModelFile file) => _maxContexts[file.id] ??= () {
+  int maxContext(ModelFile file) {
+    if (_maxContexts[file.id] case final known?) return known;
     final local = _local(file);
-    return modelContextLength(_modelPath(local)) ?? local.flags.keys.reduce(max);
-  }();
+    final read = modelContextLength(_modelPath(local));
+    // (Not kept until the file is there: a model downloaded later is read then.)
+    if (read != null) _maxContexts[file.id] = read;
+    return read ?? local.flags.keys.reduce(max);
+  }
 
   /// The longest context each model file says it can run with, once read.
   final _maxContexts = <String, int>{};
@@ -599,9 +646,13 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     _engineState.value = const EngineState(EnginePhase.stopped);
   }
 
-  /// The model files are never deleted by the app.
+  /// Deletes the model's files from the models folder (never from a folder models are only read from), after
+  /// stopping the engine if it runs that model.
   @override
-  Future<void> deleteDownload(ModelFile file) async {}
+  Future<void> deleteDownload(ModelFile file) async {
+    if (_engine?.modelId == file.id || _loadingEngine?.modelId == file.id) await stopEngine();
+    deleteModelFiles(_folders.models, file);
+  }
 
   @override
   Stream<ReplyEvent> reply({
@@ -850,7 +901,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           '-m',
           _modelPath(local),
           ...withTuning([
-            for (final a in flags.arguments) a.replaceAll('{models}', '${_storage.dir.path}${Platform.pathSeparator}models'),
+            // the model's data files are next to it
+            for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
           ], tuned),
           '--cache-disk',
           states,

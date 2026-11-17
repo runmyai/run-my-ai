@@ -5,14 +5,55 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
 import '../backend/backend.dart';
+import '../system/chime.dart';
+import '../system/downloads.dart';
+import '../system/folders.dart';
 import 'chats.dart';
 import 'profiles.dart';
 import 'providers.dart';
 
+/// Where a model's download is.
+enum DownloadPhase { queued, downloading, paused, checking, failed }
+
+/// A model's download that has not ended: its phase, [done] of [total] bytes, its speed, and why it failed.
+class DownloadStatus {
+  const DownloadStatus(
+    this.phase, {
+    this.done = 0,
+    this.total = 0,
+    this.bytesPerSecond,
+    this.message,
+    this.broken = false,
+  });
+
+  final DownloadPhase phase;
+  final int done;
+  final int total;
+  final double? bytesPerSecond;
+
+  /// Why it failed, for the user.
+  final String? message;
+
+  /// A file did not match its checksum (and was deleted): it is downloaded again.
+  final bool broken;
+
+  double get fraction => total > 0 ? (done / total).clamp(0, 1).toDouble() : 0;
+
+  /// How long the rest takes at the speed it goes; null while the speed is not known.
+  Duration? get timeLeft {
+    final speed = bytesPerSecond;
+    if (speed == null || speed <= 0 || total <= done) return null;
+    return Duration(seconds: ((total - done) / speed).ceil());
+  }
+
+  DownloadStatus as(DownloadPhase phase, {String? message, bool broken = false}) =>
+      DownloadStatus(phase, done: done, total: total, message: message, broken: broken);
+}
+
 class LibraryState {
   const LibraryState({
     this.downloaded = const {},
-    this.progress = const {},
+    this.downloads = const {},
     this.picked,
     this.contextLength = defaultContextLength,
   });
@@ -20,8 +61,8 @@ class LibraryState {
   /// Ids of the downloaded model files.
   final Set<String> downloaded;
 
-  /// Downloads in progress: file id -> 0..1.
-  final Map<String, double> progress;
+  /// Downloads not ended (waiting, going, paused, failed): file id -> where it is.
+  final Map<String, DownloadStatus> downloads;
 
   /// The model file last picked: the one a new chat starts with.
   final String? picked;
@@ -30,18 +71,25 @@ class LibraryState {
   final int contextLength;
 }
 
-/// Downloads, deletes and the picked model. Saved to library.json on every change.
+/// The downloads server (tests use their own).
+final downloadServerProvider = Provider<Uri>((ref) => huggingFace);
+
+/// Downloads, deletes and the picked model. Saved to library.json on every change. Models from Hugging Face are
+/// downloaded one at a time, the others waiting in order, into the models folder; one counts as downloaded when all
+/// its files are in the models folder or a folder models are read from. A download left unfinished (also when the
+/// app was closed) shows as paused and continues where it stopped.
 class LibraryNotifier extends Notifier<LibraryState> {
-  final _downloads = <String, StreamSubscription<double>>{};
+  final _queue = <ModelFile>[];
+  ModelFile? _active;
+  Future<void>? _activeRun;
+  void Function()? _stopActive;
 
   @override
   LibraryState build() {
-    ref.onDispose(() {
-      for (final d in _downloads.values) {
-        d.cancel();
-      }
-    });
+    ref.onDispose(() => _stopActive?.call());
     final saved = ref.read(storageProvider).readLibrary();
+    ref.listen(foldersProvider, (_, _) => _scan());
+    unawaited(ref.read(catalogProvider.future).then((_) => _scan(), onError: (Object _) {}));
     return LibraryState(
       downloaded: saved.downloaded,
       picked: saved.picked,
@@ -49,64 +97,208 @@ class LibraryNotifier extends Notifier<LibraryState> {
     );
   }
 
-  void download(ModelFile file) {
-    if (state.downloaded.contains(file.id) || _downloads.containsKey(file.id)) return;
-    _setProgress(file.id, 0);
-    _downloads[file.id] = ref.read(backendProvider).download(file).listen(
-          (p) => _setProgress(file.id, p),
-          onError: (Object _) => cancel(file.id),
-          onDone: () {
-            _downloads.remove(file.id);
-            _update(
-              downloaded: {...state.downloaded, file.id},
-              progress: {...state.progress}..remove(file.id),
-              // The first downloaded model is picked, so the chat can start right away.
-              picked: state.picked ?? file.id,
-            );
-          },
-        );
+  List<ModelFile> get _catalogFiles => [
+    for (final m in ref.read(catalogProvider).value ?? const <CatalogModel>[]) ...m.files,
+  ];
+
+  /// Which Hugging Face models are on this computer, and the unfinished downloads in the models folder (paused).
+  void _scan() {
+    if (!ref.mounted) return;
+    final folders = ref.read(foldersProvider);
+    final files = [
+      for (final f in _catalogFiles)
+        if (f.repo != null) f,
+    ];
+    final found = {
+      for (final f in files)
+        if (folders.folderWith(f.parts) != null) f.id,
+    };
+    final downloads = {...state.downloads};
+    for (final f in files) {
+      if (found.contains(f.id) || downloads.containsKey(f.id)) continue;
+      final bytes = downloadedBytes(folders.models, f);
+      if (bytes != null) downloads[f.id] = DownloadStatus(DownloadPhase.paused, done: bytes, total: f.sizeBytes);
+    }
+    final ids = {for (final f in files) f.id};
+    final downloaded = {...state.downloaded.difference(ids), ...found};
+    _update(
+      downloaded: downloaded,
+      downloads: downloads..removeWhere((id, _) => found.contains(id)),
+      picked: state.picked,
+    );
   }
 
-  void cancel(String fileId) {
-    _downloads.remove(fileId)?.cancel();
-    state = LibraryState(
-      downloaded: state.downloaded,
-      progress: {...state.progress}..remove(fileId),
-      picked: state.picked,
-      contextLength: state.contextLength,
+  /// Downloads [file], or puts it in line behind the one downloading; also continues a paused one.
+  void download(ModelFile file) {
+    if (state.downloaded.contains(file.id) || _active?.id == file.id || _queue.any((f) => f.id == file.id)) return;
+    _queue.add(file);
+    _setStatus(
+      file.id,
+      (state.downloads[file.id] ?? const DownloadStatus(DownloadPhase.queued)).as(DownloadPhase.queued),
     );
+    _next();
+  }
+
+  /// Stops the download (what is written stays, to be continued), or takes a waiting one out of the line.
+  void pause(String fileId) {
+    if (_active?.id == fileId) {
+      _stopActive?.call();
+    } else {
+      _queue.removeWhere((f) => f.id == fileId);
+      final status = state.downloads[fileId];
+      if (status != null) _setStatus(fileId, status.as(DownloadPhase.paused));
+    }
+  }
+
+  /// Pauses every download (before the models folder moves).
+  Future<void> pauseAll() async {
+    for (final f in [..._queue]) {
+      pause(f.id);
+    }
+    final running = _activeRun;
+    _stopActive?.call();
+    await running;
+  }
+
+  /// Stops the download and deletes what it wrote.
+  Future<void> cancel(String fileId) async {
+    _queue.removeWhere((f) => f.id == fileId);
+    if (_active?.id == fileId) {
+      final running = _activeRun;
+      _stopActive?.call();
+      await running;
+    }
+    final file = _catalogFiles.where((f) => f.id == fileId).firstOrNull;
+    if (file != null && file.repo != null) deleteModelFiles(ref.read(foldersProvider).models, file);
+    _update(downloaded: state.downloaded, downloads: {...state.downloads}..remove(fileId), picked: state.picked);
+  }
+
+  void _next() {
+    if (_active != null || _queue.isEmpty) return;
+    final file = _active = _queue.removeAt(0);
+    _setStatus(
+      file.id,
+      (state.downloads[file.id] ?? const DownloadStatus(DownloadPhase.downloading)).as(DownloadPhase.downloading),
+    );
+    _activeRun = _run(file);
+  }
+
+  Future<void> _run(ModelFile file) async {
+    try {
+      final done = file.repo == null ? await _runStandIn(file) : await _runHuggingFace(file);
+      if (!ref.mounted) return;
+      if (done) {
+        _finished(file);
+      } else if (state.downloads[file.id] case final status?) {
+        _setStatus(file.id, status.as(DownloadPhase.paused));
+      }
+    } on DownloadFailure catch (e) {
+      if (!ref.mounted) return;
+      final status = state.downloads[file.id] ?? const DownloadStatus(DownloadPhase.failed);
+      _setStatus(file.id, status.as(DownloadPhase.failed, message: e.message, broken: e.broken));
+    } on Exception catch (e) {
+      if (!ref.mounted) return;
+      final status = state.downloads[file.id] ?? const DownloadStatus(DownloadPhase.failed);
+      _setStatus(file.id, status.as(DownloadPhase.failed, message: 'The download stopped: $e'));
+    } finally {
+      _active = null;
+      _activeRun = null;
+      _stopActive = null;
+      if (ref.mounted) _next();
+    }
+  }
+
+  Future<bool> _runHuggingFace(ModelFile file) {
+    final download = ModelDownload(
+      file,
+      ref.read(foldersProvider).models,
+      server: ref.read(downloadServerProvider),
+      onProgress: (p) => _setStatus(
+        file.id,
+        DownloadStatus(
+          p.checking ? DownloadPhase.checking : DownloadPhase.downloading,
+          done: p.done,
+          total: p.total,
+          bytesPerSecond: p.bytesPerSecond,
+        ),
+      ),
+    );
+    _stopActive = download.stop;
+    return download.run();
+  }
+
+  /// The stand-in model's pretend download (from the start again after a pause).
+  Future<bool> _runStandIn(ModelFile file) {
+    final ended = Completer<bool>();
+    final sub = ref
+        .read(backendProvider)
+        .download(file)
+        .listen(
+          (p) => _setStatus(
+            file.id,
+            DownloadStatus(DownloadPhase.downloading, done: (p * file.sizeBytes).round(), total: file.sizeBytes),
+          ),
+          onError: (Object e) => ended.completeError(e is DownloadFailure ? e : DownloadFailure('$e')),
+          onDone: () => ended.complete(true),
+        );
+    _stopActive = () {
+      unawaited(sub.cancel());
+      if (!ended.isCompleted) ended.complete(false);
+    };
+    return ended.future;
+  }
+
+  void _finished(ModelFile file) {
+    _update(
+      downloaded: {...state.downloaded, file.id},
+      downloads: {...state.downloads}..remove(file.id),
+      // The first downloaded model is picked, so the chat can start right away.
+      picked: state.picked ?? file.id,
+    );
+    // The notification sound, when the bell is on (as for a finished reply).
+    ref.read(chimeProvider).replyDone();
   }
 
   Future<void> delete(ModelFile file) async {
     await ref.read(backendProvider).deleteDownload(file);
     final downloaded = {...state.downloaded}..remove(file.id);
     final picked = state.picked == file.id ? downloaded.firstOrNull : state.picked;
-    _update(downloaded: downloaded, progress: state.progress, picked: picked);
+    _update(downloaded: downloaded, downloads: state.downloads, picked: picked);
+    // (Still downloaded when it is also in a folder models are read from.)
+    if (file.repo != null) _scan();
   }
 
   void pick(String fileId) {
     if (!state.downloaded.contains(fileId)) return;
-    _update(downloaded: state.downloaded, progress: state.progress, picked: fileId);
+    _update(downloaded: state.downloaded, downloads: state.downloads, picked: fileId);
   }
 
-  void _setProgress(String fileId, double p) => state = LibraryState(
-        downloaded: state.downloaded,
-        progress: {...state.progress, fileId: p},
-        picked: state.picked,
-        contextLength: state.contextLength,
-      );
+  void _setStatus(String fileId, DownloadStatus status) {
+    if (ref.mounted) _setStatusNow(fileId, status);
+  }
 
-  void pickContext(int contextLength) =>
-      _update(downloaded: state.downloaded, progress: state.progress, picked: state.picked, contextLength: contextLength);
+  void _setStatusNow(String fileId, DownloadStatus status) => state = LibraryState(
+    downloaded: state.downloaded,
+    downloads: {...state.downloads, fileId: status},
+    picked: state.picked,
+    contextLength: state.contextLength,
+  );
+
+  void pickContext(int contextLength) => _update(
+    downloaded: state.downloaded,
+    downloads: state.downloads,
+    picked: state.picked,
+    contextLength: contextLength,
+  );
 
   void _update({
     required Set<String> downloaded,
-    required Map<String, double> progress,
+    required Map<String, DownloadStatus> downloads,
     required String? picked,
     int? contextLength,
   }) {
     final length = contextLength ?? state.contextLength;
-    state = LibraryState(downloaded: downloaded, progress: progress, picked: picked, contextLength: length);
+    state = LibraryState(downloaded: downloaded, downloads: downloads, picked: picked, contextLength: length);
     ref.read(storageProvider).writeLibrary(LibraryData(downloaded: downloaded, picked: picked, contextLength: length));
   }
 }
