@@ -201,8 +201,9 @@ class _FullBody extends ConsumerWidget {
   }
 }
 
-/// A bubble above the Store row that points down at it: "Download models here". It shows after the welcome screen
-/// until it is closed or the Store is opened, then never again.
+/// A bubble above the Store row that points down at it: "Download models here". It shows once the first start is
+/// through (the welcome screen and the engine step closed, the main window showing) until it is closed or the Store
+/// is opened, then never again.
 class StoreHint extends ConsumerWidget {
   const StoreHint({super.key});
 
@@ -211,7 +212,7 @@ class StoreHint extends ConsumerWidget {
     ref.listen(sectionProvider, (_, s) {
       if (s == Section.store) ref.read(firstRunProvider.notifier).closeStoreHint();
     });
-    final show = ref.watch(firstRunProvider.select((f) => f.welcomeShown && !f.storeHintClosed));
+    final show = ref.watch(firstRunProvider.select((f) => f.showStoreHint));
     if (!show) return const SizedBox.shrink();
     final c = context.colors;
     return Padding(

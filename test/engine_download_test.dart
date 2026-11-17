@@ -366,67 +366,71 @@ void main() {
     });
   });
 
-  testWidgets('the engine step: the build for this PC is chosen, Download, Ready, and the dialog closes', (
-    tester,
-  ) async {
-    final github = _GitHub();
-    final dir = Directory.systemTemp.createTempSync('enginedl-ui');
-    addTearDown(() => dir.deleteSync(recursive: true));
-    // the step reads the cards (nvidia-smi) and talks to the server: real time, not the test's clock
-    await tester.runAsync(() async {
-      await github.start();
-      for (final b in engineBuilds(thisOs, thisArch)) {
-        github.put(engineAsset(thisOs, thisArch, b), _engineTar());
-      }
-      addTearDown(() => github.server.close(force: true));
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            storageProvider.overrideWithValue(Storage(dir)),
-            foldersProvider.overrideWith(() => _Folders(dir.path)),
-            backendProvider.overrideWithValue(DummyBackend()),
-          ],
-          child: MaterialApp(
-            theme: buildTheme(Brightness.light),
-            home: Scaffold(
-              body: Builder(
-                builder: (context) => TextButton(
-                  onPressed: () => showDialog<void>(
-                    context: context,
-                    barrierDismissible: false,
-                    builder: (_) => EngineSetup(releases: github.api),
+  testWidgets(
+    'the engine step: the build for this PC is chosen, Download, and the dialog closes once the engine is there',
+    (tester) async {
+      final github = _GitHub();
+      final dir = Directory.systemTemp.createTempSync('enginedl-ui');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      // the step reads the cards (nvidia-smi) and talks to the server: real time, not the test's clock
+      await tester.runAsync(() async {
+        await github.start();
+        for (final b in engineBuilds(thisOs, thisArch)) {
+          github.put(engineAsset(thisOs, thisArch, b), _engineTar());
+        }
+        addTearDown(() => github.server.close(force: true));
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              storageProvider.overrideWithValue(Storage(dir)),
+              foldersProvider.overrideWith(() => _Folders(dir.path)),
+              backendProvider.overrideWithValue(DummyBackend()),
+            ],
+            child: MaterialApp(
+              theme: buildTheme(Brightness.light),
+              home: Scaffold(
+                body: Builder(
+                  builder: (context) => TextButton(
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (_) => EngineSetup(releases: github.api),
+                    ),
+                    child: const Text('open'),
                   ),
-                  child: const Text('open'),
                 ),
               ),
             ),
           ),
-        ),
-      );
-      Future<void> until(Finder f) async {
-        for (var i = 0; i < 400 && f.evaluate().isEmpty; i++) {
+        );
+        Future<void> until(Finder f) async {
+          for (var i = 0; i < 400 && f.evaluate().isEmpty; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 25));
+            await tester.pump();
+          }
+          expect(f, findsOneWidget);
+        }
+
+        await tester.tap(find.text('open'));
+        await tester.pump();
+        expect(find.byKey(const Key('engine-setup')), findsOneWidget);
+        await until(find.byKey(const Key('engine-download')));
+        expect(find.textContaining('for this PC'), findsOneWidget);
+        // nothing is downloaded before the click
+        expect(github.ranges, isEmpty);
+        await tester.tap(find.byKey(const Key('engine-download')));
+        // closed as soon as the engine is in place, with no pause on a "Ready" line
+        for (var i = 0; i < 400 && find.byKey(const Key('engine-setup')).evaluate().isNotEmpty; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 25));
           await tester.pump();
         }
-        expect(f, findsOneWidget);
-      }
-
-      await tester.tap(find.text('open'));
-      await tester.pump();
-      expect(find.byKey(const Key('engine-setup')), findsOneWidget);
-      await until(find.byKey(const Key('engine-download')));
-      expect(find.textContaining('for this PC'), findsOneWidget);
-      // nothing is downloaded before the click
-      expect(github.ranges, isEmpty);
-      await tester.tap(find.byKey(const Key('engine-download')));
-      await until(find.text('Ready'));
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('engine-setup')), findsNothing);
-      expect(File('${dir.path}/engine/llama-server').existsSync(), isTrue);
-      expect(installedEngine('${dir.path}/engine')?.version, 'v0.1.0');
-    });
-  });
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('engine-setup')), findsNothing);
+        expect(File('${dir.path}/engine/llama-server').existsSync(), isTrue);
+        expect(installedEngine('${dir.path}/engine')?.version, 'v0.1.0');
+      });
+    },
+  );
 
   testWidgets('the engine step without a release says so and offers Try again', (tester) async {
     final github = _GitHub()..release = false;

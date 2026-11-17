@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,8 +19,12 @@ import '../engine_setup.dart';
 /// Settings' folders: where models are downloaded, the folders models are also read from, the chats, the saved
 /// chat states and the engine. Moving one copies its files to the new place and then removes the old ones (on the
 /// same drive they are simply moved); the engine is stopped first, and downloads are paused before the models move.
+/// In the engine step of the first start ([firstStart]) it shows the main folder too, and leaves out the folders models
+/// are also read from and the engine download.
 class FoldersSection extends ConsumerStatefulWidget {
-  const FoldersSection({super.key});
+  const FoldersSection({super.key, this.firstStart = false});
+
+  final bool firstStart;
 
   @override
   ConsumerState<FoldersSection> createState() => _FoldersSectionState();
@@ -37,11 +43,18 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
     if (backend is EngineControl) await backend.stopEngine();
   }
 
-  /// Moves the folder of row [id] from [from] to a folder the user picks, then [save]s the new place.
-  /// Moves the folder [from] to one the user picks; false when the user picked none (nothing was done).
-  Future<bool> _move(String id, String from, Future<void> Function() before, void Function(String to) save) async {
-    final to = await getDirectoryPath(initialDirectory: from, confirmButtonText: 'Move here');
-    if (to == null || !mounted) return false;
+  /// Moves the folder of row [id] from [from] to a folder the user picks ([target] makes the place from the picked
+  /// folder), then [save]s the new place; false when the user picked none (nothing was done).
+  Future<bool> _move(
+    String id,
+    String from,
+    Future<void> Function() before,
+    void Function(String to) save, {
+    String Function(String picked)? target,
+  }) async {
+    final picked = await getDirectoryPath(initialDirectory: from, confirmButtonText: 'Move here');
+    if (picked == null || !mounted) return false;
+    final to = target?.call(picked) ?? picked;
     setState(() {
       _moving = id;
       _done = _total = 0;
@@ -123,18 +136,59 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
       failure: _failedRow == id ? _failure : null,
     );
 
+    final sep = Platform.pathSeparator;
+    // A folder in the main folder moves along with it.
+    String rebase(String path, String to) => path == folders.main || path.startsWith('${folders.main}$sep')
+        ? '$to${path.substring(folders.main.length)}'
+        : path;
+    final first = widget.firstStart;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Folders',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
+        if (!first) ...[
+          Text(
+            'Folders',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+          ),
+          const SizedBox(height: 2),
+        ],
         Text(
           'Where Run My AI keeps its files. Moving a folder takes its files along.',
           style: TextStyle(fontSize: 13, color: c.textSecondary),
         ),
+        if (first)
+          row(
+            'main',
+            'Main folder',
+            'The folders below are in it, unless moved on their own.',
+            folders.main,
+            // The open chats are closed first when they move along; the app then starts again on the new folder.
+            onMove: () async {
+              final chatsMove = rebase(folders.chats, '') != folders.chats;
+              final moved = await _move(
+                'main',
+                folders.main,
+                () async {
+                  await _stopEngine();
+                  if (chatsMove) await ref.read(chatStoreProvider).close();
+                },
+                (to) => notifier.set(
+                  FolderSet(
+                    main: to,
+                    models: rebase(folders.models, to),
+                    chats: rebase(folders.chats, to),
+                    cache: rebase(folders.cache, to),
+                    readFrom: [for (final dir in folders.readFrom) rebase(dir, to)],
+                  ),
+                ),
+                target: (picked) => picked.split(sep).last == mainFolderName
+                    ? picked
+                    : '$picked${picked.endsWith(sep) ? '' : sep}$mainFolderName',
+              );
+              if (moved && chatsMove) await relaunchApp();
+            },
+          ),
         row(
           'models',
           'Models',
@@ -145,16 +199,17 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
             await _stopEngine();
           }, (to) => notifier.set(folders.copyWith(models: to, readFrom: [...folders.readFrom]..remove(to)))),
         ),
-        _ReadFolders(
-          folders: folders.readFrom,
-          enabled: !busy,
-          onAdd: () async {
-            final dir = await getDirectoryPath(confirmButtonText: 'Read models here');
-            if (dir == null || dir == folders.models || folders.readFrom.contains(dir)) return;
-            notifier.set(folders.copyWith(readFrom: [...folders.readFrom, dir]));
-          },
-          onRemove: (dir) => notifier.set(folders.copyWith(readFrom: [...folders.readFrom]..remove(dir))),
-        ),
+        if (!first)
+          _ReadFolders(
+            folders: folders.readFrom,
+            enabled: !busy,
+            onAdd: () async {
+              final dir = await getDirectoryPath(confirmButtonText: 'Read models here');
+              if (dir == null || dir == folders.models || folders.readFrom.contains(dir)) return;
+              notifier.set(folders.copyWith(readFrom: [...folders.readFrom, dir]));
+            },
+            onRemove: (dir) => notifier.set(folders.copyWith(readFrom: [...folders.readFrom]..remove(dir))),
+          ),
         row(
           'chats',
           'Chats',
@@ -187,9 +242,18 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
                 label: 'Choose...',
                 onMove: () async {
                   final dir = await getDirectoryPath(initialDirectory: engine);
-                  if (dir != null) ref.read(prefsProvider.notifier).setEngineFolder(dir);
+                  if (dir == null || !mounted) return;
+                  if (!File('$dir$sep$engineProgram').existsSync()) {
+                    setState(() {
+                      _failedRow = 'engine';
+                      _failure = 'There is no engine in this folder ($engineProgram is missing).';
+                    });
+                    return;
+                  }
+                  setState(() => _failedRow = _failure = null);
+                  ref.read(prefsProvider.notifier).setEngineFolder(dir);
                 },
-                extra: download,
+                extra: first ? null : download,
               )
             : row(
                 'engine',
@@ -197,7 +261,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
                 '${installedLine}The engine Run My AI runs. It stops while it moves.',
                 engine,
                 onMove: () => _move('engine', engine, _stopEngine, ref.read(prefsProvider.notifier).setEngineFolder),
-                extra: download,
+                extra: first ? null : download,
               ),
       ],
     );

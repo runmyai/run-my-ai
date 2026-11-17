@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:runmyai/backend/backend.dart';
 import 'package:runmyai/backend/dummy_backend.dart';
+import 'package:runmyai/backend/engine_backend.dart';
 import 'package:runmyai/data/chat_store.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
@@ -17,11 +18,14 @@ import 'package:runmyai/state/chats.dart';
 import 'package:runmyai/state/first_run.dart';
 import 'package:runmyai/state/prefs.dart';
 import 'package:runmyai/state/providers.dart';
+import 'package:runmyai/state/section.dart';
 import 'package:runmyai/state/today.dart';
+import 'package:runmyai/system/folders.dart';
 import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/buttons.dart';
 import 'package:runmyai/ui/settings/privacy_section.dart';
 import 'package:runmyai/ui/shell.dart';
+import 'package:runmyai/ui/sidebar.dart';
 import 'package:runmyai/ui/welcome.dart';
 
 /// Today's date with no clock ticking behind it.
@@ -41,6 +45,15 @@ class _Backend extends DummyBackend {
     bool thinking = false,
     int? maxTokens,
   }) => Stream.value(const ReplyText('ok'));
+}
+
+/// The app's folders in the test's folder.
+class _Folders extends FoldersNotifier {
+  _Folders(this.main);
+  final String main;
+
+  @override
+  FolderSet build() => FolderSet(main: main, models: '$main/models', chats: '$main/chats', cache: '$main/cache');
 }
 
 void main() {
@@ -109,7 +122,7 @@ void main() {
       expect(find.byKey(welcome), findsOneWidget);
       expect(find.text('Welcome to Run My AI'), findsOneWidget);
       expect(find.textContaining('Simple, private, fast and models beyond your memory.'), findsOneWidget);
-      expect(find.text('Share benchmark results to help make Run My AI faster'), findsOneWidget);
+      expect(find.text('Share benchmark results and app stats to help improve Run My AI'), findsOneWidget);
       expect(find.textContaining('never your chats. You can turn this off anytime in Settings.'), findsOneWidget);
       expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isTrue, reason: 'ticked by default');
 
@@ -221,4 +234,102 @@ void main() {
       container.dispose();
     },
   );
+
+  /// The first start with the real engine's backend and no engine anywhere: the gate over a page with the Store's
+  /// bubble only (the engine step looks for its release and never finds it in a test, which is all it needs here).
+  Future<ProviderContainer> engineStart(WidgetTester tester, {Map<String, Object?> seen = const {}}) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final storage = Storage(dir)..writeFirstRun(seen);
+    final container = ProviderContainer(
+      overrides: [
+        storageProvider.overrideWithValue(storage),
+        backendProvider.overrideWithValue(EngineBackend(storage)),
+        foldersProvider.overrideWith(() => _Folders('${dir.path}/main')),
+      ],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        key: ObjectKey(container),
+        container: container,
+        child: MaterialApp(
+          theme: buildTheme(Brightness.dark),
+          home: const FirstRunGate(
+            child: Scaffold(body: Column(children: [StoreHint()])),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    return container;
+  }
+
+  const setup = Key('engine-setup'), hint = Key('store-hint');
+
+  testWidgets('first start: welcome, then the engine step that cannot be closed, then the main window and the bubble', (
+    tester,
+  ) async {
+    final container = await engineStart(tester);
+    expect(find.byKey(welcome), findsOneWidget);
+    expect(find.byKey(hint), findsNothing);
+    expect(container.read(firstRunProvider).setupOpen, isTrue);
+    container.read(sectionProvider.notifier).select(Section.settings);
+
+    await tester.tap(find.byKey(const Key('welcome-start')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(welcome), findsNothing);
+    expect(find.byKey(setup), findsOneWidget);
+    expect(find.byKey(hint), findsNothing, reason: 'not while the engine step is open');
+    expect(find.byKey(const Key('engine-later')), findsNothing);
+
+    // Escape does not close it.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(setup), findsOneWidget);
+
+    // Folders: closed at first; open, the main folder and the engine, with no engine download inside the step.
+    expect(find.byKey(const Key('folder-path-main')), findsNothing);
+    await tester.tap(find.byKey(const Key('engine-folders')));
+    await tester.pump();
+    expect(find.text('${dir.path}/main'), findsOneWidget);
+    expect(find.byKey(const Key('folder-path-models')), findsOneWidget);
+    expect(find.byKey(const Key('folder-path-chats')), findsOneWidget);
+    expect(find.byKey(const Key('folder-path-cache')), findsOneWidget);
+    expect(find.byKey(const Key('folder-path-engine')), findsOneWidget);
+    expect(find.byKey(const Key('engine-download-open')), findsNothing);
+    expect(find.byKey(const Key('folder-add-read')), findsNothing);
+
+    // The user's own engine folder chosen: the step ends, the chat section shows, then the bubble.
+    final own = Directory('${dir.path}/own')..createSync();
+    File('${own.path}/${Platform.isWindows ? 'llama-server.exe' : 'llama-server'}').writeAsStringSync('');
+    container.read(prefsProvider.notifier).setEngineFolder(own.path);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(setup), findsNothing);
+    expect(container.read(sectionProvider), Section.chat);
+    expect(container.read(firstRunProvider).setupOpen, isFalse);
+    expect(find.byKey(hint), findsOneWidget);
+  });
+
+  testWidgets('a start after the welcome screen with no engine yet opens the engine step again', (tester) async {
+    await engineStart(tester, seen: {'welcomeShown': true});
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(welcome), findsNothing);
+    expect(find.byKey(setup), findsOneWidget);
+    expect(find.byKey(hint), findsNothing);
+  });
+
+  testWidgets('a start with the engine in place goes straight to the main window', (tester) async {
+    File('${dir.path}/main/engine/${Platform.isWindows ? 'llama-server.exe' : 'llama-server'}')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('');
+    final container = await engineStart(tester, seen: {'welcomeShown': true});
+    expect(container.read(firstRunProvider).setupOpen, isFalse);
+    expect(find.byKey(setup), findsNothing);
+    expect(find.byKey(hint), findsOneWidget);
+  });
 }
