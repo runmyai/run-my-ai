@@ -30,7 +30,8 @@ class TuningState {
 
 /// Measures the PC for each model with the autotuner: by itself once a download is checked (unless a result for that
 /// model file and autotuner is kept), and again when the user asks. One tune at a time, never while the engine writes a
-/// reply, runs a benchmark or hosts (it waits for them to end); the engine unloads the model first if it has it loaded.
+/// reply, runs a benchmark or hosts (it waits for them to end); the engine unloads every model it has loaded first, so
+/// the PC is quiet while it measures.
 /// A message sent meanwhile waits in the engine until the tune ends.
 class TuningRunsNotifier extends Notifier<TuningState> {
   var _running = false;
@@ -90,7 +91,7 @@ class TuningRunsNotifier extends Notifier<TuningState> {
     _running = true;
     try {
       final engine = ref.read(backendProvider);
-      if (engine is EngineControl && (engine as EngineControl).engineState.value.modelId == id) {
+      if (engine is EngineControl && (engine as EngineControl).engineState.value.phase != EnginePhase.stopped) {
         await (engine as EngineControl).stopEngine();
         // A reply that started meanwhile goes first; the tune follows when it ends.
         if (!ref.mounted || _engineBusy) return;

@@ -213,9 +213,13 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
         final versions = lists[repo];
         if (versions == null) continue;
         final listed = {for (final v in versions) ...v.files.keys};
-        final local = {
+        final local = <String, LocalFile>{
           for (final name in file.parts)
-            if (listed.contains(name)) name: await hashes.of('$folder${Platform.pathSeparator}$name'),
+            if (listed.contains(name))
+              name: (
+                sha256: hashes.known('$folder${Platform.pathSeparator}$name'),
+                size: File('$folder${Platform.pathSeparator}$name').lengthSync(),
+              ),
         };
         final update = modelUpdate(versions, local);
         if (update != null) {

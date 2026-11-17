@@ -6,6 +6,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../state/benchmark.dart';
 import '../state/chats.dart';
+import '../state/library.dart';
 import '../state/providers.dart';
 import '../theme.dart';
 import 'buttons.dart';
@@ -62,6 +63,10 @@ class _CloseGuardState extends ConsumerState<CloseGuard> with WindowListener {
     // The reply so far is kept, and every save is done before the window goes.
     if (ref.read(chatsProvider).replyingId != null) ref.read(chatsProvider.notifier).stop();
     await ref.read(chatStoreProvider).flush();
+    // a download writes what it has and records how far each part got, so Resume fetches nothing twice
+    if (ref.exists(libraryProvider)) {
+      await ref.read(libraryProvider.notifier).pauseAll().timeout(const Duration(seconds: 3), onTimeout: () {});
+    }
     await windowManager.destroy();
   }
 

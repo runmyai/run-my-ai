@@ -35,6 +35,9 @@ class _Hub {
   /// How many answers to cut short (the connection ends half way).
   var cutShort = 0;
 
+  /// How many answers send half their bytes and then hang, as a connection does when the download is paused.
+  var hangHalfWay = 0;
+
   /// The status every file request gets instead of the file.
   int? refuse;
 
@@ -97,6 +100,15 @@ class _Hub {
         await Future<void>.delayed(delay);
         response.statusCode = range == null ? 200 : 206;
         response.headers.set(HttpHeaders.contentRangeHeader, 'bytes $first-$last/${bytes.length}');
+        if (hangHalfWay > 0) {
+          hangHalfWay--;
+          response
+            ..bufferOutput = false
+            ..contentLength = last - first + 1;
+          response.add(bytes.sublist(first, first + (last - first + 1) ~/ 2));
+          await response.flush();
+          return Completer<void>().future;
+        }
         if (cutShort > 0) {
           cutShort--;
           response.add(bytes.sublist(first, first + (last - first + 1) ~/ 2));
@@ -145,29 +157,39 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
-  ModelDownload download({Future<int?> Function(String)? free, void Function(DownloadProgress)? onProgress}) =>
-      ModelDownload(
-        _model,
-        '${dir.path}/models',
-        server: hub.uri,
-        connections: 4,
-        partBytes: 1000,
-        free: free ?? (_) async => 1 << 40,
-        onProgress: onProgress,
-        retryDelay: Duration.zero,
-      );
+  ModelDownload download({
+    Future<int?> Function(String)? free,
+    void Function(DownloadProgress)? onProgress,
+    int connections = 4,
+  }) => ModelDownload(
+    _model,
+    '${dir.path}/models',
+    server: hub.uri,
+    connections: connections,
+    partBytes: 1000,
+    free: free ?? (_) async => 1 << 40,
+    onProgress: onProgress,
+    retryDelay: Duration.zero,
+  );
 
   test('a part record splits the file into ranges and remembers the parts written', () {
     final record = PartRecord(size: 2500, partBytes: 1000, sha256: 'abc');
     expect(record.parts, 3);
     expect([for (var i = 0; i < 3; i++) record.range(i)], [(0, 999), (1000, 1999), (2000, 2499)]);
     record.done.addAll([0, 2]);
+    record.started[1] = 300;
     expect(record.missing, [1]);
-    expect(record.doneBytes, 1500);
+    expect(record.doneBytes, 1800);
     final file = File('${dir.path}/r.json');
     record.write(file);
     final back = PartRecord.read(file)!;
     expect(back.done, {0, 2});
+    expect(back.started, {1: 300});
+    // what an older version of the app wrote (no started parts) is read; a started count that does not fit is not
+    file.writeAsStringSync('{"size": 2500, "partBytes": 1000, "sha256": "abc", "done": [0]}');
+    expect(PartRecord.read(file)!.started, isEmpty);
+    file.writeAsStringSync('{"size": 2500, "partBytes": 1000, "done": [0], "started": {"0": 5, "1": 1000, "2": 7}}');
+    expect(PartRecord.read(file)!.started, {2: 7});
     expect(back.isFor(const RemoteFile('x', 2500, sha256: 'abc')), isTrue);
     expect(back.isFor(const RemoteFile('x', 2500, sha256: 'abd')), isFalse);
     expect(back.isFor(const RemoteFile('x', 2501, sha256: 'abc')), isFalse);
@@ -217,11 +239,70 @@ void main() {
     expect(downloadedBytes('${dir.path}/models', _model), isNull);
   });
 
+  test(
+    'paused part way through a part, Resume continues it from its last byte; the progress never goes back',
+    () async {
+      hub.hangHalfWay = 1;
+      final seen = <int>[];
+      final first = download(connections: 1, onProgress: (p) => seen.add(p.done));
+      final going = first.run();
+      for (var i = 0; i < 200 && (seen.isEmpty || seen.last < 500); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(seen.last, 500, reason: 'the half that came counts');
+      first.stop();
+      expect(await going, isFalse);
+      final record = PartRecord.read(File('${dir.path}/models/m.gguf.part.json'))!;
+      expect(record.done, isEmpty);
+      expect(record.started, {0: 500});
+      expect(downloadedBytes('${dir.path}/models', _model), 500);
+
+      hub.asked.clear();
+      final again = <int>[];
+      expect(await download(connections: 1, onProgress: (p) => again.add(p.done)).run(), isTrue);
+      expect(hub.asked.first, 'm.gguf 500-999');
+      expect(hub.asked, isNot(contains('m.gguf 0-999')));
+      for (final (a, b) in [for (var i = 1; i < seen.length; i++) (seen[i - 1], seen[i])]) {
+        expect(b, greaterThanOrEqualTo(a));
+      }
+      expect(again.first, greaterThanOrEqualTo(seen.last));
+      for (final (a, b) in [for (var i = 1; i < again.length; i++) (again[i - 1], again[i])]) {
+        expect(b, greaterThanOrEqualTo(a));
+      }
+      final whole = File('${dir.path}/models/m.gguf');
+      expect(whole.readAsBytesSync(), _weights);
+      expect(sha256.convert(whole.readAsBytesSync()).toString(), _sha256(_weights));
+    },
+  );
+
+  test('a download paused by an older version of the app (larger parts, no started bytes) still finishes', () async {
+    final models = Directory('${dir.path}/models')..createSync();
+    File('${models.path}/m.gguf.part').writeAsBytesSync([..._weights.sublist(0, 8000), ...List.filled(3000, 0)]);
+    File('${models.path}/m.gguf.part.json').writeAsStringSync(
+      jsonEncode({
+        'size': 20000,
+        'partBytes': 8000,
+        'sha256': _sha256(_weights),
+        'gitSha1': null,
+        'done': [0],
+      }),
+    );
+    expect(await download().run(), isTrue);
+    expect(File('${models.path}/m.gguf').readAsBytesSync(), _weights);
+    expect(hub.asked.where((a) => a.startsWith('m.gguf')), ['m.gguf 8000-15999', 'm.gguf 16000-19999']);
+  });
+
   test('a connection that breaks off is retried, and the file is still right', () async {
     hub.cutShort = 3;
     expect(await download().run(), isTrue);
     expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
-    expect(hub.asked.where((a) => a.startsWith('m.gguf')).length, 23);
+    final asked = hub.asked.where((a) => a.startsWith('m.gguf'));
+    expect(asked.length, 23);
+    // each of the three cut answers sent half its part, and its retry asked only for the other half
+    final bytes = asked
+        .map((a) => a.split(' ').last.split('-').map(int.parse).toList())
+        .fold(0, (n, r) => n + r[1] - r[0] + 1);
+    expect(bytes, _weights.length + 3 * 500);
   });
 
   test('a file that does not match its checksum is deleted and reported as damaged', () async {

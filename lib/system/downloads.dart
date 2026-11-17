@@ -76,23 +76,35 @@ String _refused(int status) => switch (status) {
 bool _retryable(int status) => status == 408 || status == 429 || status >= 500;
 
 /// What has been downloaded of a file so far, kept next to it (`<name>.part.json`) so a download continues where it
-/// stopped, also after the app was closed. The file is fetched in parts of [partBytes]; [done] are the parts written.
+/// stopped, also after the app was closed. The file is fetched in parts of [partBytes]; [done] are the parts written,
+/// [started] how many bytes from its start are written of each part not finished yet (a record without it, from an
+/// older version of the app, fetches those parts again from their start).
 class PartRecord {
-  PartRecord({required this.size, required this.partBytes, this.sha256, this.gitSha1, Set<int>? done})
-    : done = done ?? {};
+  PartRecord({
+    required this.size,
+    required this.partBytes,
+    this.sha256,
+    this.gitSha1,
+    Set<int>? done,
+    Map<int, int>? started,
+  }) : done = done ?? {},
+       started = started ?? {};
 
   final int size;
   final int partBytes;
   final String? sha256;
   final String? gitSha1;
   final Set<int> done;
+  final Map<int, int> started;
 
   int get parts => size == 0 ? 0 : (size + partBytes - 1) ~/ partBytes;
 
   /// Part [i]'s first and last byte.
   (int, int) range(int i) => (i * partBytes, min(size, (i + 1) * partBytes) - 1);
 
-  int get doneBytes => done.fold(0, (sum, i) => sum + range(i).$2 - range(i).$1 + 1);
+  int get doneBytes =>
+      done.fold(0, (sum, i) => sum + range(i).$2 - range(i).$1 + 1) +
+      started.values.fold(0, (sum, bytes) => sum + bytes);
 
   /// The parts still to fetch, in order.
   List<int> get missing => [
@@ -109,20 +121,32 @@ class PartRecord {
     'sha256': sha256,
     'gitSha1': gitSha1,
     'done': done.toList()..sort(),
+    'started': {for (final MapEntry(:key, :value) in started.entries) '$key': value},
   };
 
   /// The record in [file]; null when there is none or it cannot be read.
   static PartRecord? read(File file) {
     try {
       final json = jsonDecode(file.readAsStringSync());
-      if (json case {'size': final int size, 'partBytes': final int partBytes, 'done': final List done}) {
-        return PartRecord(
+      if (json case {'size': final int size, 'partBytes': final int partBytes, 'done': final List done}
+          when partBytes > 0) {
+        final record = PartRecord(
           size: size,
           partBytes: partBytes,
           sha256: json['sha256'] as String?,
           gitSha1: json['gitSha1'] as String?,
           done: done.whereType<int>().toSet(),
         );
+        // only what lies inside an unfinished part counts; anything else is fetched again
+        if (json['started'] case final Map started) {
+          for (final MapEntry(:key, :value) in started.entries) {
+            final i = int.tryParse('$key');
+            if (i == null || value is! int || i < 0 || i >= record.parts || record.done.contains(i)) continue;
+            final (first, last) = record.range(i);
+            if (value > 0 && value <= last - first) record.started[i] = value;
+          }
+        }
+        return record;
       }
     } on FileSystemException {
       // None.
@@ -182,15 +206,16 @@ Future<bool> checksumMatches(String path, RemoteFile f) => Isolate.run(() async 
 });
 
 /// One model's download into [folder]: its files one after another, each fetched in parts over [connections]
-/// connections at once, written next to where it goes as `<name>.part` with its [PartRecord]; a finished file is
-/// checked against Hugging Face's checksum and only then gets its name. [stop] pauses it (what is written stays).
+/// connections at once, written next to where it goes as `<name>.part` with its [PartRecord] (saved twice a second
+/// and when it stops, so a part cut off continues from its last byte written); a finished file is checked against
+/// Hugging Face's checksum and only then gets its name. [stop] pauses it (what is written stays).
 class ModelDownload {
   ModelDownload(
     this.file,
     this.folder, {
     Uri? server,
     this.connections = 6,
-    this.partBytes = 128 << 20,
+    this.partBytes = 32 << 20,
     this.free = freeBytes,
     this.onProgress,
     this.onVerified,
@@ -203,7 +228,7 @@ class ModelDownload {
   final int connections;
 
   /// The size of each part fetched with one request (larger parts: fewer requests to Hugging Face, which limits
-  /// them; smaller: less fetched again after an interruption).
+  /// them; smaller: less lost when the app ends without saving its record).
   final int partBytes;
 
   /// Free bytes on a drive (tests give their own).
@@ -218,8 +243,11 @@ class ModelDownload {
 
   HttpClient? _client;
   var _stopped = false;
-  var _base = 0, _total = 0, _flowing = 0;
+  var _base = 0, _total = 0, _flowing = 0, _saved = 0;
   PartRecord? _record;
+  // the records of the files not finished yet, so their written parts count from the first progress on
+  final _kept = <String, PartRecord>{};
+  File? _recordFile;
   final _speed = <(int, int)>[];
 
   /// Stops the download; [run] then returns false. What is written stays, to be continued.
@@ -228,7 +256,7 @@ class ModelDownload {
     _client?.close(force: true);
   }
 
-  int get _done => _base + (_record?.doneBytes ?? 0) + _flowing;
+  int get _done => _base + _kept.values.fold<int>(0, (sum, r) => sum + r.doneBytes) + _flowing;
 
   /// Downloads every file not yet there. True when all are there and checked; false when [stop] was called. Throws
   /// [DownloadFailure].
@@ -251,8 +279,11 @@ class ModelDownload {
         final record = PartRecord.read(File(_join(folder, '${f.name}.part.json')));
         if (_finished(f)) {
           _base += f.size;
+        } else if (record != null && record.isFor(f) && File(_join(folder, '${f.name}.part')).existsSync()) {
+          _kept[f.name] = record;
+          needed += f.size - record.doneBytes;
         } else {
-          needed += f.size - (record != null && record.isFor(f) ? record.doneBytes : 0);
+          needed += f.size;
         }
       }
       final room = await free(folder);
@@ -264,12 +295,16 @@ class ModelDownload {
           'press Resume.',
         );
       }
-      ticks = Timer.periodic(const Duration(milliseconds: 500), (_) => _tell());
+      ticks = Timer.periodic(const Duration(milliseconds: 500), (_) {
+        _tell();
+        _save();
+      });
       _tell();
       for (final f in files) {
         if (_finished(f)) continue;
         if (!await _fetch(client, f)) return false;
         _base += f.size;
+        _kept.remove(f.name);
         _record = null;
       }
       return true;
@@ -282,6 +317,18 @@ class ModelDownload {
   bool _finished(RemoteFile f) {
     final whole = File(_join(folder, f.name));
     return whole.existsSync() && whole.lengthSync() == f.size && !File('${whole.path}.part.json').existsSync();
+  }
+
+  /// Writes the file's record when it has changed since it was last written.
+  void _save() {
+    final record = _record, file = _recordFile;
+    if (record == null || file == null || record.doneBytes == _saved) return;
+    try {
+      record.write(file);
+      _saved = record.doneBytes;
+    } on FileSystemException {
+      // The drive is gone or full: the parts' own writes fail and say so.
+    }
   }
 
   void _tell({bool checking = false}) {
@@ -311,16 +358,24 @@ class ModelDownload {
       part.createSync();
       record = PartRecord(size: f.size, partBytes: partBytes, sha256: f.sha256, gitSha1: f.gitSha1)..write(recordFile);
     }
-    _record = record;
+    _record = _kept[f.name] = record;
+    _recordFile = recordFile;
+    _saved = record.doneBytes;
     final url = server.resolve('/${file.repo}/resolve/main/${f.name}');
     final todo = record.missing;
-    await Future.wait([
-      for (var w = 0; w < min(connections, todo.length); w++)
-        _worker(client, url, part, record, recordFile, todo).catchError((Object e) {
-          stop();
-          throw e;
-        }),
-    ]);
+    try {
+      // (Waits for every connection, also after one failed, so each has written what it got before the save.)
+      await Future.wait([
+        for (var w = 0; w < min(connections, todo.length); w++)
+          _worker(client, url, part, record, todo).catchError((Object e) {
+            stop();
+            throw e;
+          }),
+      ]);
+    } finally {
+      _save();
+      _recordFile = null;
+    }
     if (_stopped) return false;
 
     _tell(checking: true);
@@ -338,68 +393,79 @@ class ModelDownload {
   }
 
   /// Takes parts from [todo] until none is left, writing each where it goes in the file.
-  Future<void> _worker(
-    HttpClient client,
-    Uri url,
-    File part,
-    PartRecord record,
-    File recordFile,
-    List<int> todo,
-  ) async {
+  Future<void> _worker(HttpClient client, Uri url, File part, PartRecord record, List<int> todo) async {
     // (Append mode opens without cutting the file; each write goes where the position is set.)
     final out = await part.open(mode: FileMode.append);
     try {
       while (todo.isNotEmpty && !_stopped) {
-        final i = todo.removeAt(0);
-        if (!await _fetchPart(client, url, out, record, i)) return;
-        record.done.add(i);
-        record.write(recordFile);
+        if (!await _fetchPart(client, url, out, record, todo.removeAt(0))) return;
       }
     } finally {
       await out.close();
     }
   }
 
-  /// Fetches part [i] with one request, retrying a few times when the connection breaks. False when stopped.
+  /// Fetches part [i] from its first byte not yet written, retrying a few times when the connection breaks (each
+  /// retry asks only for the rest). What came is written and recorded also when it stops. False when stopped.
   Future<bool> _fetchPart(HttpClient client, Uri url, RandomAccessFile out, PartRecord record, int i) async {
     final (first, last) = record.range(i);
+    var at = first + (record.started[i] ?? 0), pending = 0;
+    final buffer = BytesBuilder(copy: false);
+    // The bytes are counted as written only once they are in the file, so the progress never goes back.
+    Future<void> flush() async {
+      final bytes = buffer.takeBytes();
+      // (never past the part's end, whatever the server sent)
+      final keep = min(bytes.length, last + 1 - at);
+      await out.setPosition(at);
+      await out.writeFrom(bytes, 0, keep);
+      at += keep;
+      pending -= bytes.length;
+      _flowing -= bytes.length;
+      if (at > last) {
+        record.started.remove(i);
+        record.done.add(i);
+      } else if (at > first) {
+        record.started[i] = at - first;
+      }
+    }
+
+    void drop() {
+      buffer.clear();
+      _flowing -= pending;
+      pending = 0;
+    }
+
     for (var attempt = 1; ; attempt++) {
-      var got = 0;
       try {
         final request = await client.getUrl(url);
-        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$first-$last');
+        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$at-$last');
         final response = await request.close();
-        final whole = response.statusCode == 200 && first == 0 && last == record.size - 1;
+        final whole = response.statusCode == 200 && at == 0 && last == record.size - 1;
         if (response.statusCode != 206 && !whole) {
           await response.drain<void>();
           throw _Status(response.statusCode);
         }
-        final buffer = BytesBuilder(copy: false);
-        var at = first;
-        Future<void> flush() async {
-          final bytes = buffer.takeBytes();
-          await out.setPosition(at);
-          await out.writeFrom(bytes);
-          at += bytes.length;
-        }
-
         await for (final data in response) {
           buffer.add(data);
-          got += data.length;
+          pending += data.length;
           _flowing += data.length;
           if (buffer.length >= 4 << 20) await flush();
         }
         await flush();
-        _flowing -= got;
-        got = 0;
         if (at == last + 1) return true;
         throw const SocketException('the connection ended early');
       } on FileSystemException catch (e) {
-        _flowing -= got;
+        drop();
         if (_stopped) return false;
         throw DownloadFailure('Could not write the download in $folder: ${e.osError?.message ?? e.message}');
       } on Exception catch (e) {
-        _flowing -= got;
+        // what came before the break is good: written, so the retry or the Resume continues after it
+        try {
+          await flush();
+        } on FileSystemException {
+          drop();
+        }
+        if (at > last) return true;
         if (_stopped) return false;
         if (e is _Status && !_retryable(e.status)) throw DownloadFailure(_refused(e.status));
         if (attempt >= 6) {
