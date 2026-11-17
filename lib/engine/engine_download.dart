@@ -9,10 +9,11 @@ import 'package:archive/archive_io.dart';
 import '../benchmark/hardware.dart';
 import '../system/downloads.dart';
 import '../system/folders.dart';
+import '../system/github.dart';
 import 'tuning.dart';
 
 /// Where the engine's releases are listed: the latest release of TokenWing on GitHub.
-final engineReleases = Uri.parse('https://api.github.com/repos/runmyai/tokenwing/releases/latest');
+Uri get engineReleases => gitHubApi().resolve('/repos/runmyai/tokenwing/releases/latest');
 
 /// What the app needs to know of a graphics card to pick the engine build: its make and its own video memory.
 enum GpuBrand { nvidia, amd, other }

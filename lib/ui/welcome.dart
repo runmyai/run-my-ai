@@ -43,23 +43,23 @@ class _Welcome extends ConsumerWidget {
       color: c.page,
       child: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 700),
+            constraints: const BoxConstraints(maxWidth: 580),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   'Welcome to Run My AI',
-                  style: TextStyle(fontSize: 40, fontWeight: FontWeight.w600, color: c.text),
+                  style: TextStyle(fontSize: 31, fontWeight: FontWeight.w600, color: c.text),
                 ),
-                const SizedBox(height: 22),
+                const SizedBox(height: 14),
                 Text(
                   'Simple, private, fast and models beyond your memory. This is an early version, getting better every '
                   "week. We're here to provide you the best local AI experience. We'd love to hear from you anytime.",
-                  style: TextStyle(fontSize: 20, height: 1.55, color: c.textSecondary),
+                  style: TextStyle(fontSize: 16.5, height: 1.5, color: c.textSecondary),
                 ),
-                const SizedBox(height: 36),
+                const SizedBox(height: 28),
                 InkWell(
                   key: const Key('welcome-share'),
                   borderRadius: BorderRadius.circular(8),
@@ -69,17 +69,14 @@ class _Welcome extends ConsumerWidget {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Transform.scale(
-                          scale: 1.25,
-                          child: Checkbox(
-                            value: share,
-                            onChanged: (v) => ref.read(prefsProvider.notifier).setShareBenchmarks(v ?? false),
-                            activeColor: c.mainFill,
-                            checkColor: c.mainText,
-                            side: BorderSide(color: c.buttonBorder, width: 1.5),
-                          ),
+                        Checkbox(
+                          value: share,
+                          onChanged: (v) => ref.read(prefsProvider.notifier).setShareBenchmarks(v ?? false),
+                          activeColor: c.mainFill,
+                          checkColor: c.mainText,
+                          side: BorderSide(color: c.buttonBorder, width: 1.5),
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.only(top: 12),
@@ -88,10 +85,10 @@ class _Welcome extends ConsumerWidget {
                               children: [
                                 Text(
                                   'Share benchmark results to help make Run My AI faster',
-                                  style: TextStyle(fontSize: 18, color: c.text),
+                                  style: TextStyle(fontSize: 15, color: c.text),
                                 ),
                                 const SizedBox(height: 4),
-                                Text(shareBenchmarksNote, style: TextStyle(fontSize: 16, color: c.textMuted)),
+                                Text(shareBenchmarksNote, style: TextStyle(fontSize: 13.5, color: c.textMuted)),
                               ],
                             ),
                           ),
@@ -100,13 +97,12 @@ class _Welcome extends ConsumerWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: 36),
+                const SizedBox(height: 24),
                 MainButton(
                   key: const Key('welcome-start'),
                   label: 'Get started',
                   autofocus: true,
-                  fontSize: 18,
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 6),
                   onTap: () async {
                     ref.read(firstRunProvider.notifier).welcomeDone();
                     await afterWelcome(context, ref);

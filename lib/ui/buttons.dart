@@ -174,7 +174,6 @@ class MainButton extends StatelessWidget {
     this.icon,
     this.danger = false,
     this.dense = false,
-    this.fontSize,
     this.padding,
     this.focusNode,
     this.autofocus = false,
@@ -186,7 +185,6 @@ class MainButton extends StatelessWidget {
   final IconData? icon;
   final bool danger;
   final bool dense;
-  final double? fontSize;
   final EdgeInsets? padding;
   final FocusNode? focusNode;
   final bool autofocus;
@@ -202,7 +200,7 @@ class MainButton extends StatelessWidget {
     danger: danger,
     chosen: false,
     padding: _padding(dense, padding),
-    fontSize: fontSize ?? (dense ? 12.5 : 13),
+    fontSize: dense ? 12.5 : 13,
     focusNode: focusNode,
     autofocus: autofocus,
     ringAlways: ringAlways,

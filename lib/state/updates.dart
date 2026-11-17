@@ -10,6 +10,7 @@ import '../data/models.dart';
 import '../engine/engine_download.dart';
 import '../system/downloads.dart';
 import '../system/folders.dart';
+import '../system/github.dart';
 import '../system/relaunch.dart';
 import '../system/updater.dart';
 import 'about.dart';
@@ -116,7 +117,7 @@ class UpdatesState {
 }
 
 /// GitHub's API (tests use their own server).
-final gitHubApiProvider = Provider<Uri>((ref) => Uri.parse('https://api.github.com'));
+final gitHubApiProvider = Provider<Uri>((ref) => gitHubApi());
 
 /// Whether updates are looked for: with the real engine (tests that look for them say so).
 final updatesEnabledProvider = Provider<bool>((ref) => ref.read(backendProvider) is EngineBackend);
