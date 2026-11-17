@@ -10,6 +10,8 @@
   <a href="https://discord.gg/BfpvUFp58">Discord</a>
 </p>
 
+<p align="center"><b>Downloads for Windows and Linux open on Nov 17 at 9:30 PM IST (4:00 PM UTC).</b></p>
+
 ## The model you want. On the machine you have.
 
 - **The model you want.** Big models, not a smaller stand-in, on the computer you already have.
