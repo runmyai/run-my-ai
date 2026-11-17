@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../backend/backend.dart';
 import '../../backend/engine_backend.dart';
+import '../../engine/engine_download.dart';
 import '../../state/library.dart';
 import '../../state/prefs.dart';
 import '../../state/providers.dart';
@@ -11,6 +12,7 @@ import '../../system/folders.dart';
 import '../../system/relaunch.dart';
 import '../../theme.dart';
 import '../buttons.dart';
+import '../engine_setup.dart';
 
 /// Settings' folders: where models are downloaded, the folders models are also read from, the chats, the saved
 /// chat states and the engine. Moving one copies its files to the new place and then removes the old ones (on the
@@ -80,6 +82,21 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
     final own = ref.watch(prefsProvider.select((p) => p.engineFolder));
     final engine = EngineBackend.engineFolder(own, folders);
     final busy = _moving != null;
+    final installed = installedEngine(engine);
+    final installedLine = installed == null
+        ? ''
+        : 'TokenWing ${installed.version}, ${engineBuildLabel(installed.build)}. ';
+    final download = AppButton(
+      key: const Key('engine-download-open'),
+      label: 'Download engine...',
+      dense: true,
+      onTap: busy
+          ? null
+          : () async {
+              await showEngineSetup(context);
+              if (mounted) setState(() {});
+            },
+    );
 
     Widget row(
       String id,
@@ -88,12 +105,20 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
       String path, {
       required VoidCallback onMove,
       String label = 'Move...',
+      Widget? extra,
     }) => _FolderRow(
       id: id,
       title: title,
       about: about,
       path: path,
-      button: AppButton(key: Key('folder-move-$id'), label: label, dense: true, onTap: busy ? null : onMove),
+      button: Row(
+        mainAxisSize: MainAxisSize.min,
+        spacing: 8,
+        children: [
+          ?extra,
+          AppButton(key: Key('folder-move-$id'), label: label, dense: true, onTap: busy ? null : onMove),
+        ],
+      ),
       progress: _moving == id ? (_done, _total) : null,
       failure: _failedRow == id ? _failure : null,
     );
@@ -157,20 +182,22 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
             ? row(
                 'engine',
                 'Engine',
-                'The engine Run My AI runs. A change applies the next time it starts.',
+                '${installedLine}The engine Run My AI runs. A change applies the next time it starts.',
                 engine,
                 label: 'Choose...',
                 onMove: () async {
                   final dir = await getDirectoryPath(initialDirectory: engine);
                   if (dir != null) ref.read(prefsProvider.notifier).setEngineFolder(dir);
                 },
+                extra: download,
               )
             : row(
                 'engine',
                 'Engine',
-                'The engine Run My AI runs. It stops while it moves.',
+                '${installedLine}The engine Run My AI runs. It stops while it moves.',
                 engine,
                 onMove: () => _move('engine', engine, _stopEngine, ref.read(prefsProvider.notifier).setEngineFolder),
+                extra: download,
               ),
       ],
     );

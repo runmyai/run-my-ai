@@ -5,10 +5,13 @@ import '../state/first_run.dart';
 import '../state/prefs.dart';
 import '../theme.dart';
 import 'buttons.dart';
+import 'engine_setup.dart';
 import 'title_bar.dart';
 
-/// What happens after the welcome screen's "Get started": the engine download step goes here.
-Future<void> afterWelcome(BuildContext context, WidgetRef ref) async {}
+/// What happens after the welcome screen's "Get started": the engine download step, unless an engine is already there.
+Future<void> afterWelcome(BuildContext context, WidgetRef ref) async {
+  if (engineMissing(ref)) await showEngineSetup(context);
+}
 
 /// The app, with the welcome screen over it on the very first start. The window's top row stays usable.
 class FirstRunGate extends ConsumerWidget {
