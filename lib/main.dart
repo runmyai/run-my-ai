@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import 'state/app_stats.dart';
 import 'state/prefs.dart';
 import 'state/providers.dart';
 import 'state/section.dart';
+import 'system/app_menu.dart';
 import 'system/appearance.dart';
 import 'system/chime.dart';
 import 'system/folders.dart';
@@ -25,7 +27,10 @@ import 'window/app_window.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final storage = await Storage.open();
-  final (chatStore, _) = await (ChatStore.open(storage.dir, folder: Directory(FolderSet.load(storage.dir).chats)), setUpWindow(storage)).wait;
+  final (chatStore, _) = await (
+    ChatStore.open(storage.dir, folder: Directory(FolderSet.load(storage.dir).chats)),
+    setUpWindow(storage),
+  ).wait;
   final section = Section.values.where((s) => s.name == forcedSection).firstOrNull;
   final themeMode = switch (forcedTheme) {
     'light' || 'silklight' || 'dusk' => ThemeMode.light,
@@ -33,9 +38,17 @@ Future<void> main() async {
     _ => null,
   };
   runApp(
-    appWith(storage: storage, chatStore: chatStore, backend: EngineBackend(storage), section: section, themeMode: themeMode),
+    appWith(
+      storage: storage,
+      chatStore: chatStore,
+      backend: EngineBackend(storage),
+      section: section,
+      themeMode: themeMode,
+    ),
   );
   scheduleScreenshot();
+  // In the background: the Linux app menu entry and icon (the dock shows the app's icon through it).
+  if (Platform.isLinux) unawaited(addToAppMenu());
 }
 
 /// The app with its data folder, chats database and backend (main() and the tests choose them).
