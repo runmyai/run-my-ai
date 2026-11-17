@@ -12,6 +12,7 @@ import 'package:runmyai/data/models.dart';
 import 'package:runmyai/state/motion.dart';
 import 'package:runmyai/ui/dev_speed_control.dart';
 import 'package:runmyai/ui/live_reply.dart';
+import 'package:runmyai/ui/markdown/md_view.dart';
 
 void main() {
   test('a reply split into token-sized pieces joins back into exactly the same text', () {
@@ -44,7 +45,7 @@ void main() {
             ),
           );
       await tester.pumpWidget(box(const SizedBox(key: Key('done'))));
-      await tester.pumpWidget(box(SelectableText(text, key: const Key('done'), style: style)));
+      await tester.pumpWidget(box(MarkdownView(text: text, key: const Key('done'), style: style)));
       final done = tester.getSize(find.byKey(const Key('done'))).height;
       // Opened while being written: all of it is out, shown by the reply view.
       await tester.pumpWidget(box(LiveReply(
@@ -197,6 +198,7 @@ void main() {
   });
 
   testWidgets('while written, the finished paragraphs are built once and drawn on their own layer', (tester) async {
+    // (A paragraph ends at a blank line; single line breaks stay inside it.)
     const style = TextStyle(fontSize: 15, height: 1.6, color: Color(0xFF000000));
     Widget reply(String text) => MaterialApp(
           home: Scaffold(
@@ -210,7 +212,7 @@ void main() {
           ),
         );
     // Opened midway: the first two paragraphs are done, the third is being written.
-    var text = 'First paragraph.\nSecond paragraph.\nThird';
+    var text = 'First paragraph.\n\nSecond paragraph.\n\nThird';
     await tester.pumpWidget(reply(text));
     final first = tester.widget<Text>(find.text('First paragraph.'));
     expect(find.ancestor(of: find.text('First paragraph.'), matching: find.byType(RepaintBoundary)), findsWidgets);

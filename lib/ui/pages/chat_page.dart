@@ -29,6 +29,7 @@ import '../follow.dart';
 import '../live_reply.dart';
 import '../look.dart';
 import '../marked_text.dart';
+import '../markdown/md_view.dart';
 import '../menu_panel.dart';
 import '../reply_card.dart';
 import '../thinking_block.dart';
@@ -768,9 +769,10 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
     final view = _view();
     if (view == null) return null;
     // Where the matching line is on screen now, and how far the page must move to put it a third of the way down.
-    final line = text != null && match != null
-        ? text!.localToGlobal(text!.getLocalRectForCaret(TextPosition(offset: match.start)).topLeft).dy
-        : item.localToGlobal(Offset.zero).dy;
+    final line = (match == null ? null : markdownOffsetTop(item, match.start)) ??
+        (text != null && match != null
+            ? text!.localToGlobal(text!.getLocalRectForCaret(TextPosition(offset: match.start)).topLeft).dy
+            : item.localToGlobal(Offset.zero).dy);
     final want = view.localToGlobal(Offset.zero).dy + view.size.height * 0.35;
     final position = _scroll.position;
     return (position.pixels + line - want).clamp(position.minScrollExtent, position.maxScrollExtent).toDouble();
@@ -948,7 +950,10 @@ class _Message extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     final style = TextStyle(fontSize: 15, height: 1.6, color: c.text);
-    final text = marks.isEmpty
+    // The AI's replies are drawn from their markdown; the user's own messages stay plain text.
+    final text = message.role == Role.assistant
+        ? MarkdownView(text: message.text, style: style, marks: marks, markStyle: markStyle)
+        : marks.isEmpty
         ? SelectableText(message.text, style: style)
         : SelectableText.rich(TextSpan(style: style, children: markedSpans(message.text, marks, markStyle!)));
     if (message.role == Role.assistant) {
