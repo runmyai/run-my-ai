@@ -147,9 +147,10 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Share benchmark results'), findsOneWidget);
-    expect(tester.widget<OptionPill>(find.byKey(const Key('share-off'))).chosen, isTrue);
-    await tester.tap(find.byKey(const Key('share-on')));
+    expect(find.text('Share benchmark results and app stats to help improve Run My AI'), findsOneWidget);
+    expect(find.text('Anonymous, never your chats. You can turn this off anytime in Settings.'), findsOneWidget);
+    expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isFalse);
+    await tester.tap(find.byKey(const Key('share-check')));
     await tester.pump();
     expect(container.read(prefsProvider).shareBenchmarks, isTrue);
     expect(Storage(dir).readPrefs().shareBenchmarks, isTrue);

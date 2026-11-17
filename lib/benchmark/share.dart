@@ -334,12 +334,13 @@ String installIdIn(Directory dir) {
   return id;
 }
 
-/// Sends a finished run's document when the user shares benchmark results: once, in the background; a failure is only
-/// logged (no message, no retry).
+/// Sends a finished run's document when the user shares benchmark results, in the background. A failed send is tried
+/// once more after [retryAfter], then dropped; a failure is only logged (no message).
 class BenchmarkSharer {
-  BenchmarkSharer(this._ref);
+  BenchmarkSharer(this._ref, {this.retryAfter = const Duration(seconds: 30)});
 
   final Ref _ref;
+  final Duration retryAfter;
 
   /// The document that was sent last (for the tests); null before.
   Map<String, Object?>? lastSent;
@@ -365,7 +366,16 @@ class BenchmarkSharer {
         folders: [?env['HOME'], ?env['USERPROFILE'], dir.path, modelsFolder],
       );
       lastSent = doc;
-      final name = await firestore.create('benchmarks', doc);
+      String name;
+      try {
+        name = await firestore.create('benchmarks', doc);
+      } on FirestoreFailure catch (e) {
+        debugPrint('Benchmark result not shared, trying once more: $e');
+        await Future<void>.delayed(retryAfter);
+        // (The user may have turned sharing off meanwhile.)
+        if (!_ref.read(prefsProvider).shareBenchmarks) return;
+        name = await firestore.create('benchmarks', doc);
+      }
       debugPrint('Benchmark result shared: $name');
     } on Object catch (e) {
       debugPrint('Benchmark result not shared: $e');
@@ -373,4 +383,4 @@ class BenchmarkSharer {
   }
 }
 
-final benchmarkSharerProvider = Provider<BenchmarkSharer>(BenchmarkSharer.new);
+final benchmarkSharerProvider = Provider<BenchmarkSharer>((ref) => BenchmarkSharer(ref));
