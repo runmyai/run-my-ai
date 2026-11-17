@@ -22,10 +22,11 @@ const lingAuto = <int, String>{
       '--moe-stream-correction model --moe-stream-gpu-skip-zero 1 --moe-stream-vram-follow 1 '
       '--moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 --moe-stream-async-h2d 1 '
       '--moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead 1 --moe-stream-idle-load '
-      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-prompt-defer 1 '
-      '--moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 '
-      '--moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 '
-      '--moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --backend-sampling',
+      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-copy-ahead 1 '
+      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
+      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
+      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
+      '8 --backend-sampling',
   8192:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 8192 -ctk q8_0 -ctv q8_0 -np 1 -t 8 '
@@ -41,10 +42,11 @@ const lingAuto = <int, String>{
       '--moe-stream-correction model --moe-stream-gpu-skip-zero 1 --moe-stream-vram-follow 1 '
       '--moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 --moe-stream-async-h2d 1 '
       '--moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead 1 --moe-stream-idle-load '
-      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-prompt-defer 1 '
-      '--moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 '
-      '--moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 '
-      '--moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --backend-sampling',
+      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-copy-ahead 1 '
+      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
+      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
+      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
+      '8 --backend-sampling',
   16384:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 16384 -ctk q8_0 -ctv q8_0 -np 1 -t 8 '
@@ -60,10 +62,11 @@ const lingAuto = <int, String>{
       '--moe-stream-correction model --moe-stream-gpu-skip-zero 1 --moe-stream-vram-follow 1 '
       '--moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 --moe-stream-async-h2d 1 '
       '--moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead 1 --moe-stream-idle-load '
-      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-prompt-defer 1 '
-      '--moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 '
-      '--moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 '
-      '--moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --backend-sampling',
+      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-copy-ahead 1 '
+      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
+      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
+      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
+      '8 --backend-sampling',
   32768:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 32768 -ctk q8_0 -ctv q8_0 -np 1 -t 8 '
@@ -79,10 +82,11 @@ const lingAuto = <int, String>{
       '--moe-stream-correction model --moe-stream-gpu-skip-zero 1 --moe-stream-vram-follow 1 '
       '--moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 --moe-stream-async-h2d 1 '
       '--moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead 1 --moe-stream-idle-load '
-      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-prompt-defer 1 '
-      '--moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 '
-      '--moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 '
-      '--moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --backend-sampling',
+      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-copy-ahead 1 '
+      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
+      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
+      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
+      '8 --backend-sampling',
   65536:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 65536 -ctk q8_0 -ctv q8_0 -np 1 -t 8 '
@@ -98,11 +102,11 @@ const lingAuto = <int, String>{
       '--moe-stream-correction model --moe-stream-gpu-skip-zero 1 --moe-stream-vram-follow 1 '
       '--moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 --moe-stream-async-h2d 1 '
       '--moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead 1 --moe-stream-idle-load '
-      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-prompt-defer 1 '
-      '--moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 '
-      '--moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 '
-      '--moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 '
-      '--moe-stream-layer-major-batch 32768 --backend-sampling',
+      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-copy-ahead 1 '
+      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
+      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
+      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
+      '8 --moe-stream-layer-major-batch 32768 --backend-sampling',
   131072:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 131072 -ctk q8_0 -ctv q8_0 -np 1 -t '
@@ -118,11 +122,11 @@ const lingAuto = <int, String>{
       '--moe-stream-correction model --moe-stream-gpu-skip-zero 1 --moe-stream-vram-follow 1 '
       '--moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 --moe-stream-async-h2d 1 '
       '--moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead 1 --moe-stream-idle-load '
-      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-prompt-defer 1 '
-      '--moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 '
-      '--moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 '
-      '--moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 '
-      '--moe-stream-layer-major-batch 32768 --backend-sampling',
+      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-copy-ahead 1 '
+      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
+      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
+      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
+      '8 --moe-stream-layer-major-batch 32768 --backend-sampling',
   262144:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 262144 -ctk q8_0 -ctv q8_0 -np 1 -t '
@@ -138,11 +142,11 @@ const lingAuto = <int, String>{
       '--moe-stream-correction model --moe-stream-gpu-skip-zero 1 --moe-stream-vram-follow 1 '
       '--moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 --moe-stream-async-h2d 1 '
       '--moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead 1 --moe-stream-idle-load '
-      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-prompt-defer 1 '
-      '--moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 '
-      '--moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 '
-      '--moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 '
-      '--moe-stream-layer-major-batch 32768 --backend-sampling',
+      '2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 --moe-stream-copy-ahead 1 '
+      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
+      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
+      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
+      '8 --moe-stream-layer-major-batch 32768 --backend-sampling',
 };
 
 const lingAutoSmall = <int, String>{
@@ -162,10 +166,10 @@ const lingAutoSmall = <int, String>{
       '--moe-stream-vram-follow 1 --moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 '
       '--moe-stream-async-h2d 1 --moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead '
       '1 --moe-stream-idle-load 2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 '
-      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
-      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
-      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
-      '8 --backend-sampling',
+      '--moe-stream-copy-ahead 1 --moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 '
+      '--moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 '
+      '--moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 '
+      '--moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --backend-sampling',
   8192:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 8192 -ctk q8_0 -ctv q8_0 -np 1 -t 8 '
@@ -182,10 +186,10 @@ const lingAutoSmall = <int, String>{
       '--moe-stream-vram-follow 1 --moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 '
       '--moe-stream-async-h2d 1 --moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead '
       '1 --moe-stream-idle-load 2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 '
-      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
-      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
-      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
-      '8 --backend-sampling',
+      '--moe-stream-copy-ahead 1 --moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 '
+      '--moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 '
+      '--moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 '
+      '--moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --backend-sampling',
   16384:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 16384 -ctk q8_0 -ctv q8_0 -np 1 -t 8 '
@@ -202,10 +206,10 @@ const lingAutoSmall = <int, String>{
       '--moe-stream-vram-follow 1 --moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 '
       '--moe-stream-async-h2d 1 --moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead '
       '1 --moe-stream-idle-load 2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 '
-      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
-      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
-      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
-      '8 --backend-sampling',
+      '--moe-stream-copy-ahead 1 --moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 '
+      '--moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 '
+      '--moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 '
+      '--moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --backend-sampling',
   32768:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 32768 -ctk q8_0 -ctv q8_0 -np 1 -t 8 '
@@ -222,10 +226,10 @@ const lingAutoSmall = <int, String>{
       '--moe-stream-vram-follow 1 --moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 '
       '--moe-stream-async-h2d 1 --moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead '
       '1 --moe-stream-idle-load 2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 '
-      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
-      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
-      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
-      '8 --backend-sampling',
+      '--moe-stream-copy-ahead 1 --moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 '
+      '--moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 '
+      '--moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 '
+      '--moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --backend-sampling',
   65536:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 65536 -ctk q8_0 -ctv q8_0 -np 1 -t 8 '
@@ -242,10 +246,11 @@ const lingAutoSmall = <int, String>{
       '--moe-stream-vram-follow 1 --moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 '
       '--moe-stream-async-h2d 1 --moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead '
       '1 --moe-stream-idle-load 2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 '
-      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
-      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
-      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
-      '8 --moe-stream-layer-major-batch 32768 --backend-sampling',
+      '--moe-stream-copy-ahead 1 --moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 '
+      '--moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 '
+      '--moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 '
+      '--moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --moe-stream-layer-major-batch 32768 '
+      '--backend-sampling',
   131072:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 131072 -ctk q8_0 -ctv q8_0 -np 1 -t '
@@ -262,10 +267,11 @@ const lingAutoSmall = <int, String>{
       '--moe-stream-vram-follow 1 --moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 '
       '--moe-stream-async-h2d 1 --moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead '
       '1 --moe-stream-idle-load 2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 '
-      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
-      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
-      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
-      '8 --moe-stream-layer-major-batch 32768 --backend-sampling',
+      '--moe-stream-copy-ahead 1 --moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 '
+      '--moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 '
+      '--moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 '
+      '--moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --moe-stream-layer-major-batch 32768 '
+      '--backend-sampling',
   262144:
       'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
       'GGML_CUDA_FUSE_NORM_QUANT=1 --load-mode dio -fit off -ngl 99 -c 262144 -ctk q8_0 -ctv q8_0 -np 1 -t '
@@ -282,10 +288,11 @@ const lingAutoSmall = <int, String>{
       '--moe-stream-vram-follow 1 --moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 '
       '--moe-stream-async-h2d 1 --moe-stream-layer-major 1 --moe-stream-wave-plan 1 --moe-stream-read-ahead '
       '1 --moe-stream-idle-load 2 --moe-stream-window 1 --moe-stream-vram-end-fill 1 '
-      '--moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 --moe-stream-prompt-split 1 '
-      '--moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 --moe-stream-cpu-topk 1 '
-      '--moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 --moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk '
-      '8 --moe-stream-layer-major-batch 32768 --backend-sampling',
+      '--moe-stream-copy-ahead 1 --moe-stream-prompt-defer 1 --moe-stream-gpu-wave-skip-zero 1 '
+      '--moe-stream-prompt-split 1 --moe-stream-vram-lend-prompt 1 --moe-stream-cpu-down-scale 1 '
+      '--moe-stream-cpu-topk 1 --moe-stream-cpu-q8-tiled 1 --moe-stream-cpu-fa 1 '
+      '--moe-stream-cpu-mmid-merge 1 --moe-stream-cpu-iqk 8 --moe-stream-layer-major-batch 32768 '
+      '--backend-sampling',
 };
 
 const lingAutoCpu = <int, String>{
