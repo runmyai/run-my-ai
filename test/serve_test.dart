@@ -1,12 +1,14 @@
-// Serve: hosting a model for other programs, the remembered port and key, and chats paused while it is hosted.
+// Serve: hosting a model for other programs, the remembered port and key, the Serve page, and chats and benchmarks
+// paused while a model is loading or hosted.
 // Run: flutter test test/serve_test.dart
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_test/flutter_test.dart' hide EnginePhase;
 import 'package:runmyai/backend/backend.dart';
 import 'package:runmyai/backend/engine_backend.dart';
 import 'package:runmyai/benchmark/metrics.dart';
@@ -14,25 +16,49 @@ import 'package:runmyai/data/chat_store.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
 import 'package:runmyai/engine/engine_process.dart';
+import 'package:runmyai/state/benchmark.dart';
 import 'package:runmyai/state/chats.dart';
 import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/buttons.dart';
 import 'package:runmyai/ui/serve_panel.dart';
 import 'package:runmyai/ui/shell.dart';
 import 'package:runmyai/ui/sidebar.dart';
+import 'package:runmyai/ui/title_bar.dart';
+import 'package:runmyai/ui/welcome.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/state/serve.dart';
 import 'package:runmyai/state/today.dart';
 
 /// Answers chats with a reply that never ends, and hosts without an engine.
-class _Backend implements Backend, ServeControl {
+class _Backend implements Backend, ServeControl, EngineControl {
   final asked = <String>[];
   final started = <({String model, int context, int port, String alias, String key})>[];
+  final engineStarts = <String>[];
   var stops = 0;
 
   /// What the next start does instead of working.
   Object? failWith;
+
+  /// While set, a start waits for it (the model is loading).
+  Completer<void>? hold;
   void Function(EngineFailure)? ended;
+
+  @override
+  Future<void> startEngine(ModelFile file, EngineRun run, {bool restart = false}) async => engineStarts.add(file.id);
+  @override
+  Future<void> stopEngine() async {}
+  @override
+  Future<void> eraseChatState(String chatId) async {}
+  @override
+  Future<void> setPinnedChats(List<String> chatIds) async {}
+  @override
+  Future<String?> reportedVersion() async => null;
+  @override
+  ValueListenable<EngineState> get engineState => ValueNotifier(const EngineState(EnginePhase.stopped));
+  @override
+  List<String> get logLines => const [];
+  @override
+  Listenable get logChanged => ValueNotifier(0);
 
   @override
   Stream<ReplyEvent> reply({
@@ -56,6 +82,7 @@ class _Backend implements Backend, ServeControl {
     required String apiKey,
     void Function(EngineFailure ended)? onEnded,
   }) async {
+    if (hold case final Completer<void> h) await h.future;
     if (failWith case final Object e) throw e;
     started.add((model: file.id, context: run.contextLength, port: port, alias: alias, key: apiKey));
     ended = onEnded;
@@ -361,116 +388,198 @@ void main() {
     expect(state().error, isNull);
   });
 
-  testWidgets('the panel shows what other programs need, hosts and stops', (tester) async {
-    Storage(dir).writeLibrary(const LibraryData(downloaded: {'m/f'}, picked: 'm/f'));
-    serve().setApiKey('');
-    final scope = ProviderContainer(
-      overrides: [
-        storageProvider.overrideWithValue(Storage(dir)),
-        chatStoreProvider.overrideWithValue(store),
-        backendProvider.overrideWithValue(backend),
-        catalogFilesProvider.overrideWithValue({'m/f': entry}),
-        hostFetchProvider.overrideWithValue((_, _) async => null),
-      ],
-    );
-    addTearDown(scope.dispose);
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: scope,
-        child: MaterialApp(
-          theme: buildTheme(Brightness.light),
-          home: const Scaffold(body: Center(child: ServeButton())),
-        ),
-      ),
-    );
-    await tester.tap(find.byKey(const Key('serve-button')));
-    await tester.pumpAndSettle();
-    expect(find.text('http://127.0.0.1:8080/v1'), findsOneWidget);
-    expect(find.text('ling-3.0-flash'), findsOneWidget);
-    expect(find.text('any text'), findsNothing);
-    // No key yet: Host waits for one, and the field says why.
-    expect(tester.widget<MainButton>(find.byKey(const Key('serve-host'))).onTap, isNull);
-    expect(find.text('Set an API key: other apps use it to connect.'), findsOneWidget);
-    expect(find.byKey(const Key('serve-show-key')), findsNothing);
-
-    await tester.enterText(find.byKey(const Key('serve-key')), 'a b');
-    await tester.pump();
-    expect(tester.widget<MainButton>(find.byKey(const Key('serve-host'))).onTap, isNull);
-
-    await tester.tap(find.byKey(const Key('serve-generate')));
-    await tester.pump();
-    final key = tester.widget<TextField>(find.byKey(const Key('serve-key'))).controller!.text;
-    expect(validApiKey(key) && key.length == 32, isTrue);
-    expect(scope.read(serveProvider).apiKey, key, reason: 'remembered');
-    expect(find.byKey(const Key('serve-key-note')), findsNothing);
-    expect(find.byKey(const Key('serve-show-key')), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('serve-host')));
-    await tester.pumpAndSettle();
-    expect(backend.started.single.key, key);
-    // Loaded: the panel closes (the hosting screen takes the window) and the button says Hosting.
-    expect(find.text('Serve a model'), findsNothing);
-    expect(find.text('Hosting'), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('serve-button')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('serve-stop')));
-    await tester.pumpAndSettle();
-    expect(find.text('Serve a model'), findsOneWidget);
-    expect(backend.stops, 1);
+  test('a load that something else stops goes back to idle and says so', () async {
+    backend.failWith = const EngineStopped();
+    await serve().host(entry, 65536);
+    expect(state().phase, ServePhase.idle);
+    expect(state().hosted, isNull);
+    expect(state().error, contains('something else stopped the engine'));
   });
 
-  testWidgets('while hosting the hosting screen is the whole window, and Stop hosting brings the app back', (
-    tester,
-  ) async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
-      const MethodChannel('window_manager'),
-      (_) async => false,
-    );
-    tester.view.physicalSize = const Size(1600, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    Storage(dir).writeLibrary(const LibraryData(downloaded: {'m/f'}, picked: 'm/f'));
-    final scope = ProviderContainer(
-      overrides: [
-        storageProvider.overrideWithValue(Storage(dir)),
-        chatStoreProvider.overrideWithValue(store),
-        backendProvider.overrideWithValue(backend),
-        catalogFilesProvider.overrideWithValue({'m/f': entry}),
-        hostStatsProvider.overrideWith(_Stats.new),
-        todayProvider.overrideWith(_Today.new),
-      ],
-    );
-    addTearDown(scope.dispose);
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: scope,
-        child: MaterialApp(theme: buildTheme(Brightness.dark), home: const Shell()),
-      ),
-    );
-    await tester.pump();
-    expect(find.byType(Sidebar), findsOneWidget);
-    expect(find.byType(HostingScreen), findsNothing);
+  test('no chat, benchmark or second Host starts while a hosted model is loading', () async {
+    final loaded = backend.hold = Completer<void>();
+    final hosting = serve().host(entry, 65536);
+    await settle();
+    expect(state().phase, ServePhase.starting);
+    expect(state().busy, isTrue);
 
-    await tester.runAsync(() => scope.read(serveProvider.notifier).host(entry, 65536));
-    await tester.pump();
-    expect(find.byType(HostingScreen), findsOneWidget);
-    expect(find.byType(Sidebar), findsNothing, reason: 'the app is hidden');
-    expect(find.text('Ling 3.0 Flash is hosted'), findsOneWidget);
-    expect(find.text('Writing…'), findsOneWidget);
-    expect(find.text('31.5 tokens/s'), findsOneWidget);
-    expect(find.text('http://127.0.0.1:8080/v1'), findsOneWidget);
-    expect(find.text('ling-3.0-flash'), findsOneWidget);
-    expect(find.text('k'), findsOneWidget);
-    expect(tester.widget<Text>(find.byKey(const Key('hosting-total-requests'))).data, '3');
-    expect(tester.widget<Text>(find.byKey(const Key('hosting-total-generated'))).data, formatNumber(12345, 0));
-    expect(tester.widget<Text>(find.byKey(const Key('hosting-total-prompt'))).data, '678');
+    container.read(chatsProvider.notifier).send('hello', file);
+    await container.read(benchmarkProvider.notifier).start(file, model.name, 65536);
+    await serve().host(entry, 65536);
+    await settle();
+    expect(backend.asked, isEmpty);
+    expect(container.read(benchmarkProvider).running, isFalse);
+    expect(backend.engineStarts, isEmpty);
 
-    await tester.tap(find.byKey(const Key('hosting-stop')));
-    await tester.pump();
-    expect(backend.stops, 1);
-    expect(find.byType(HostingScreen), findsNothing);
-    expect(find.byType(Sidebar), findsOneWidget);
+    loaded.complete();
+    await hosting;
+    expect(state().phase, ServePhase.hosting);
+    expect(backend.started, hasLength(1));
+  });
+
+  test('Back is refused while a model is loading or hosted', () async {
+    serve().openPage();
+    expect(state().pageShown, isTrue);
+    serve().closePage();
+    expect(state().pageShown, isFalse);
+
+    serve().openPage();
+    await serve().host(entry, 65536);
+    serve().closePage();
+    expect(state().pageShown, isTrue);
+    await serve().stop();
+    expect(state().pageShown, isTrue, reason: 'the setup shows again');
+    serve().closePage();
+    expect(state().pageShown, isFalse);
+  });
+
+  group('the Serve page', () {
+    late ProviderContainer scope;
+
+    /// The app's window as main() builds it: the window's shape around the first-start gate around the shell.
+    Future<void> openApp(WidgetTester tester) async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('window_manager'),
+        (_) async => false,
+      );
+      tester.view.physicalSize = const Size(1600, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      Storage(dir)
+        ..writeLibrary(const LibraryData(downloaded: {'m/f'}, picked: 'm/f'))
+        ..writeFirstRun({'welcomeShown': true});
+      scope = ProviderContainer(
+        overrides: [
+          storageProvider.overrideWithValue(Storage(dir)),
+          chatStoreProvider.overrideWithValue(store),
+          backendProvider.overrideWithValue(backend),
+          catalogFilesProvider.overrideWithValue({'m/f': entry}),
+          hostStatsProvider.overrideWith(_Stats.new),
+          todayProvider.overrideWith(_Today.new),
+        ],
+      );
+      addTearDown(scope.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: scope,
+          child: MaterialApp(
+            theme: buildTheme(Brightness.dark),
+            builder: (context, child) => WindowShape(child: child!),
+            home: const FirstRunGate(child: Shell()),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    Future<void> tap(WidgetTester tester, String key) async {
+      await tester.tap(find.byKey(Key(key)));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    testWidgets('fills the window inside the real wrapper, and Back or Escape returns to the app', (tester) async {
+      await openApp(tester);
+      expect(find.byType(Sidebar), findsOneWidget);
+
+      await tap(tester, 'serve-button');
+      expect(find.byType(ServePage), findsOneWidget);
+      expect(find.byType(Sidebar), findsNothing, reason: 'a page of its own, not over the app');
+      expect(find.byType(Dialog), findsNothing);
+      expect(tester.getSize(find.byType(ServePage)), const Size(1600, 900));
+      expect(find.text('Serve a model'), findsOneWidget);
+
+      await tap(tester, 'serve-back');
+      expect(find.byType(ServePage), findsNothing);
+      expect(find.byType(Sidebar), findsOneWidget);
+
+      await tap(tester, 'serve-button');
+      expect(find.byType(ServePage), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(Sidebar), findsOneWidget);
+    });
+
+    testWidgets('the setup hosts with a hidden key, the status has no Back, and Stop hosting shows the setup', (
+      tester,
+    ) async {
+      await openApp(tester);
+      scope.read(serveProvider.notifier).setApiKey('');
+      await tap(tester, 'serve-button');
+      // No key yet: Host waits for one, and the field says why.
+      expect(tester.widget<MainButton>(find.byKey(const Key('serve-host'))).onTap, isNull);
+      expect(find.text('Set an API key: other apps use it to connect.'), findsOneWidget);
+      expect(find.byKey(const Key('serve-copy-key')), findsNothing);
+
+      await tester.enterText(find.byKey(const Key('serve-key')), 'a b');
+      await tester.pump();
+      expect(tester.widget<MainButton>(find.byKey(const Key('serve-host'))).onTap, isNull);
+
+      await tap(tester, 'serve-generate');
+      final field = tester.widget<TextField>(find.byKey(const Key('serve-key')));
+      final key = field.controller!.text;
+      expect(validApiKey(key) && key.length == 32, isTrue);
+      expect(field.obscureText, isTrue, reason: 'the key is never shown');
+      expect(scope.read(serveProvider).apiKey, key, reason: 'remembered');
+      expect(find.byKey(const Key('serve-key-note')), findsNothing);
+      expect(find.byKey(const Key('serve-copy-key')), findsOneWidget);
+
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('serve-host')));
+        await settle();
+      });
+      await tester.pump();
+      expect(backend.started.single.key, key);
+      expect(find.byType(ServePage), findsOneWidget);
+      expect(tester.getSize(find.byType(ServePage)), const Size(1600, 900));
+      expect(find.text('Ling 3.0 Flash is hosted'), findsOneWidget);
+      expect(find.byKey(const Key('serve-back')), findsNothing);
+      expect(find.text('Writing…'), findsOneWidget);
+      expect(find.text('31.5 tokens/s'), findsOneWidget);
+      expect(find.text('http://127.0.0.1:8080/v1'), findsOneWidget);
+      expect(find.text('ling-3.0-flash'), findsOneWidget);
+      expect(find.text(key), findsNothing, reason: 'the key shows as dots');
+      expect(tester.widget<Text>(find.byKey(const Key('hosting-show-key'))).data, '•' * 32);
+      expect(find.byKey(const Key('hosting-copy-key')), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(const Key('hosting-total-requests'))).data, '3');
+      expect(tester.widget<Text>(find.byKey(const Key('hosting-total-generated'))).data, formatNumber(12345, 0));
+      expect(tester.widget<Text>(find.byKey(const Key('hosting-total-prompt'))).data, '678');
+      // Escape does not leave while hosting.
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(ServePage), findsOneWidget);
+
+      await tap(tester, 'hosting-stop');
+      expect(backend.stops, 1);
+      expect(find.text('Serve a model'), findsOneWidget);
+      expect(find.byType(Sidebar), findsNothing);
+      await tap(tester, 'serve-back');
+      expect(find.byType(Sidebar), findsOneWidget);
+    });
+
+    testWidgets('loading shows on the page with Stop hosting, and hosting that ends on its own says why', (tester) async {
+      await openApp(tester);
+      final loaded = backend.hold = Completer<void>();
+      await tap(tester, 'serve-button');
+      await tester.tap(find.byKey(const Key('serve-host')));
+      await tester.pump();
+      expect(find.text('Loading Ling 3.0 Flash…'), findsOneWidget);
+      expect(find.byKey(const Key('serve-back')), findsNothing);
+      expect(find.byKey(const Key('hosting-stop')), findsOneWidget);
+
+      await tester.runAsync(() async {
+        loaded.complete();
+        await settle();
+      });
+      await tester.pump();
+      expect(find.text('Ling 3.0 Flash is hosted'), findsOneWidget);
+
+      backend.ended!(const EngineFailure('The engine stopped.', log: ['killed']));
+      await tester.pump();
+      expect(find.byType(ServePage), findsOneWidget, reason: 'the page stays and says why');
+      expect(find.text('Serve a model'), findsOneWidget);
+      expect(find.textContaining('killed'), findsOneWidget);
+    });
   });
 }
 

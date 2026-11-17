@@ -353,7 +353,7 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
     final firstMessage = !ref.watch(firstRunProvider.select((f) => f.firstMessageSent));
     // Why Edit and Regenerate cannot be pressed now, in the words of the Send button's tooltip.
     final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
-    final hosting = ref.watch(serveProvider.select((s) => s.hosting));
+    final hosting = ref.watch(serveProvider.select((s) => s.busy));
     final blocked = ref.watch(chatsProvider.select((s) => _sendBlock(s, benchmarking, hosting: hosting))) ??
         (model == null ? noModelText : null);
     final editedNode = ref.watch(chatsProvider.select((s) => s.editing?.chatId == s.openId ? s.editing?.node : null));
@@ -1582,7 +1582,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
     final chats = ref.read(chatsProvider);
     final text = _text.text;
     if (model == null || chats.replyingId != null || ref.read(benchmarkProvider).running) return;
-    if (ref.read(serveProvider).hosting) return;
+    if (ref.read(serveProvider).busy) return;
     if (chats.editing != null && chats.editing!.chatId == chats.openId) {
       // The new version of the message being edited (the box returns to its draft once it is sent).
       if (text.trim().isNotEmpty) ref.read(chatsProvider.notifier).sendEdit(text, model.file);
@@ -1647,7 +1647,7 @@ class _MessageBoxState extends ConsumerState<_MessageBox> {
 
     final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running));
     // Why Send cannot be pressed now: the engine is busy with something else.
-    final hosting = ref.watch(serveProvider.select((s) => s.hosting));
+    final hosting = ref.watch(serveProvider.select((s) => s.busy));
     final String? busy = _sendBlock(chats, benchmarking, hereToo: false, hosting: hosting);
     final String? hint = model == null
         ? noModelText
@@ -1928,7 +1928,7 @@ class _EngineFailureCard extends ConsumerWidget {
     final c = context.colors;
     // (Writing the reply again starts the engine, which a benchmark has.)
     final benchmarking = ref.watch(benchmarkProvider.select((s) => s.running)) ||
-        ref.watch(serveProvider.select((s) => s.hosting));
+        ref.watch(serveProvider.select((s) => s.busy));
     return Container(
       key: const Key('engine-failure'),
       width: double.infinity,

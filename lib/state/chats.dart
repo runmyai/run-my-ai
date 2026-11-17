@@ -355,9 +355,9 @@ class ChatsNotifier extends Notifier<ChatsState> {
     _saveReply(chat, chat.messages.last.asStopped(thinkingMillis: _thinkingMillis()));
   }
 
-  /// Whether a benchmark is running or the model is hosted for other programs: either owns the engine, so no reply
-  /// may start or swap it.
-  bool get _benchmarking => ref.read(benchmarkProvider).running || ref.read(serveProvider).hosting;
+  /// Whether a benchmark is running or a model is loading or hosted for other programs: either owns the engine, so no
+  /// reply may start or swap it.
+  bool get _benchmarking => ref.read(benchmarkProvider).running || ref.read(serveProvider).busy;
 
   /// Sends [text] in the open chat (a new chat if none is open). Switching chats does not stop the reply.
   void send(String text, ModelFile model) {
