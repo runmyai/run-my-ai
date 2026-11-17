@@ -12,6 +12,7 @@ import '../system/folders.dart';
 import 'chats.dart';
 import 'profiles.dart';
 import 'providers.dart';
+import 'tuning_runs.dart';
 
 /// Where a model's download is.
 enum DownloadPhase { queued, downloading, paused, checking, failed }
@@ -259,6 +260,8 @@ class LibraryNotifier extends Notifier<LibraryState> {
     );
     // The notification sound, when the bell is on (as for a finished reply).
     ref.read(chimeProvider).replyDone();
+    // The PC is measured for it right away, so its first load does not wait for that.
+    ref.read(tuningRunsProvider.notifier).afterDownload(file);
   }
 
   Future<void> delete(ModelFile file) async {

@@ -232,3 +232,18 @@ abstract class ServeControl {
 
   Future<void> stopServing();
 }
+
+/// A backend that measures this PC for each model with the autotuner. One result per model file and autotuner build
+/// covers every context length and cache type; it is kept, and the engine starts with it.
+abstract class TuneControl {
+  /// The kept result for [file] while it still holds (the same model file and the same autotuner); null when there is
+  /// none. `busy` in it: other programs kept the PC busy while it was measured.
+  Map<String, dynamic>? savedTune(ModelFile file);
+
+  /// Measures the PC for [file] again and keeps the result; null when the autotuner is missing or failed. Every engine
+  /// start waits until it ends. The engine should not have [file] loaded meanwhile.
+  Future<Map<String, dynamic>?> tune(ModelFile file);
+
+  /// The model file being measured right now, also when the engine measures one by itself before its first load.
+  ValueListenable<String?> get tuning;
+}
