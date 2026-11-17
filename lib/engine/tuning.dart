@@ -30,3 +30,15 @@ List<String> twoCardFlags(List<({String name, int mib})> cards, int layers, int 
   ];
 }
 
+/// The cards from the autotuner's result, largest first. Without a separate card, a built-in GPU that can use 24 GiB or more
+/// counts as one (a DGX Spark's GB10, a Strix Halo: Flint 76.7 and 64.8 tok/s on it against 28.2 and 32.1 CPU-only); the small
+/// built-in GPUs of ordinary laptops (about half of a smaller RAM) stay unused.
+List<({String name, int mib})> cardsFrom(Map<String, dynamic> tune) {
+  List<({String name, int mib})> read(String key) =>
+      [for (final g in (tune[key] as List?) ?? const []) (name: (g as Map)['name'] as String, mib: g['mib'] as int)]
+        ..sort((a, b) => b.mib - a.mib);
+  final cards = read('gpus');
+  if (cards.isNotEmpty) return cards;
+  return read('igpus').where((g) => g.mib >= 24 * 1024).take(1).toList();
+}
+

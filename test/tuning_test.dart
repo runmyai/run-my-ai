@@ -22,4 +22,11 @@ void main() {
       '--moe-stream-vram-device', 'CUDA1', '--moe-stream-gpu-layers-device', 'CUDA0=31-48',
     ]);
   });
+
+  test('a built-in GPU counts only without a separate card and with 24 GiB or more', () {
+    expect(cardsFrom({'gpus': [], 'igpus': [{'name': 'CUDA0', 'mib': 124608}]}), [(name: 'CUDA0', mib: 124608)]);
+    expect(cardsFrom({'gpus': [], 'igpus': [{'name': 'ROCm0', 'mib': 15872}]}), isEmpty);
+    expect(cardsFrom({'gpus': [{'name': 'CUDA0', 'mib': 8192}], 'igpus': [{'name': 'Vulkan1', 'mib': 65536}]}),
+        [(name: 'CUDA0', mib: 8192)]);
+  });
 }

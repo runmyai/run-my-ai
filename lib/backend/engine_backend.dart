@@ -167,9 +167,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// The graphics cards the engine sees (name and MiB), largest first: the autotuner's list once it has run, else the
   /// largest card read through NVML / AMD's driver files.
   List<({String name, int mib})> get _cards {
-    final listed = _savedTune?['gpus'] as List?;
-    if (listed == null) return _gpu.giB > 0 ? [(name: '', mib: (_gpu.giB * 1024).round())] : const [];
-    return [for (final g in listed) (name: (g as Map)['name'] as String, mib: g['mib'] as int)]..sort((a, b) => b.mib - a.mib);
+    final tune = _savedTune;
+    if (tune == null || tune['gpus'] == null) return _gpu.giB > 0 ? [(name: '', mib: (_gpu.giB * 1024).round())] : const [];
+    return cardsFrom(tune);
   }
 
   /// What the autotuner measured on this PC without a model (the cards, threads, fast cores, SSD readers): run once,
@@ -201,7 +201,10 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
       if (cards.length > 1 && cards[0].name.isNotEmpty && cards[1].name.isNotEmpty)
-        ...twoCardFlags(cards, m.layers, m.firstMoe, m.layerGiB),
+        ...twoCardFlags(cards, m.layers, m.firstMoe, m.layerGiB)
+      // one card: named, so a built-in GPU chosen for lack of a separate card is the one used
+      else if (cards.length == 1 && cards[0].name.isNotEmpty)
+        '--device ${cards[0].name}',
     ].join(' ');
     return extra.isEmpty ? flags : {for (final e in flags.entries) e.key: '${e.value} $extra'};
   }
