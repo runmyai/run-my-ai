@@ -21,6 +21,7 @@ import '../engine/engine_process.dart';
 import '../engine/gguf.dart';
 import '../engine/live_speed.dart';
 import '../engine/tuning.dart';
+import '../system/busy.dart';
 import '../system/downloads.dart';
 import '../system/folders.dart';
 import 'backend.dart';
@@ -56,7 +57,7 @@ class _LocalModel {
 
 /// The real engine: TokenWing's llama-server, started directly by the app. One model is loaded at a time: the first
 /// message loads it, a message for another model swaps it.
-class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsight, ServeControl {
+class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsight, ServeControl, TuneControl {
   EngineBackend(this._storage);
 
   final Storage _storage;
@@ -239,19 +240,55 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return cardsFrom(tune);
   }
 
-  /// What the autotuner measured on this PC for this model (the cards, threads, fast cores, SSD readers at the model's
-  /// expert size): kept in autotuner.json per model, measured again when the model file or the autotuner changes.
-  Future<Map<String, dynamic>?> _tuned(String folder, String model) async {
-    try {
-      final tool = File('$folder/autotuner${Platform.isWindows ? '.exe' : ''}');
-      if (!tool.existsSync()) return null;
-      final m = File(model).statSync(), a = tool.statSync();
-      final key = '${File(model).uri.pathSegments.last}:${m.size}:${a.size}:${a.modified.millisecondsSinceEpoch}';
-      final store = _savedTune;
-      final models = <String, dynamic>{...?(store?['models'] as Map<String, dynamic>?)};
-      if (models[key] case final Map<String, dynamic> kept) return kept;
+  /// The key a model's result is kept under: the model file (name and size) and the autotuner build (size and time),
+  /// so either changing measures again; null when the autotuner or the model file is missing.
+  String? _tuneKey(_LocalModel local) {
+    final tool = File('$_engineFolder/autotuner${Platform.isWindows ? '.exe' : ''}');
+    final model = File(_modelPath(local));
+    final m = model.statSync(), a = tool.statSync();
+    if (m.type == FileSystemEntityType.notFound || a.type == FileSystemEntityType.notFound) return null;
+    return '${model.uri.pathSegments.last}:${m.size}:${a.size}:${a.modified.millisecondsSinceEpoch}';
+  }
 
-      final p = await Process.start(tool.path, ['--file', model], workingDirectory: folder);
+  @override
+  Map<String, dynamic>? savedTune(ModelFile file) {
+    final local = _models.where((m) => m.model.files.contains(file)).firstOrNull;
+    final key = local == null ? null : _tuneKey(local);
+    if (key == null) return null;
+    final kept = (_savedTune?['models'] as Map<String, dynamic>?)?[key];
+    return kept is Map<String, dynamic> ? kept : null;
+  }
+
+  final _tuning = ValueNotifier<String?>(null);
+
+  @override
+  ValueListenable<String?> get tuning => _tuning;
+
+  /// The latest tune: the next one, and every engine start, waits for it.
+  Future<Map<String, dynamic>?>? _tuneRun;
+
+  @override
+  Future<Map<String, dynamic>?> tune(ModelFile file) {
+    final before = _tuneRun;
+    return _tuneRun = () async {
+      await before;
+      return _measure(_local(file));
+    }();
+  }
+
+  /// Runs the autotuner for [local] (the cards, threads, fast cores, SSD readers at the model's expert size), with the busy
+  /// check beside it, and keeps the result in autotuner.json per model.
+  Future<Map<String, dynamic>?> _measure(_LocalModel local) async {
+    final id = local.model.files.first.id;
+    try {
+      final folder = _engineFolder;
+      final key = _tuneKey(local);
+      if (key == null) return null;
+      _tuning.value = id;
+      final model = _modelPath(local);
+      final p = await Process.start('$folder/autotuner${Platform.isWindows ? '.exe' : ''}', ['--file', model],
+          workingDirectory: folder);
+      final meter = BusyMeter.start(p.pid, model);
       final out = p.stdout.transform(utf8.decoder).join();
       unawaited(p.stderr.drain<void>());
       // a hung autotuner (a broken driver, a stalled disk) is stopped: the engine then starts with the table's values
@@ -259,10 +296,13 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         p.kill();
         return -1;
       });
+      final busy = meter?.stop() ?? false;
       if (code != 0) return null;
       final t = parseAutotunerJson(await out);
       if (t == null) return null;
-      models[key] = t;
+      t['busy'] = busy;
+      final store = _savedTune;
+      final models = <String, dynamic>{...?(store?['models'] as Map<String, dynamic>?), key: t};
       _tuneFile.writeAsStringSync(jsonEncode({
         'version': _tuneVersion,
         'gpus': t['gpus'] ?? store?['gpus'] ?? const [],
@@ -272,7 +312,17 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       return t;
     } on Exception {
       return null;   // the table's values then stand
+    } finally {
+      if (_tuning.value == id) _tuning.value = null;
     }
+  }
+
+  /// What the autotuner measured on this PC for [local]: the kept result, or measured now for a model never tuned (one
+  /// found in a folder, or a tune that failed); first waits for a tune that is running.
+  Future<Map<String, dynamic>?> _tuned(_LocalModel local) async {
+    await _tuneRun;
+    final file = local.model.files.first;
+    return savedTune(file) ?? await tune(file);
   }
 
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
@@ -935,7 +985,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final program = '$folder/llama-server${Platform.isWindows ? '.exe' : ''}';
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
-    final tuned = await _tuned(folder, _modelPath(local));
+    final tuned = await _tuned(local);
     // the table's row as the autotuner's card list now picks it (the first start may have shown another)
     final flags = EngineFlags.parse(_flagsFor(local)[run.contextLength] ?? run.flags);
     final port = serve?.port ?? await EngineProcess.freePort();
