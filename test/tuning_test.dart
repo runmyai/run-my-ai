@@ -16,6 +16,18 @@ void main() {
         ['-c', '8192', '-t', '6', '--moe-stream', 'model', '--cpu-range', '0-15']);
   });
 
+  test('prompts get their own thread count when the autotuner measured more for them', () {
+    expect(withTuning(table, {'threads': 9, 'threads_batch': 11, 'fast_cpus': '', 'fast_mask': ''}),
+        ['-c', '8192', '-t', '9', '--moe-stream', 'model', '-tb', '11']);
+    expect(withTuning(table, {'threads': 9, 'threads_batch': 9}), ['-c', '8192', '-t', '9', '--moe-stream', 'model']);
+  });
+
+  test('fast cores as a mask (one thread per core, any numbering); prompts keep every core', () {
+    expect(withTuning(table, {'threads': 6, 'threads_batch': 13, 'fast_cpus': '', 'fast_mask': '0xfc03', 'logical_cores': 24}), [
+      '-c', '8192', '-t', '6', '--moe-stream', 'model', '--cpu-mask', '0xfc03', '--cpu-range-batch', '0-23', '-tb', '13',
+    ]);
+  });
+
   test('several cards: the faster ones take whole last layers, the slowest the first layers with the pool', () {
     expect(cardFlags([(name: 'CUDA1', mib: 11911), (name: 'CUDA0', mib: 11909)], 49, 2, 0.49), [
       '--device', 'CUDA0,CUDA1', '-ts', '31,18',
