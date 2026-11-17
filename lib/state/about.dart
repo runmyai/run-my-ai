@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../backend/backend.dart';
 import '../backend/engine_backend.dart';
 import '../engine/engine_version.dart';
+import '../system/folders.dart';
 import 'prefs.dart';
 import 'providers.dart';
 
@@ -12,7 +13,7 @@ const appVersion = '0.1.0';
 /// The engine's version for the About page: what the program in the engine folder says when asked, else what the
 /// running engine reports; null when neither is known.
 final engineVersionProvider = FutureProvider.autoDispose<String?>((ref) async {
-  final folder = ref.read(prefsProvider).engineFolder ?? EngineBackend.defaultEngineFolder;
+  final folder = EngineBackend.engineFolder(ref.read(prefsProvider).engineFolder, ref.read(foldersProvider));
   final asked = await readEngineVersion(folder);
   if (asked != null) return asked;
   final backend = ref.read(backendProvider);

@@ -16,6 +16,7 @@ import '../engine/commands.dart';
 import '../engine/chat_states.dart';
 import '../engine/chat_stream.dart';
 import '../engine/context_fit.dart';
+import '../engine/engine_download.dart';
 import '../engine/engine_flags.dart';
 import '../engine/engine_process.dart';
 import '../engine/gguf.dart';
@@ -96,9 +97,12 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   }
 
   /// The engine program's folder: the engine folder, or its cuda12 folder (the engine built with CUDA 12) on a PC whose NVIDIA
-  /// cards or driver the CUDA 13 build cannot run (needsCuda12). Asked once.
+  /// cards or driver the CUDA 13 build cannot run (needsCuda12). Asked once. A downloaded engine is already the build
+  /// picked for this PC (the CUDA 12 one included), so no cuda12 folder is looked for in it.
   String get _engineFolder {
-    final base = engineFolder(_storage.readPrefs().engineFolder, _folders);
+    final own = _storage.readPrefs().engineFolder;
+    final base = engineFolder(own, _folders);
+    if (own == null && installedEngine(base) != null) return base;
     final old = '$base${Platform.pathSeparator}cuda12';
     if (!File('$old/llama-server${Platform.isWindows ? '.exe' : ''}').existsSync()) return base;
     _cuda12 ??= () {
