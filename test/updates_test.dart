@@ -237,8 +237,12 @@ void main() {
     ModelVersion v(String version, Map<String, String> files) => (
       version: version,
       notes: 'notes $version',
-      files: {for (final e in files.entries) e.key: (sha256: e.value, size: 1)},
+      files: {for (final e in files.entries) e.key: (sha256: e.value, size: e.value.length)},
     );
+    // files here with a checksum kept from their download
+    Map<String, LocalFile> kept(Map<String, String> files) => {
+      for (final e in files.entries) e.key: (sha256: e.value, size: e.value.length),
+    };
     final versions = [
       v('1', {'w': 'w1', 'd': 'd1'}),
       v('2', {'w': 'w1', 'd': 'd2'}),
@@ -246,23 +250,40 @@ void main() {
     ];
 
     test('the files that differ from the newest version, and the notes since the one here', () {
-      final u = modelUpdate(versions, {'w': 'w1', 'd': 'd2'})!;
+      final u = modelUpdate(versions, kept({'w': 'w1', 'd': 'd2'}))!;
       expect(u.files.keys, ['w']);
       expect(u.files['w']!.sha256, 'w3');
       expect([for (final x in u.versions) x.version], ['3']);
-      final older = modelUpdate(versions, {'w': 'w1', 'd': 'd1'})!;
+      final older = modelUpdate(versions, kept({'w': 'w1', 'd': 'd1'}))!;
       expect(older.files.keys.toSet(), {'w', 'd'});
       expect([for (final x in older.versions) x.version], ['3', '2']);
     });
 
     test('nothing to do when the files are the newest; every version shown for a file that is none of them', () {
-      expect(modelUpdate(versions, {'w': 'w3', 'd': 'd2'}), isNull);
-      expect(modelUpdate(versions, {'other': 'x'}), isNull);
+      expect(modelUpdate(versions, kept({'w': 'w3', 'd': 'd2'})), isNull);
+      expect(modelUpdate(versions, kept({'other': 'x'})), isNull);
       expect(
         [
-          for (final x in modelUpdate(versions, {'w': 'mine'})!.versions) x.version,
+          for (final x in modelUpdate(versions, kept({'w': 'mine'}))!.versions) x.version,
         ],
         ['3', '2', '1'],
+      );
+    });
+
+    test('a file without a kept checksum is compared by its size', () {
+      final sized = [
+        v('1', {'w': 'w1'}),
+        v('2', {'w': 'w-two'}),
+      ];
+      expect(modelUpdate(sized, {'w': (sha256: null, size: 5)}), isNull);
+      final u = modelUpdate(sized, {'w': (sha256: null, size: 2)})!;
+      expect(u.files['w']!.sha256, 'w-two');
+      expect([for (final x in u.versions) x.version], ['2']);
+      expect(
+        [
+          for (final x in modelUpdate(sized, {'w': (sha256: null, size: 9)})!.versions) x.version,
+        ],
+        ['2', '1'],
       );
     });
 
@@ -284,7 +305,9 @@ void main() {
     late _Server hub;
     late String appImage;
     var relaunched = 0;
-    final oldWeights = utf8.encode('weights v1'), newWeights = utf8.encode('weights v2'), vram = utf8.encode('[1, 2]');
+    final oldWeights = utf8.encode('weights v1'),
+        newWeights = utf8.encode('weights v2, larger'),
+        vram = utf8.encode('[1, 2]');
 
     ProviderContainer make({List<Override> extra = const [], bool fromAppImage = true}) {
       final c = ProviderContainer(
@@ -395,9 +418,28 @@ void main() {
       expect(s.models.single.files.keys, ['m.gguf']);
       expect([for (final v in s.models.single.versions) v.notes], ['better data']);
       expect(s.updatable, isTrue);
-      // the checksums are kept: the next check reads them instead of hashing the files
-      final kept = jsonDecode(File('${dir.path}/data/file_hashes.json').readAsStringSync()) as Map;
-      expect(kept['$main/models/m.gguf']['sha256'], _sha(oldWeights));
+      // found by its size: no model file was hashed
+      expect(File('${dir.path}/data/file_hashes.json').existsSync(), isFalse);
+    });
+
+    test('a model file is compared by the checksum kept from its download, else by its size only', () async {
+      // the same size as the newest version but other bytes
+      hub.repo['m.gguf'] = utf8.encode('weights v3');
+      final list = jsonDecode(hub.modelList!) as Map;
+      (list['versions'] as List).last['files']['m.gguf'] = {
+        'sha256': _sha(hub.repo['m.gguf']!),
+        'size': oldWeights.length,
+      };
+      hub.modelList = jsonEncode(list);
+      final c = make();
+      await c.read(updatesProvider.notifier).check();
+      expect(c.read(updatesProvider).models, isEmpty);
+      expect(File('${dir.path}/data/file_hashes.json').existsSync(), isFalse);
+
+      // its download kept the checksum: the change is seen
+      c.read(fileHashesProvider).remember('$main/models/m.gguf', _sha(oldWeights));
+      await c.read(updatesProvider.notifier).check();
+      expect(c.read(updatesProvider).models.single.files.keys, ['m.gguf']);
     });
 
     test(

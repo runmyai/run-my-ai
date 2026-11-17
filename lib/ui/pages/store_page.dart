@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../backend/backend.dart';
 import '../../data/models.dart';
+import '../../state/benchmark.dart';
+import '../../state/chats.dart';
 import '../../state/library.dart';
 import '../../state/providers.dart';
 import '../../state/tuning_runs.dart';
@@ -100,7 +102,7 @@ class _Fact extends StatelessWidget {
 }
 
 /// One downloadable file: quantization, size, and Download / its download's progress, speed and time left, with
-/// Pause / Resume / Cancel / Checking / Tuning for your PC / Ready + Tune again + Delete.
+/// Pause / Resume / Cancel / Checking / Tuning for your PC / Downloaded + Tune + Delete.
 class _FileRow extends ConsumerWidget {
   const _FileRow({required this.file, required this.model});
 
@@ -122,6 +124,10 @@ class _FileRow extends ConsumerWidget {
       ),
     );
     final tunable = ref.watch(backendProvider) is TuneControl;
+    // (Tune waits while the engine reads a prompt or writes a reply.)
+    final engineBusy =
+        ref.watch(chatsProvider.select((s) => s.replyingId != null)) ||
+        ref.watch(benchmarkProvider.select((s) => s.running));
     final tuning = downloaded && (tune.now || tune.waiting);
 
     final List<Widget> actions;
@@ -134,14 +140,14 @@ class _FileRow extends ConsumerWidget {
           children: [
             Icon(Icons.check, size: 16, color: Color(0xFF1D9E75)),
             SizedBox(width: 4),
-            Text('Ready', style: TextStyle(fontSize: 13, color: Color(0xFF1D9E75))),
+            Text('Downloaded', style: TextStyle(fontSize: 13, color: Color(0xFF1D9E75))),
           ],
         ),
         if (tunable)
           _TextAction(
             key: Key('tune-again-${file.id}'),
-            label: 'Tune again',
-            onTap: () => ref.read(tuningRunsProvider.notifier).tuneAgain(file),
+            label: 'Tune',
+            onTap: engineBusy ? null : () => ref.read(tuningRunsProvider.notifier).tuneAgain(file),
           ),
         if (deletable)
           _TextAction(
@@ -248,7 +254,7 @@ String _statusLine(DownloadStatus s) {
   final percent = '${(s.fraction * 100).floor()} %';
   switch (s.phase) {
     case DownloadPhase.queued:
-      return 'Waiting for the download before it';
+      return 'Queued';
     case DownloadPhase.checking:
       return 'Checking...';
     case DownloadPhase.paused:
@@ -303,7 +309,7 @@ class _TextAction extends StatelessWidget {
   const _TextAction({super.key, required this.label, required this.onTap});
 
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => AppButton(label: label, dense: true, onTap: onTap);

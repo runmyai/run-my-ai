@@ -128,34 +128,40 @@ List<ModelVersion>? parseModelVersions(String text) {
   return null;
 }
 
-/// What a model's update would change, given its list file's [versions] (oldest first) and the checksums of its files
-/// on this PC ([local], by file name): each file whose newest entry differs from the one here, with that entry, and the
-/// versions since the oldest one the changed files were at (newest first, for their notes). Null when nothing differs.
+/// A model file on this PC: its size, and its checksum when one was kept from its download.
+typedef LocalFile = ({String? sha256, int size});
+
+/// What a model's update would change, given its list file's [versions] (oldest first) and its files on this PC
+/// ([local], by file name): each file whose newest entry differs from the one here, with that entry, and the versions
+/// since the oldest one the changed files were at (newest first, for their notes). Null when nothing differs. A file
+/// is compared by its checksum, or by its size when no checksum was kept for it (never hashed here: a model file
+/// takes minutes).
 ({List<ModelVersion> versions, Map<String, FileSum> files})? modelUpdate(
   List<ModelVersion> versions,
-  Map<String, String> local,
+  Map<String, LocalFile> local,
 ) {
   final files = <String, FileSum>{};
   var since = versions.length;
-  for (final MapEntry(key: name, value: sha) in local.entries) {
+  for (final MapEntry(key: name, value: here) in local.entries) {
+    bool same(FileSum sum) => here.sha256 != null ? sum.sha256 == here.sha256 : sum.size == here.size;
     final listing = [
       for (var i = 0; i < versions.length; i++)
         if (versions[i].files.containsKey(name)) i,
     ];
     if (listing.isEmpty) continue;
     final newest = versions[listing.last].files[name]!;
-    if (newest.sha256 == sha) continue;
+    if (same(newest)) continue;
     files[name] = newest;
     // the version the file here is at (-1 when it is none of them: every version's notes are shown)
-    final own = listing.lastWhere((i) => versions[i].files[name]!.sha256 == sha, orElse: () => -1);
+    final own = listing.lastWhere((i) => same(versions[i].files[name]!), orElse: () => -1);
     if (own < since) since = own;
   }
   if (files.isEmpty) return null;
   return (versions: versions.sublist(since + 1).reversed.toList(), files: files);
 }
 
-/// The checksums (SHA-256) of model files, kept in a small file with each file's size and time so a file is hashed at
-/// most once: a download's checksum is kept as it is checked, and a file found without one is hashed once.
+/// The checksums (SHA-256) of model files, kept in a small file with each file's size and time: a download's checksum
+/// is kept as it is checked, so looking for updates never hashes a model file.
 class FileHashes {
   FileHashes(this.store);
 
@@ -195,15 +201,6 @@ class FileHashes {
     } on FileSystemException {
       // Not kept: hashed again next time.
     }
-  }
-
-  /// The checksum of [path]: the kept one, else hashed now (in its own isolate) and kept.
-  Future<String> of(String path) async {
-    final kept = known(path);
-    if (kept != null) return kept;
-    final sha = await sha256Of(path);
-    remember(path, sha);
-    return sha;
   }
 }
 

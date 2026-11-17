@@ -1,5 +1,5 @@
 // Tuning for the PC: by itself after a download, skipped when a result is kept, waiting while the engine is in use,
-// the model unloaded first, a message sent meanwhile waiting in the engine, the busy note and Tune again.
+// the model unloaded first, a message sent meanwhile waiting in the engine, the busy note and Tune.
 // Run: flutter test test/tuning_runs_test.dart
 import 'dart:async';
 import 'dart:io';
@@ -20,6 +20,7 @@ import 'package:runmyai/state/tuning_runs.dart';
 import 'package:runmyai/system/chime.dart';
 import 'package:runmyai/system/folders.dart';
 import 'package:runmyai/theme.dart';
+import 'package:runmyai/ui/buttons.dart';
 import 'package:runmyai/ui/pages/store_page.dart';
 
 /// A backend whose tunes end when the test says, with an engine that only remembers what it was told.
@@ -188,6 +189,19 @@ void main() {
     expect(backend.calls, ['stop', 'tune m/f']);
   });
 
+  test('another loaded model is unloaded too, so the PC is quiet while it measures', () async {
+    const other = ModelFile(id: 'o/f', quantization: 'q', sizeBytes: 1);
+    await backend.startEngine(other, const EngineRun(flags: '', contextLength: 4096));
+    container.read(tuningRunsProvider.notifier).tuneAgain(_file);
+    await settle();
+    expect(backend.calls, ['stop', 'tune m/f']);
+    // nothing loaded: nothing to stop
+    backend.calls.clear();
+    container.read(tuningRunsProvider.notifier).tuneAgain(_file);
+    await settle();
+    expect(backend.calls, ['tune m/f']);
+  });
+
   test('a tune that finds the PC busy is marked so; Tune again on a quiet PC clears it', () async {
     backend.busy = true;
     container.read(tuningRunsProvider.notifier).tuneAgain(_file);
@@ -212,7 +226,7 @@ void main() {
     expect(backend.calls, ['tune m/f', 'tune m/f']);
   });
 
-  testWidgets('the Store row: Tuning for your PC, then Ready with the busy note and Tune again', (tester) async {
+  testWidgets('the Store row: Tuning for your PC, then Downloaded with the busy note and Tune', (tester) async {
     Storage(dir).writeLibrary(const LibraryData(downloaded: {'m/f'}, picked: 'm/f'));
     final scope = ProviderContainer(
       overrides: [
@@ -230,7 +244,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Ready'), findsOneWidget);
+    expect(find.text('Downloaded'), findsOneWidget);
     expect(find.byKey(const Key('tune-status-m/f')), findsNothing);
 
     backend
@@ -239,14 +253,44 @@ void main() {
     await tester.tap(find.byKey(const Key('tune-again-m/f')));
     await tester.pump();
     expect(find.text('Tuning for your PC...'), findsOneWidget);
-    expect(find.text('Ready'), findsNothing);
+    expect(find.text('Downloaded'), findsNothing);
 
     backend.gate.complete();
     await tester.pump();
     await tester.pump();
-    expect(find.text('Ready'), findsOneWidget);
+    expect(find.text('Downloaded'), findsOneWidget);
     expect(find.textContaining('Your PC was busy while tuning'), findsOneWidget);
     expect(find.byKey(const Key('tune-again-m/f')), findsOneWidget);
+    expect(find.text('Tune'), findsOneWidget);
+  });
+
+  testWidgets('Tune is off while a reply is being written', (tester) async {
+    Storage(dir).writeLibrary(const LibraryData(downloaded: {'m/f'}, picked: 'm/f'));
+    final scope = ProviderContainer(
+      overrides: [
+        storageProvider.overrideWithValue(Storage(dir)),
+        chatStoreProvider.overrideWithValue(store),
+        backendProvider.overrideWithValue(backend),
+        catalogProvider.overrideWith((ref) => [_model]),
+      ],
+    );
+    addTearDown(scope.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: scope,
+        child: MaterialApp(theme: buildTheme(Brightness.light), home: const Scaffold(body: StorePage())),
+      ),
+    );
+    await tester.pump();
+    final tune = find.descendant(of: find.byKey(const Key('tune-again-m/f')), matching: find.byType(AppButton));
+    bool on() => tester.widget<AppButton>(tune).onTap != null;
+    expect(on(), isTrue);
+    scope.read(chatsProvider.notifier).send('hello', _file);
+    await tester.pump();
+    expect(on(), isFalse);
+    scope.read(chatsProvider.notifier).stop();
+    await tester.pump();
+    expect(on(), isTrue);
   });
 
   group('the engine', () {
