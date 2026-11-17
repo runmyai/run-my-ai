@@ -352,9 +352,6 @@ class ShortcutsSheet extends StatelessWidget {
         autofocus: true,
         child: Dialog(
           key: const Key('shortcuts-sheet'),
-          backgroundColor: c.page,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 520),
             child: Column(

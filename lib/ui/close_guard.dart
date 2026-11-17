@@ -79,9 +79,6 @@ class _CloseBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     return AlertDialog(
-      backgroundColor: c.page,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       constraints: const BoxConstraints(maxWidth: 400),
       content: Text(question, style: TextStyle(fontSize: 15, height: 1.5, color: c.text)),
       actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),

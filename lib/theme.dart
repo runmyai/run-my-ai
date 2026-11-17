@@ -458,6 +458,15 @@ ThemeData buildTheme(
     ),
     scaffoldBackgroundColor: c.page,
     splashFactory: NoSplash.splashFactory,
+    // Every dialog looks the same: the page colour with a 1 px outline (as menus and input boxes have) and a soft
+    // shadow, so a dialog does not melt into a page of the same colour.
+    dialogTheme: DialogThemeData(
+      backgroundColor: c.page,
+      surfaceTintColor: Colors.transparent,
+      elevation: 16,
+      shadowColor: c.shadow,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: c.inputBorder)),
+    ),
     // A menu's items show clearly under the pointer and with the keyboard.
     menuButtonTheme: MenuButtonThemeData(
       style: ButtonStyle(

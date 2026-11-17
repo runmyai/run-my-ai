@@ -133,9 +133,6 @@ class UpdatePage extends ConsumerWidget {
           ];
 
     return Dialog(
-      backgroundColor: c.page,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560, maxHeight: 640),
         child: Padding(
