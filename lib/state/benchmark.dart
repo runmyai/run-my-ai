@@ -12,6 +12,7 @@ import '../benchmark/hardware.dart';
 import '../benchmark/memory_layout.dart';
 import '../benchmark/prompts.dart';
 import '../benchmark/series.dart';
+import '../benchmark/share.dart';
 import '../data/chat_db.dart' show ChatDb;
 import '../data/models.dart';
 import '../engine/engine_flags.dart';
@@ -553,6 +554,8 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         history: [saved, ...state.history].take(ChatDb.maxBenchmarks).toList(),
         disturbed: result.disturbed,
       );
+      // Shared in the background when the user allows it; it never holds up the page.
+      unawaited(ref.read(benchmarkSharerProvider).share(saved, file: file, kvCache: setup.kvCache.id, layout: end?.layout ?? const {}));
     } on EngineFailure catch (failure) {
       state = state.copyWith(error: () => failure.message);
     } on Exception catch (e) {
