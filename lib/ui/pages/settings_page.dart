@@ -12,6 +12,7 @@ import '../../system/chime.dart';
 import '../../theme.dart';
 import '../buttons.dart';
 import '../context_settings.dart';
+import '../settings/privacy_section.dart';
 import '../menu_panel.dart';
 import 'about_page.dart';
 
@@ -181,6 +182,8 @@ class _SettingsList extends ConsumerWidget {
         const _EngineFolder(),
         const SizedBox(height: 28),
         const _Context(),
+        const SizedBox(height: 28),
+        const PrivacySection(),
         const SizedBox(height: 28),
         Text(
           'About',
