@@ -14,29 +14,47 @@ List<String> withTuning(List<String> args, Map<String, dynamic>? t) {
   return out;
 }
 
-/// Two cards: the first runs the first layers with the expert pool (RAM and SSD behind it), the second runs the last layers
-/// completely, as whole layers - one hand-over between the cards per token. The second card's count of whole layers is a sum
-/// from its memory; the engine streams the ones that do not fit. Measured on two RTX 3060: Flint 72.8 tok/s against 53.2 on one
-/// card, Qwen 25.2 against 19.2, long prompts faster too.
-/// shortcut: the two largest cards only, and whole layers as (memory - 2.5 GiB) / one layer's experts; the full autotuner replaces this
-List<String> twoCardFlags(List<({String name, int mib})> cards, int layers, int firstMoe, double layerGiB) {
-  final pool = cards[0], whole = cards[1];
-  final n = min(layers - firstMoe - 2, max(1, ((whole.mib / 1024 - 2.5) / layerGiB).floor()));
-  return [
-    '--device', '${pool.name},${whole.name}',
-    '-ts', '${layers - n},$n',
+/// Several cards share the model, filled fastest first (the autotuner's measured read speed): the faster cards each run a
+/// run of the last layers completely, as whole layers - as many as their memory holds - and the slowest card runs the first
+/// layers with the expert pool, RAM and SSD behind it. One hand-over between cards per run of layers. Measured with two RTX 3060:
+/// Flint 72.8 tok/s against 53.2 on one card, Qwen 25.2 against 19.2, long prompts faster too.
+/// shortcut: whole layers per card as (memory - 2.5 GiB) / one layer's experts - the engine streams the ones that do not fit
+List<String> cardFlags(List<({String name, int mib})> cards, int layers, int firstMoe, double layerGiB) {
+  final pool = cards.last, fast = cards.sublist(0, cards.length - 1);
+  var left = layers - firstMoe - 2;   // at least the dense layers and two MoE layers stay with the pool
+  final counts = <int>[];
+  for (final c in fast) {
+    final n = min(left, max(1, ((c.mib / 1024 - 2.5) / layerGiB).floor()));
+    counts.add(n);
+    left -= n;
+  }
+  final nPool = layers - counts.fold(0, (a, n) => a + n);
+  final args = [
+    '--device', [pool.name, for (final c in fast) c.name].join(','),
+    '-ts', [nPool, ...counts].join(','),
     '--moe-stream-vram-device', pool.name,
-    '--moe-stream-gpu-layers-device', '${whole.name}=${layers - n}-${layers - 1}',
   ];
+  var first = nPool;
+  for (var i = 0; i < fast.length; i++) {
+    if (counts[i] > 0) args.addAll(['--moe-stream-gpu-layers-device', '${fast[i].name}=$first-${first + counts[i] - 1}']);
+    first += counts[i];
+  }
+  return args;
 }
 
-/// The cards from the autotuner's result, largest first. Without a separate card, a built-in GPU that can use 24 GiB or more
+/// The cards from the autotuner's result, fastest first. Without a separate card, a built-in GPU that can use 24 GiB or more
 /// counts as one (a DGX Spark's GB10, a Strix Halo: Flint 76.7 and 64.8 tok/s on it against 28.2 and 32.1 CPU-only); the small
 /// built-in GPUs of ordinary laptops (about half of a smaller RAM) stay unused.
 List<({String name, int mib})> cardsFrom(Map<String, dynamic> tune) {
-  List<({String name, int mib})> read(String key) =>
-      [for (final g in (tune[key] as List?) ?? const []) (name: (g as Map)['name'] as String, mib: g['mib'] as int)]
-        ..sort((a, b) => b.mib - a.mib);
+  // fastest first by the measured read speed, then the larger
+  List<({String name, int mib})> read(String key) {
+    final list = [for (final g in (tune[key] as List?) ?? const []) g as Map];
+    list.sort((a, b) {
+      final s = ((b['gbps'] as num?) ?? 0).compareTo((a['gbps'] as num?) ?? 0);
+      return s != 0 ? s : (b['mib'] as int) - (a['mib'] as int);
+    });
+    return [for (final g in list) (name: g['name'] as String, mib: g['mib'] as int)];
+  }
   final cards = read('gpus');
   if (cards.isNotEmpty) return cards;
   return read('igpus').where((g) => g.mib >= 24 * 1024).take(1).toList();

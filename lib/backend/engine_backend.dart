@@ -209,18 +209,18 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   }
 
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
-  /// largest card. With several cards the two largest share the model (twoCardFlags).
+  /// largest card. With several cards all of them share the model, filled fastest first (cardFlags).
   /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
   Map<int, String> _flagsFor(_LocalModel m) {
     final cards = _cards;
-    final gib = cards.isEmpty ? 0.0 : cards.first.mib / 1024;
+    final gib = cards.isEmpty ? 0.0 : cards.map((c) => c.mib).reduce(max) / 1024;
     final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
     if (identical(flags, m.cpuFlags)) return flags;
     // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
-      if (cards.length > 1 && cards[0].name.isNotEmpty && cards[1].name.isNotEmpty)
-        ...twoCardFlags(cards, m.layers, m.firstMoe, m.layerGiB)
+      if (cards.length > 1 && cards.every((c) => c.name.isNotEmpty))
+        ...cardFlags(cards, m.layers, m.firstMoe, m.layerGiB)
       // one card: named, so a built-in GPU chosen for lack of a separate card is the one used
       else if (cards.length == 1 && cards[0].name.isNotEmpty)
         '--device ${cards[0].name}',

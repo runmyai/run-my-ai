@@ -16,11 +16,21 @@ void main() {
         ['-c', '8192', '-t', '6', '--moe-stream', 'model', '--cpu-range', '0-15']);
   });
 
-  test('two cards: the first runs the first layers with the pool, the second the last layers whole', () {
-    expect(twoCardFlags([(name: 'CUDA1', mib: 11911), (name: 'CUDA0', mib: 11909)], 49, 2, 0.49), [
-      '--device', 'CUDA1,CUDA0', '-ts', '31,18',
-      '--moe-stream-vram-device', 'CUDA1', '--moe-stream-gpu-layers-device', 'CUDA0=31-48',
+  test('several cards: the faster ones take whole last layers, the slowest the first layers with the pool', () {
+    expect(cardFlags([(name: 'CUDA1', mib: 11911), (name: 'CUDA0', mib: 11909)], 49, 2, 0.49), [
+      '--device', 'CUDA0,CUDA1', '-ts', '31,18',
+      '--moe-stream-vram-device', 'CUDA0', '--moe-stream-gpu-layers-device', 'CUDA1=31-48',
     ]);
+    expect(cardFlags([(name: 'CUDA0', mib: 24576), (name: 'CUDA2', mib: 12288), (name: 'CUDA1', mib: 8192)], 49, 2, 0.49), [
+      '--device', 'CUDA1,CUDA0,CUDA2', '-ts', '4,43,2',
+      '--moe-stream-vram-device', 'CUDA1',
+      '--moe-stream-gpu-layers-device', 'CUDA0=4-46', '--moe-stream-gpu-layers-device', 'CUDA2=47-48',
+    ]);
+  });
+
+  test('cards are ranked by measured speed, then size', () {
+    expect(cardsFrom({'gpus': [{'name': 'A', 'mib': 24576, 'gbps': 300}, {'name': 'B', 'mib': 12288, 'gbps': 700}]}),
+        [(name: 'B', mib: 12288), (name: 'A', mib: 24576)]);
   });
 
   test('a built-in GPU counts only without a separate card and with 24 GiB or more', () {
