@@ -9,6 +9,7 @@ import '../data/models.dart';
 import '../search/chat_search.dart';
 import '../state/archive_view.dart';
 import '../state/chats.dart';
+import '../state/first_run.dart';
 import '../state/folds.dart';
 import '../state/prefs.dart';
 import '../state/search.dart';
@@ -174,6 +175,7 @@ class _FullBody extends ConsumerWidget {
             selected: archiveOpen,
             onTap: () => ref.read(archiveViewProvider.notifier).toggle(kind),
           ),
+        const StoreHint(),
         _Row(
           key: const Key('store'),
           icon: Icons.storefront_outlined,
@@ -197,6 +199,73 @@ class _FullBody extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// A bubble above the Store row that points down at it: "Download models here". It shows after the welcome screen
+/// until it is closed or the Store is opened, then never again.
+class StoreHint extends ConsumerWidget {
+  const StoreHint({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen(sectionProvider, (_, s) {
+      if (s == Section.store) ref.read(firstRunProvider.notifier).closeStoreHint();
+    });
+    final show = ref.watch(firstRunProvider.select((f) => f.welcomeShown && !f.storeHintClosed));
+    if (!show) return const SizedBox.shrink();
+    final c = context.colors;
+    return Padding(
+      key: const Key('store-hint'),
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+            decoration: BoxDecoration(color: c.mainFill, borderRadius: BorderRadius.circular(8)),
+            child: Row(
+              children: [
+                Expanded(child: Text('Download models here', style: TextStyle(fontSize: 13, color: c.mainText))),
+                InkWell(
+                  key: const Key('store-hint-close'),
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: ref.read(firstRunProvider.notifier).closeStoreHint,
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(Icons.close, size: 14, semanticLabel: 'Close', color: c.mainText),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 14),
+            child: CustomPaint(size: const Size(12, 6), painter: _Pointer(c.mainFill)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A small triangle pointing down.
+class _Pointer extends CustomPainter {
+  const _Pointer(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) => canvas.drawPath(
+    Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width / 2, size.height)
+      ..close(),
+    Paint()..color = color,
+  );
+
+  @override
+  bool shouldRepaint(_Pointer old) => old.color != color;
 }
 
 /// The hidden sidebar: one icon per action, the chat list left out.

@@ -18,6 +18,7 @@ class Prefs {
     this.engineFolder,
     this.speedHighlighted = false,
     this.stateLimitGiB = PrefsData.defaultStateLimitGiB,
+    this.shareBenchmarks = true,
   });
 
   /// System until the user picks one in Settings: then Run My AI Dark, unless the computer is set to light (see
@@ -56,6 +57,9 @@ class Prefs {
   /// The most the chats' saved states may take on the disk.
   final double stateLimitGiB;
 
+  /// The benchmark numbers (the hardware and the speeds, never a chat) may be shared.
+  final bool shareBenchmarks;
+
   /// The text sizes Ctrl+= and Ctrl+- step through.
   static const textScales = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4];
 
@@ -71,6 +75,7 @@ class Prefs {
     String? Function()? engineFolder,
     bool? speedHighlighted,
     double? stateLimitGiB,
+    bool? shareBenchmarks,
   }) => Prefs(
     theme: theme ?? this.theme,
     darkStyle: darkStyle ?? this.darkStyle,
@@ -84,6 +89,7 @@ class Prefs {
     engineFolder: engineFolder != null ? engineFolder() : this.engineFolder,
     speedHighlighted: speedHighlighted ?? this.speedHighlighted,
     stateLimitGiB: stateLimitGiB ?? this.stateLimitGiB,
+    shareBenchmarks: shareBenchmarks ?? this.shareBenchmarks,
   );
 }
 
@@ -116,6 +122,7 @@ class PrefsNotifier extends Notifier<Prefs> {
       engineFolder: saved.engineFolder,
       speedHighlighted: saved.speedHighlighted,
       stateLimitGiB: saved.stateLimitGiB,
+      shareBenchmarks: saved.shareBenchmarks,
     );
   }
 
@@ -138,6 +145,8 @@ class PrefsNotifier extends Notifier<Prefs> {
   void setStateLimit(double gib) => _save(state.copyWith(stateLimitGiB: gib));
 
   void setSpeedHighlighted(bool on) => _save(state.copyWith(speedHighlighted: on));
+
+  void setShareBenchmarks(bool on) => _save(state.copyWith(shareBenchmarks: on));
 
   void toggleThinking() => _save(state.copyWith(thinking: !state.thinking));
 
@@ -178,6 +187,7 @@ class PrefsNotifier extends Notifier<Prefs> {
             stateLimitGiB: prefs.stateLimitGiB,
             soundName: prefs.soundName,
             soundFile: prefs.soundFile,
+            shareBenchmarks: prefs.shareBenchmarks,
           ),
         );
   }
