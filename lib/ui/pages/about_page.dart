@@ -141,7 +141,7 @@ class _AboutPageState extends ConsumerState<AboutPage> {
         const SizedBox(height: 28),
         const _Heading('Credits'),
         const SizedBox(height: 12),
-        const _Paragraph('Run My AI and TokenWing are made by Harin Mani Karri.'),
+        const _Paragraph('Run My AI and TokenWing are made by Harin Mani Karri and Grawnch.'),
         const SizedBox(height: 8),
         const _Paragraph('TokenWing is built on llama.cpp and its ggml library, with parts from ik_llama.cpp.'),
         const SizedBox(height: 8),
