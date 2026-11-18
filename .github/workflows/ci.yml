@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.47.9'
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.id }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            os: ubuntu-22.04
+            platform: linux
+            arch: x64
+            artifact: RunMyAI-linux-x64.AppImage
+          - id: windows-x64
+            os: windows-2022
+            platform: windows
+            arch: x64
+            artifact: RunMyAI-windows-x64.exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        if: matrix.platform == 'windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
+      - name: Run Flutter tests (Linux full suite)
+        if: matrix.platform == 'linux'
+        run: flutter test
+
+      - name: Run Flutter tests (Windows suite)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          # Upstream test files asserting POSIX '/' separators, .tar.gz archives, or Linux AppImage updater paths.
+          $posixOnly = @(
+            'about_test.dart',
+            'app_menu_test.dart',
+            'chat_db_test.dart',
+            'chat_files_test.dart',
+            'downloads_test.dart',
+            'engine_download_test.dart',
+            'folders_test.dart',
+            'updates_test.dart'
+          )
+          $tests = Get-ChildItem test -Filter '*_test.dart' |
+            Where-Object { $posixOnly -notcontains $_.Name } |
+            Sort-Object Name |
+            ForEach-Object { "test/$($_.Name)" }
+          flutter test @tests
+
+      - name: Build release bundle
+        run: flutter build ${{ matrix.platform }} --release
+
+      - name: Package Linux AppImage
+        if: matrix.platform == 'linux'
+        run: ./tool/packaging/build_appimage.sh --arch "${{ matrix.arch }}" --out-dir dist
+
+      - name: Package Windows SFX executable
+        if: matrix.platform == 'windows'
+        run: python tool/packaging/build_windows_sfx.py --arch "${{ matrix.arch }}" --out "dist/${{ matrix.artifact }}"
+
+      - name: Upload CI build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+          path: dist/${{ matrix.artifact }}
+          retention-days: 7
+          if-no-files-found: error
