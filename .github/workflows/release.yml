@@ -1,0 +1,212 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag override (defaults to v<pubspec version>)
+        required: false
+        default: ''
+      prerelease:
+        description: Mark GitHub release as prerelease
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: Create or update the GitHub Release (set false for dry-run artifacts only)
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: '3.47.9'
+
+jobs:
+  meta:
+    name: Resolve release metadata
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute release tag and version
+        id: resolve
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+
+          ref_type = os.environ.get("GITHUB_REF_TYPE", "")
+          ref_name = os.environ.get("GITHUB_REF_NAME", "")
+          input_tag = os.environ.get("INPUT_TAG", "").strip()
+
+          if ref_type == "tag" and ref_name:
+              raw = ref_name
+          elif input_tag:
+              raw = input_tag
+          else:
+              m = re.search(r"^version:\s*([^\s+#]+)", pathlib.Path("pubspec.yaml").read_text(encoding="utf-8"), re.M)
+              if not m:
+                  raise SystemExit("Could not resolve version from pubspec.yaml")
+              raw = m.group(1).strip()
+
+          version = raw.lstrip("v")
+          tag = raw if raw.startswith("v") else f"v{raw}"
+          is_pre = (os.environ.get("INPUT_PRE", "false").lower() == "true") or ("-" in tag)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"tag={tag}\n")
+              f.write(f"version={version}\n")
+              f.write(f"prerelease={'true' if is_pre else 'false'}\n")
+          PY
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRE: ${{ inputs.prerelease }}
+
+  build:
+    name: ${{ matrix.id }}
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            os: ubuntu-22.04
+            platform: linux
+            arch: x64
+            artifact: RunMyAI-linux-x64.AppImage
+          - id: linux-arm64
+            os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+            artifact: RunMyAI-linux-arm64.AppImage
+          - id: windows-x64
+            os: windows-2022
+            platform: windows
+            arch: x64
+            artifact: RunMyAI-windows-x64.exe
+          - id: windows-arm64
+            os: windows-11-arm
+            platform: windows
+            arch: arm64
+            artifact: RunMyAI-windows-arm64.exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        if: matrix.platform == 'windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
+      - name: Run full Flutter test suite
+        if: matrix.id == 'linux-x64'
+        run: flutter test
+
+      - name: Run Linux ARM64 core tests
+        if: matrix.id == 'linux-arm64'
+        run: flutter test test/app_menu_test.dart test/chat_db_test.dart test/downloads_test.dart test/engine_download_test.dart test/hardware_test.dart test/hashing_test.dart test/serve_test.dart test/sound_test.dart test/tuning_test.dart
+
+      - name: Run Windows core tests
+        if: matrix.platform == 'windows'
+        run: flutter test test/first_run_test.dart test/github_api_test.dart test/hardware_test.dart test/hashing_test.dart test/kv_type_test.dart test/markdown_test.dart test/model_choice_test.dart test/serve_test.dart test/sound_test.dart test/tuning_test.dart
+
+      - name: Build release bundle
+        run: flutter build ${{ matrix.platform }} --release
+
+      - name: Package Linux AppImage
+        if: matrix.platform == 'linux'
+        run: ./tool/packaging/build_appimage.sh --arch "${{ matrix.arch }}" --out-dir dist
+
+      - name: Package Windows SFX executable
+        if: matrix.platform == 'windows'
+        run: >-
+          python tool/packaging/build_windows_sfx.py
+          --arch "${{ matrix.arch }}"
+          --version "${{ needs.meta.outputs.version }}"
+          --out "dist/${{ matrix.artifact }}"
+
+      - name: Upload target artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.id }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [meta, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Verify binaries and generate SHA256SUMS
+        run: |
+          cd release-assets
+          expected=(
+            RunMyAI-linux-arm64.AppImage
+            RunMyAI-linux-x64.AppImage
+            RunMyAI-windows-arm64.exe
+            RunMyAI-windows-x64.exe
+          )
+          for f in "${expected[@]}"; do
+            test -s "$f"
+          done
+          sha256sum "${expected[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload combined release bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-my-ai-${{ needs.meta.outputs.tag }}
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          PRE: ${{ needs.meta.outputs.prerelease }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            flags=(--target "${{ github.sha }}" --title "$TAG" --generate-notes)
+            if [ "$PRE" = "true" ]; then
+              flags+=(--prerelease)
+            fi
+            gh release create "$TAG" "${flags[@]}"
+          fi
+          gh release upload "$TAG" --clobber release-assets/*
