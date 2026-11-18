@@ -161,7 +161,8 @@ class _Welcome extends ConsumerWidget {
   }
 }
 
-/// The choice to share benchmark results and app stats.
+/// The choice to share benchmark results and app stats (which models and engine builds are downloaded is part of the
+/// app stats).
 const shareBenchmarksLabel = 'Share benchmark results and app stats to help improve Run My AI';
 
 /// The small line under the choice to share benchmark results and app stats (here and in Settings).

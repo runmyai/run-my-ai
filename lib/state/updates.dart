@@ -16,6 +16,7 @@ import '../system/updater.dart';
 import 'about.dart';
 import 'benchmark.dart';
 import 'chats.dart';
+import 'download_events.dart';
 import 'library.dart';
 import 'prefs.dart';
 import 'providers.dart';
@@ -280,6 +281,7 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
           onProgress: _show,
         ).run();
         if (!done) throw const DownloadFailure('The engine update stopped. Nothing was changed.');
+        unawaited(ref.read(downloadEventsProvider).engine(engine.asset, engine.newest.tag));
         state = state.copyWith(engine: () => null);
       }
       for (final model in state.models) {

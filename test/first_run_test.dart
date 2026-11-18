@@ -122,7 +122,7 @@ void main() {
       expect(find.byKey(welcome), findsOneWidget);
       expect(find.text('Welcome to Run My AI'), findsOneWidget);
       expect(find.textContaining('Simple, private, fast and models beyond your memory.'), findsOneWidget);
-      expect(find.text('Share benchmark results and app stats to help improve Run My AI'), findsOneWidget);
+      expect(find.text(shareBenchmarksLabel), findsOneWidget);
       expect(find.textContaining('never your chats. You can turn this off anytime in Settings.'), findsOneWidget);
       expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isTrue, reason: 'ticked by default');
 
@@ -160,7 +160,7 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Share benchmark results and app stats to help improve Run My AI'), findsOneWidget);
+    expect(find.text(shareBenchmarksLabel), findsOneWidget);
     expect(find.text('Anonymous, never your chats. You can turn this off anytime in Settings.'), findsOneWidget);
     expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isFalse);
     await tester.tap(find.byKey(const Key('share-check')));

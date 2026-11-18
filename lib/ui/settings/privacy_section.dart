@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/prefs.dart';
 import '../../theme.dart';
-import '../welcome.dart' show shareBenchmarksNote;
+import '../welcome.dart' show shareBenchmarksLabel, shareBenchmarksNote;
 
 /// Settings: whether benchmark results and app stats may be shared (the same choice as on the welcome screen).
 class PrivacySection extends ConsumerWidget {
@@ -36,7 +36,7 @@ class PrivacySection extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Share benchmark results and app stats to help improve Run My AI',
+                    shareBenchmarksLabel,
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
                   ),
                   const SizedBox(height: 2),

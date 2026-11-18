@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../backend/backend.dart';
 import '../engine/engine_download.dart';
+import '../state/download_events.dart';
 import '../state/first_run.dart';
 import '../state/prefs.dart';
 import '../state/providers.dart';
@@ -130,9 +131,13 @@ class _EngineSetupState extends ConsumerState<EngineSetup> {
       _phase = _Phase.downloading;
       _message = null;
     });
+    // (Taken now: an install that finishes after this window was closed is recorded too.)
+    final events = ref.read(downloadEventsProvider);
+    final asset = _asset;
     try {
       final installed = await download.run();
       if (_cancelled) download.cancel();
+      if (installed) unawaited(events.engine(asset, release.tag));
       if (!mounted) return;
       if (!installed) {
         setState(() => _phase = _cancelled ? _Phase.choose : _Phase.paused);
