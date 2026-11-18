@@ -11,7 +11,7 @@
   <a href="https://github.com/sponsors/HarinManiK">❤️ Sponsor</a>
 </p>
 
-<p align="center"><b>Downloads for Windows and Linux open on Nov 17 at 9:30 PM IST (4:00 PM UTC).</b></p>
+<p align="center"><b>Download:</b> <a href="https://github.com/runmyai/run-my-ai/releases/latest/download/RunMyAI-windows-x64.exe">Windows</a> · <a href="https://github.com/runmyai/run-my-ai/releases/latest/download/RunMyAI-windows-arm64.exe">Windows on ARM</a> · <a href="https://github.com/runmyai/run-my-ai/releases/latest/download/RunMyAI-linux-x64.AppImage">Linux</a> · <a href="https://github.com/runmyai/run-my-ai/releases/latest/download/RunMyAI-linux-arm64.AppImage">Linux on ARM</a> · macOS coming soon</p>
 
 ## The model you want. On the machine you have.
 
@@ -30,7 +30,7 @@ Download the file for your system from [Releases](https://github.com/runmyai/run
 |---|---|---|
 | Flint 40B | Coding model by Recursive. 40B total, about 2.5B active per token. | Q4_K_XL, about 25 GB |
 | Ling 3.0 Flash | 124B total, 5.1B active per token. 262k context. | MXFP4, about 70 GB |
-| Qwen 4 if it's out by Nov 17, or Qwen 3.8 Flash Next | | Qwen 3.8 Flash Next: ISTA IQ3_S and UD-Q4_K_XL |
+| [Qwen 3.8 Flash Next](https://huggingface.co/runmyai/Qwen3.8-Flash-Next-TokenWing) | By Qwen. | 3.5 bpw by Grawnch, about 84 GB with its n-gram table |
 
 ## What you need
 
@@ -39,7 +39,7 @@ Download the file for your system from [Releases](https://github.com/runmyai/run
 | **SSD** | An NVMe SSD on PCIe 3.0 or above. |
 | **Memory** | We're targeting 35-40B-class models on 16 GB RAM CPU-only builds, and 120B-class models on at least 24 GB of RAM and 8 GB of VRAM. With less it still runs, only slower. More memory and a GPU make any model faster. |
 | **GPU** | NVIDIA or AMD, one or several, or CPU only. |
-| **System** | Windows or Linux. macOS on Apple Silicon comes after launch. |
+| **System** | Windows or Linux. macOS on Apple Silicon is coming soon. |
 
 ## How it runs models bigger than your memory
 
