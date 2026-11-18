@@ -7,7 +7,8 @@
 <p align="center">
   <a href="https://github.com/runmyai/run-my-ai/releases">Download</a> ·
   <a href="https://github.com/runmyai/run-my-ai">Star</a> ·
-  <a href="https://discord.gg/BfpvUFp58">Discord</a>
+  <a href="https://discord.gg/BfpvUFp58">Discord</a> ·
+  <a href="https://github.com/sponsors/HarinManiK">❤️ Sponsor</a>
 </p>
 
 <p align="center"><b>Downloads for Windows and Linux open on Nov 17 at 9:30 PM IST (4:00 PM UTC).</b></p>
