@@ -131,15 +131,18 @@ class _EngineSetupState extends ConsumerState<EngineSetup> {
       _phase = _Phase.downloading;
       _message = null;
     });
+    // (Taken now: an install that finishes after this window was closed is recorded too.)
+    final events = ref.read(downloadEventsProvider);
+    final asset = _asset;
     try {
       final installed = await download.run();
       if (_cancelled) download.cancel();
+      if (installed) unawaited(events.engine(asset, release.tag));
       if (!mounted) return;
       if (!installed) {
         setState(() => _phase = _cancelled ? _Phase.choose : _Phase.paused);
         return;
       }
-      unawaited(ref.read(downloadEventsProvider).engine(_asset, release.tag));
       // a download from Settings replaces the user's own engine folder: the downloaded engine is the one used
       if (own != null) ref.read(prefsProvider.notifier).setEngineFolder('');
       Navigator.pop(context);
