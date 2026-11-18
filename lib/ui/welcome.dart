@@ -161,8 +161,8 @@ class _Welcome extends ConsumerWidget {
   }
 }
 
-/// The choice to share benchmark results and app stats.
-const shareBenchmarksLabel = 'Share benchmark results and app stats to help improve Run My AI';
+/// The choice to share benchmark results, app stats and which models and engine builds are downloaded.
+const shareBenchmarksLabel = 'Share benchmark results, app stats and which models and engine builds you download to help improve Run My AI';
 
 /// The small line under the choice to share benchmark results and app stats (here and in Settings).
 const shareBenchmarksNote = 'Anonymous, never your chats. You can turn this off anytime in Settings.';

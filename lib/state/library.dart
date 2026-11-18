@@ -10,6 +10,7 @@ import '../system/chime.dart';
 import '../system/downloads.dart';
 import '../system/folders.dart';
 import 'chats.dart';
+import 'download_events.dart';
 import 'profiles.dart';
 import 'providers.dart';
 import 'tuning_runs.dart';
@@ -265,6 +266,7 @@ class LibraryNotifier extends Notifier<LibraryState> {
     );
     // The notification sound, when the bell is on (as for a finished reply).
     ref.read(chimeProvider).replyDone();
+    unawaited(ref.read(downloadEventsProvider).model(file.id));
     // The PC is measured for it right away, so its first load does not wait for that.
     ref.read(tuningRunsProvider.notifier).afterDownload(file);
   }

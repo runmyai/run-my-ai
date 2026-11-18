@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../benchmark/amd_gpu.dart';
+import '../benchmark/share.dart' show installIdIn;
 import '../benchmark/hardware.dart';
 import '../benchmark/nvml.dart';
 import '../benchmark/win32_metrics.dart';
@@ -1023,7 +1024,10 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         port: port,
         // (Never the engine a chat would reuse: it answers only to its key.)
         startedWith: serve == null ? startedWith(run) : 'serve\n${startedWith(run)}',
-        environment: hosting?.environment ?? flags.environment,
+        environment: {
+          ...(hosting?.environment ?? flags.environment),
+          ...launcherEnvironment(installIdIn(_storage.dir), prefs.shareBenchmarks),
+        },
         workingDirectory: folder,
         memoryCapBytes: _windowsJobCap(run.memoryCapGiB, tuned),
         onOutput: _logChanged.changed,
@@ -1041,6 +1045,14 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     }
     return engine;
   }
+
+  /// What tells the engine which program started it: the app, this install's random name (for the engine's own daily
+  /// record) and, when the user does not share, that it must send nothing.
+  static Map<String, String> launcherEnvironment(String installId, bool share) => {
+    'TOKENWING_LAUNCHER': 'run-my-ai',
+    'TOKENWING_INSTALL_ID': installId,
+    if (!share) 'TOKENWING_NO_STATS': '1',
+  };
 
   /// What hosting adds to the engine's start: the model name other programs use, the counters the hosting screen reads
   /// (GET /metrics), and the key in the engine's environment (LLAMA_API_KEY), not on its command line, so other

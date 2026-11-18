@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../backend/backend.dart';
 import '../engine/engine_download.dart';
+import '../state/download_events.dart';
 import '../state/first_run.dart';
 import '../state/prefs.dart';
 import '../state/providers.dart';
@@ -138,6 +139,7 @@ class _EngineSetupState extends ConsumerState<EngineSetup> {
         setState(() => _phase = _cancelled ? _Phase.choose : _Phase.paused);
         return;
       }
+      unawaited(ref.read(downloadEventsProvider).engine(_asset, release.tag));
       // a download from Settings replaces the user's own engine folder: the downloaded engine is the one used
       if (own != null) ref.read(prefsProvider.notifier).setEngineFolder('');
       Navigator.pop(context);
