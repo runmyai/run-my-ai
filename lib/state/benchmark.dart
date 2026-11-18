@@ -22,6 +22,7 @@ import 'chats.dart';
 import 'prefs.dart';
 import 'profiles.dart';
 import 'providers.dart';
+import 'serve.dart';
 
 enum BenchmarkPhase { idle, loading, warmingUp, measuring }
 
@@ -226,7 +227,12 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
   /// Runs the benchmark with [file] at [contextLength], with the model's automatic preset.
   Future<void> start(ModelFile file, String modelName, int contextLength, {ModelThinking? thinking}) async {
     final backend = ref.read(backendProvider);
-    if (state.running || backend is! EngineControl || ref.read(chatsProvider).replyingId != null) return;
+    if (state.running ||
+        backend is! EngineControl ||
+        ref.read(chatsProvider).replyingId != null ||
+        ref.read(serveProvider).busy) {
+      return;
+    }
     final control = backend as EngineControl;
     final insight = backend is EngineInsight ? backend as EngineInsight : null;
     _control = control;

@@ -243,7 +243,7 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
   String? get busyReason {
     if (ref.read(chatsProvider).replyingId != null) return 'A reply is being written - update when it finishes.';
     if (ref.read(benchmarkProvider).running) return 'A benchmark is running - update when it finishes.';
-    if (ref.read(serveProvider).phase != ServePhase.idle) return 'A model is hosted - update when hosting ends.';
+    if (ref.read(serveProvider).busy) return 'A model is hosted - update when hosting ends.';
     if (ref.read(tuningRunsProvider).tuning != null) {
       return 'The PC is being measured for a model - update when that finishes.';
     }

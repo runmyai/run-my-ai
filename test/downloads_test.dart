@@ -44,6 +44,9 @@ class _Hub {
   /// The wait before each part is sent.
   var delay = Duration.zero;
 
+  /// When set, each part waits up to 15 ms more, so the parts finish out of order.
+  Random? jitter;
+
   late HttpServer _server;
 
   Uri get uri => Uri.parse('http://127.0.0.1:${_server.port}');
@@ -97,7 +100,7 @@ class _Hub {
         final first = range == null ? 0 : int.parse(range[1]!),
             last = range == null ? bytes.length - 1 : int.parse(range[2]!);
         asked.add('$name $first-$last');
-        await Future<void>.delayed(delay);
+        await Future<void>.delayed(delay + Duration(milliseconds: jitter?.nextInt(15) ?? 0));
         response.statusCode = range == null ? 200 : 206;
         response.headers.set(HttpHeaders.contentRangeHeader, 'bytes $first-$last/${bytes.length}');
         if (hangHalfWay > 0) {
@@ -161,12 +164,13 @@ void main() {
     Future<int?> Function(String)? free,
     void Function(DownloadProgress)? onProgress,
     int connections = 4,
+    int partBytes = 1000,
   }) => ModelDownload(
     _model,
     '${dir.path}/models',
     server: hub.uri,
     connections: connections,
-    partBytes: 1000,
+    partBytes: partBytes,
     free: free ?? (_) async => 1 << 40,
     onProgress: onProgress,
     retryDelay: Duration.zero,
@@ -290,6 +294,40 @@ void main() {
     expect(await download().run(), isTrue);
     expect(File('${models.path}/m.gguf').readAsBytesSync(), _weights);
     expect(hub.asked.where((a) => a.startsWith('m.gguf')), ['m.gguf 8000-15999', 'm.gguf 16000-19999']);
+  });
+
+  test('the checksum is worked out as the parts arrive out of order, also across a pause; the check at the end says so '
+      'until it is done', () async {
+    for (final seed in [1, 2, 3]) {
+      hub.jitter = Random(seed);
+      // a part size that does not divide the file
+      final first = download(connections: 6, partBytes: 768);
+      final going = first.run();
+      while (hub.asked.length < 8) {
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      }
+      first.stop();
+      expect(await going, isFalse);
+      // after the check started, every progress says checking until the file has its name
+      var checking = false, checkingDropped = false;
+      final whole = File('${dir.path}/models/m.gguf');
+      expect(
+        await download(
+          connections: 6,
+          partBytes: 768,
+          onProgress: (p) {
+            if (p.checking) checking = true;
+            if (checking && !p.checking && !whole.existsSync()) checkingDropped = true;
+          },
+        ).run(),
+        isTrue,
+      );
+      expect(checking, isTrue);
+      expect(checkingDropped, isFalse);
+      expect(whole.readAsBytesSync(), _weights, reason: 'seed $seed');
+      deleteModelFiles('${dir.path}/models', _model);
+      hub.asked.clear();
+    }
   });
 
   test('a connection that breaks off is retried, and the file is still right', () async {

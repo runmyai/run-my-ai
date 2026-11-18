@@ -77,7 +77,7 @@ class TuningRunsNotifier extends Notifier<TuningState> {
   bool get _engineBusy =>
       ref.read(chatsProvider).replyingId != null ||
       ref.read(benchmarkProvider).running ||
-      ref.read(serveProvider).phase != ServePhase.idle;
+      ref.read(serveProvider).busy;
 
   Future<void> _next() async {
     final backend = _backend;

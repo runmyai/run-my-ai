@@ -47,6 +47,7 @@ class ServeState {
     this.phase = ServePhase.idle,
     this.hosted,
     this.error,
+    this.open = false,
   });
 
   /// The port and the key the user typed or generated (remembered); hosting needs a valid key.
@@ -54,14 +55,23 @@ class ServeState {
   final String apiKey;
   final ServePhase phase;
 
-  /// What is hosted, while [phase] is hosting.
+  /// What is loaded for hosting or hosted, while [phase] is not idle.
   final Hosted? hosted;
 
   /// Why the last Host did not work, or why hosting ended.
   final String? error;
 
+  /// The user opened the Serve page (it also shows whenever a model is loading or hosted).
+  final bool open;
+
   /// Another program's server: the app's chats are paused.
   bool get hosting => phase == ServePhase.hosting;
+
+  /// A model is loading for hosting or hosted: it owns the engine, so nothing else may start or use it.
+  bool get busy => phase != ServePhase.idle;
+
+  /// The Serve page takes the window.
+  bool get pageShown => open || busy;
 
   ServeState copyWith({
     int? port,
@@ -69,12 +79,14 @@ class ServeState {
     ServePhase? phase,
     Hosted? Function()? hosted,
     String? Function()? error,
+    bool? open,
   }) => ServeState(
     port: port ?? this.port,
     apiKey: apiKey ?? this.apiKey,
     phase: phase ?? this.phase,
     hosted: hosted != null ? hosted() : this.hosted,
     error: error != null ? error() : this.error,
+    open: open ?? this.open,
   );
 }
 
@@ -101,6 +113,15 @@ class ServeNotifier extends Notifier<ServeState> {
     _save();
   }
 
+  /// Opens the Serve page (an old message from the last time is dropped).
+  void openPage() => state = state.copyWith(open: true, error: state.busy ? null : () => null);
+
+  /// Back to the app; not while a model is loading or hosted.
+  void closePage() {
+    if (state.busy) return;
+    state = state.copyWith(open: false, error: () => null);
+  }
+
   void _save() => ref.read(storageProvider).writeServeSetup({'port': state.port, 'apiKey': state.apiKey});
 
   /// Stops the engine that is running, loads [entry]'s model with [contextLength] and starts answering other programs.
@@ -123,7 +144,7 @@ class ServeNotifier extends Notifier<ServeState> {
       apiKey: state.apiKey,
       contextLength: run.contextLength,
     );
-    state = state.copyWith(phase: ServePhase.starting, error: () => null);
+    state = state.copyWith(phase: ServePhase.starting, hosted: () => hosted, error: () => null);
     try {
       await (backend as ServeControl).startServing(
         entry.file,
@@ -133,11 +154,21 @@ class ServeNotifier extends Notifier<ServeState> {
         apiKey: hosted.apiKey,
         onEnded: _ended,
       );
-      if (state.phase == ServePhase.starting) state = state.copyWith(phase: ServePhase.hosting, hosted: () => hosted);
+      if (state.phase == ServePhase.starting) state = state.copyWith(phase: ServePhase.hosting);
     } on EngineStopped {
-      // Stopped while it loaded: nothing went wrong.
+      // Stop hosting while it loaded is not a failure (the phase is idle already); anything else that stopped the
+      // engine is said.
+      if (state.phase == ServePhase.starting) {
+        state = state.copyWith(
+          phase: ServePhase.idle,
+          hosted: () => null,
+          error: () => 'The model stopped loading: something else stopped the engine. Host it again.',
+        );
+      }
     } on EngineFailure catch (e) {
-      if (state.phase == ServePhase.starting) state = state.copyWith(phase: ServePhase.idle, error: () => _words(e));
+      if (state.phase == ServePhase.starting) {
+        state = state.copyWith(phase: ServePhase.idle, hosted: () => null, error: () => _words(e));
+      }
     }
   }
 
@@ -157,7 +188,7 @@ class ServeNotifier extends Notifier<ServeState> {
     );
   }
 
-  /// A failure in words for the panel: what happened, then the last line the engine wrote.
+  /// A failure in words for the Serve page: what happened, then the last line the engine wrote.
   static String _words(EngineFailure e) {
     final last = e.log.map((l) => l.trim()).where((l) => l.isNotEmpty).lastOrNull;
     return last == null ? e.message : '${e.message} Last line: $last';
@@ -309,7 +340,8 @@ Future<String?> _fetch(Uri uri, String apiKey) async {
 class HostStatsNotifier extends Notifier<HostStats> {
   @override
   HostStats build() {
-    final hosted = ref.watch(serveProvider.select((s) => s.hosted));
+    // Read only once the model is loaded (the engine does not answer while it loads).
+    final hosted = ref.watch(serveProvider.select((s) => s.hosting ? s.hosted : null));
     if (hosted == null) return const HostStats();
     final fetch = ref.read(hostFetchProvider);
     Uri page(String path) => Uri(scheme: 'http', host: '127.0.0.1', port: hosted.port, path: path);
