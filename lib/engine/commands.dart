@@ -85,11 +85,11 @@ String withRamFree(String command, double gib) {
   return '$command --moe-stream-ram-free $str';
 }
 
-/// [command] with the value of its --moe-stream-vram-free set to [gib]; a command without that flag (no graphics card
-/// memory in use) is unchanged.
-String withVramFree(String command, double gib) {
+/// [command] with the value of its --moe-stream-vram-free set to [value] (a size, or a list per card); a command without
+/// that flag (no graphics card memory in use) is unchanged.
+String withVramFree(String command, String value) {
   final pattern = RegExp(r'(^|\s)--moe-stream-vram-free([ =])\S+');
-  return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-vram-free${m[2]}${(gib * 1024).round()}MiB');
+  return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-vram-free${m[2]}$value');
 }
 
 /// The smallest context length a command may use.

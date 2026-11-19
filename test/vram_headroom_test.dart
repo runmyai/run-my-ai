@@ -68,7 +68,7 @@ void main() {
     test('the default reaches every GPU recipe command; the rest of the command stays', () {
       for (final table in gpuTables) {
         for (final command in table.values) {
-          final set = withVramFree(command, defaultVramHeadroomGiB);
+          final set = withVramFree(command, vramSize(defaultVramHeadroomGiB));
           expect(set, contains('--moe-stream-vram-free 512MiB'));
           expect(set.replaceAll('512MiB', '200MiB'), command);
         }
@@ -76,31 +76,28 @@ void main() {
     });
 
     test('a set value reaches the command', () {
-      expect(withVramFree('-c 4096 --moe-stream-vram-free 200MiB --x 1', 1), '-c 4096 --moe-stream-vram-free 1024MiB --x 1');
-      expect(withVramFree('--moe-stream-vram-free=200MiB', 0.25), '--moe-stream-vram-free=256MiB');
-      expect(withVramFree('--moe-stream-vram-free 200MiB', 1.5), '--moe-stream-vram-free 1536MiB');
+      expect(withVramFree('-c 4096 --moe-stream-vram-free 200MiB --x 1', vramSize(1)), '-c 4096 --moe-stream-vram-free 1024MiB --x 1');
+      expect(withVramFree('--moe-stream-vram-free=200MiB', vramSize(0.25)), '--moe-stream-vram-free=256MiB');
+      expect(withVramFree('--moe-stream-vram-free 200MiB', vramSize(1.5)), '--moe-stream-vram-free 1536MiB');
+      expect(withVramFree('--x --moe-stream-vram-free 200MiB', 'CUDA0=1GiB,CUDA1=512MiB'), '--x --moe-stream-vram-free CUDA0=1GiB,CUDA1=512MiB');
     });
 
     test('a CPU recipe has no VRAM flag, and gets none', () {
       for (final table in cpuTables) {
         for (final command in table.values) {
           expect(command, isNot(contains('vram-free')));
-          expect(withVramFree(command, 1), command);
+          expect(withVramFree(command, vramSize(1)), command);
         }
       }
     });
   });
 
-  test('several cards: each faster card\'s own headroom is taken off its memory before its whole layers are counted', () {
-    final cards = [(name: 'CUDA2', mib: 12288), (name: 'CUDA1', mib: 12288), (name: 'CUDA0', mib: 12288)];
-    String layers(List<double> headroom) =>
-        cardFlags(cards, 49, 2, 0.49, headroomGiB: headroom).where((a) => a.contains('=')).join(' ');
-    // (12 - 2.5) / 0.49 = 19 layers each; the slowest card, CUDA0, keeps the first 11 with the pool
-    expect(layers([0, 0, 0]), 'CUDA2=11-29 CUDA1=30-48');
-    expect(layers([8, 0, 0]), 'CUDA2=27-29 CUDA1=30-48'); // CUDA2: (12 - 2.5 - 8) / 0.49 = 3 layers
-    expect(layers([0, 8, 0]), 'CUDA2=27-45 CUDA1=46-48'); // CUDA1: 3 layers
-    expect(layers([20, 0, 0]), 'CUDA2=29-29 CUDA1=30-48', reason: 'a card left with less than a layer still gets one');
-    expect(cardFlags(cards, 49, 2, 0.49), cardFlags(cards, 49, 2, 0.49, headroomGiB: [0, 0, 0]));
+  test('the value of --moe-stream-vram-free: the list form for named cards, the pool\'s card first; one size for an unnamed card', () {
+    const a = (name: 'CUDA2', mib: 12288), b = (name: 'CUDA1', mib: 12288), pool = (name: 'CUDA0', mib: 8192);
+    expect(vramFreeValue([a, b, pool], [1, 0.75, 0.5]), 'CUDA0=512MiB,CUDA2=1024MiB,CUDA1=768MiB');
+    expect(vramFreeValue([b, pool], [0.25, 2]), 'CUDA0=2048MiB,CUDA1=256MiB');
+    expect(vramFreeValue([pool], [1.5]), 'CUDA0=1536MiB');
+    expect(vramFreeValue([(name: '', mib: 12288)], [0.5]), '512MiB');
   });
 
   group('the setting', () {
@@ -301,44 +298,61 @@ void main() {
       expect([for (final c in same) c.key], ['Vulkan0#0', 'Vulkan0#1']);
     });
 
-    test('two cards: each follows its own value - the pool card\'s flag, the faster card\'s layer count', () async {
-      final backend = await withCards([card('CUDA0', 12 * 1024, 10), card('CUDA1', 12 * 1024, 20)]);
-      final file = (await backend.loadCatalog()).first.files.first;
-      String command() => backend.autoCommands(file)[4096]!;
-      int fastLayers(String c) {
-        final m = RegExp(r'CUDA1=(\d+)-(\d+)').firstMatch(c)!;
-        return int.parse(m[2]!) - int.parse(m[1]!) + 1;
-      }
+    String extra(String flags) => '${Platform.isWindows ? '--moe-stream-async-h2d 0 ' : ''}$flags';
 
-      String poolFlag(String c) => RegExp(r'--moe-stream-vram-free \S+').firstMatch(c)![0]!;
-      void save(Map<String, double> byCard) => Storage(dir).writePrefs(PrefsData(vramHeadroom: byCard));
-
-      // the pool is the slower card, CUDA0; a card without a value takes the default
-      final byDefault = command();
-      expect(poolFlag(byDefault), '--moe-stream-vram-free 512MiB');
-      // only the faster card's value changes: its layers follow, the pool's flag stays
-      save({'CUDA1': 4});
-      expect(fastLayers(command()), lessThan(fastLayers(byDefault)));
-      expect(poolFlag(command()), '--moe-stream-vram-free 512MiB');
-      // only the pool card's value changes: its flag follows, the faster card's layers stay
-      save({'CUDA0': 3});
-      expect(poolFlag(command()), '--moe-stream-vram-free 3072MiB');
-      expect(fastLayers(command()), fastLayers(byDefault));
-      // both
-      save({'CUDA0': 1, 'CUDA1': 4});
-      expect(poolFlag(command()), '--moe-stream-vram-free 1024MiB');
-      expect(fastLayers(command()), lessThan(fastLayers(byDefault)));
-      // the older single value reaches every card without a value of its own
-      Storage(dir).writePrefs(const PrefsData(vramHeadroomGiB: 2));
-      expect(poolFlag(command()), '--moe-stream-vram-free 2048MiB');
-      expect(fastLayers(command()), lessThan(fastLayers(byDefault)));
-    });
-
-    test('one card: that card\'s value', () async {
+    test('one card with a name: its own list form; the table\'s command otherwise as it was', () async {
       final backend = await withCards([card('CUDA0', 12 * 1024, 10)]);
       final file = (await backend.loadCatalog()).first.files.first;
       Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA0': 1.5}));
-      expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free 1536MiB'));
+      expect(
+        backend.autoCommands(file)[4096],
+        '${withVramFree(lingAuto[4096]!, 'CUDA0=1536MiB')} ${extra('--device CUDA0')}',
+      );
+      Storage(dir).writePrefs(const PrefsData());
+      expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free CUDA0=512MiB '));
+    });
+
+    test('two cards: the pool card, the faster card named auto, each with its own value; no -ts, no layer ranges', () async {
+      final backend = await withCards([card('CUDA0', 12 * 1024, 10), card('CUDA1', 12 * 1024, 20)]);
+      final file = (await backend.loadCatalog()).first.files.first;
+      Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA0': 1, 'CUDA1': 0.75}));
+      final c = backend.autoCommands(file)[4096]!;
+      expect(
+        c,
+        '${withVramFree(lingAuto[4096]!, 'CUDA0=1024MiB,CUDA1=768MiB')} '
+        '${extra('--device CUDA0,CUDA1 --moe-stream-vram-device CUDA0 --moe-stream-gpu-layers-device CUDA1=auto')}',
+      );
+      expect(c, isNot(contains(' -ts ')));
+      expect(RegExp(r'gpu-layers-device \S+=\d').hasMatch(c), isFalse);
+      // a card without a value takes the default
+      Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA1': 4}));
+      expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free CUDA0=512MiB,CUDA1=4096MiB '));
+      // the older single value reaches every card without one of its own
+      Storage(dir).writePrefs(const PrefsData(vramHeadroomGiB: 2));
+      expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free CUDA0=2048MiB,CUDA1=2048MiB '));
+    });
+
+    test('three cards: the pool is the slowest, the faster ones are named slowest first (the fastest keeps the layers after the pool)', () async {
+      final backend = await withCards([card('CUDA0', 8 * 1024, 5), card('CUDA1', 24 * 1024, 20), card('CUDA2', 12 * 1024, 10)]);
+      final file = (await backend.loadCatalog()).first.files.first;
+      Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA0': 1, 'CUDA1': 0.75, 'CUDA2': 2}));
+      final c = backend.autoCommands(file)[4096]!;
+      expect(
+        c,
+        '${withVramFree(lingAuto[4096]!, 'CUDA0=1024MiB,CUDA1=768MiB,CUDA2=2048MiB')} '
+        '${extra('--device CUDA0,CUDA1,CUDA2 --moe-stream-vram-device CUDA0 '
+            '--moe-stream-gpu-layers-device CUDA2=auto --moe-stream-gpu-layers-device CUDA1=auto')}',
+      );
+      expect(c, isNot(contains(' -ts ')));
+      expect(RegExp(r'gpu-layers-device \S+=\d').hasMatch(c), isFalse);
+    });
+
+    test('CPU-only: no card, or a card under 4 GB, gets the CPU table as it is', () async {
+      for (final cards in [<Map<String, Object?>>[], [card('CUDA0', 2 * 1024, 5)]]) {
+        final backend = await withCards(cards);
+        final file = (await backend.loadCatalog()).first.files.first;
+        expect(backend.autoCommands(file)[4096], lingAutoCpu[4096]);
+      }
     });
   });
 }

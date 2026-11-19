@@ -35,9 +35,6 @@ class _LocalModel {
     required this.flags,
     required this.smallFlags,
     required this.cpuFlags,
-    required this.layers,
-    required this.firstMoe,
-    required this.layerGiB,
     this.thinkingSwitch = false,
   });
 
@@ -50,8 +47,6 @@ class _LocalModel {
   final Map<int, String> flags, smallFlags, cpuFlags;
 
   /// Its layer count, its first MoE layer, and one layer's experts in GiB (for the two-card layout).
-  final int layers, firstMoe;
-  final double layerGiB;
 
   /// Its thinking can be turned off.
   final bool thinkingSwitch;
@@ -161,9 +156,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_lingFile],
       ),
-      layers: 42,
-      firstMoe: 2,
-      layerGiB: 1.494,
       flags: lingAuto,
       smallFlags: lingAutoSmall,
       cpuFlags: lingAutoCpu,
@@ -180,9 +172,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.always,
         files: [_flintFile],
       ),
-      layers: 49,
-      firstMoe: 2,
-      layerGiB: 0.49,
       flags: flintAuto,
       smallFlags: flintAutoSmall,
       cpuFlags: flintAutoCpu,
@@ -198,9 +187,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_qwenFile],
       ),
-      layers: 48,
-      firstMoe: 0,
-      layerGiB: 1.1,
       flags: qwenAuto,
       smallFlags: qwenAutoSmall,
       cpuFlags: qwenAutoCpu,
@@ -343,11 +329,17 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return [for (var i = 0; i < list.length; i++) (key: keys[i], name: list[i].name, mib: list[i].mib)];
   }
 
+  /// The value of `--moe-stream-vram-free`: each card's own headroom, the pool's card's too (see [vramFreeValue]).
+  String _vramFree(VramHeadroom headroom) {
+    final cards = _cards, keys = cardKeys(cards);
+    return cards.isEmpty ? vramSize(headroom.of('')) : vramFreeValue(cards, [for (final k in keys) headroom.of(k)]);
+  }
+
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
   /// largest card. With several cards all of them share the model, filled fastest first (cardFlags).
   /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
   Map<int, String> _flagsFor(_LocalModel m, VramHeadroom vramHeadroom) {
-    final cards = _cards, keys = cardKeys(cards);
+    final cards = _cards;
     final gib = _largestCardGiB;
     final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
     if (identical(flags, m.cpuFlags)) return flags;
@@ -355,14 +347,13 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
       if (cards.length > 1 && cards.every((c) => c.name.isNotEmpty))
-        ...cardFlags(cards, m.layers, m.firstMoe, m.layerGiB, headroomGiB: [for (final k in keys) vramHeadroom.of(k)])
+        ...cardFlags(cards)
       // one card: named, so a built-in GPU chosen for lack of a separate card is the one used
       else if (cards.length == 1 && cards[0].name.isNotEmpty)
         '--device ${cards[0].name}',
     ].join(' ');
-    // the slowest card holds the pool: its own headroom is the pool's free VRAM
-    final pool = vramHeadroom.of(keys.last);
-    return {for (final e in flags.entries) e.key: withVramFree(extra.isEmpty ? e.value : '${e.value} $extra', pool)};
+    final free = _vramFree(vramHeadroom);
+    return {for (final e in flags.entries) e.key: withVramFree(extra.isEmpty ? e.value : '${e.value} $extra', free)};
   }
 
   static _LocalModel _local(ModelFile file) => _models.firstWhere((m) => m.model.files.contains(file));
@@ -1014,9 +1005,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final tuned = await _tuned(local);
     // the table's row as the autotuner's card list now picks it (the first start may have shown another)
-    final keys = cardKeys(_cards);
-    final pool = run.vramHeadroom.of(keys.isEmpty ? '' : keys.last);
-    final flags = EngineFlags.parse(withVramFree(_flagsFor(local, run.vramHeadroom)[run.contextLength] ?? run.flags, pool));
+    final flags = EngineFlags.parse(
+      withVramFree(_flagsFor(local, run.vramHeadroom)[run.contextLength] ?? run.flags, _vramFree(run.vramHeadroom)),
+    );
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
     final EngineProcess engine;

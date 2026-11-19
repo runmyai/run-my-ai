@@ -28,15 +28,13 @@ void main() {
     ]);
   });
 
-  test('several cards: the faster ones take whole last layers, the slowest the first layers with the pool', () {
-    expect(cardFlags([(name: 'CUDA1', mib: 11911), (name: 'CUDA0', mib: 11909)], 49, 2, 0.49), [
-      '--device', 'CUDA0,CUDA1', '-ts', '31,18',
-      '--moe-stream-vram-device', 'CUDA0', '--moe-stream-gpu-layers-device', 'CUDA1=31-48',
+  test('several cards: the slowest holds the pool, the faster ones are named slowest first and the engine counts their layers', () {
+    expect(cardFlags([(name: 'CUDA1', mib: 11911), (name: 'CUDA0', mib: 11909)]), [
+      '--device', 'CUDA0,CUDA1', '--moe-stream-vram-device', 'CUDA0', '--moe-stream-gpu-layers-device', 'CUDA1=auto',
     ]);
-    expect(cardFlags([(name: 'CUDA0', mib: 24576), (name: 'CUDA2', mib: 12288), (name: 'CUDA1', mib: 8192)], 49, 2, 0.49), [
-      '--device', 'CUDA1,CUDA0,CUDA2', '-ts', '4,43,2',
-      '--moe-stream-vram-device', 'CUDA1',
-      '--moe-stream-gpu-layers-device', 'CUDA0=4-46', '--moe-stream-gpu-layers-device', 'CUDA2=47-48',
+    expect(cardFlags([(name: 'CUDA0', mib: 24576), (name: 'CUDA2', mib: 12288), (name: 'CUDA1', mib: 8192)]), [
+      '--device', 'CUDA1,CUDA0,CUDA2', '--moe-stream-vram-device', 'CUDA1',
+      '--moe-stream-gpu-layers-device', 'CUDA2=auto', '--moe-stream-gpu-layers-device', 'CUDA0=auto',
     ]);
   });
 

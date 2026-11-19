@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 
 /// The autotuner's result: the last JSON line it printed (a driver may print its own lines before it), or null.
 Map<String, dynamic>? parseAutotunerJson(String stdout) {
@@ -40,35 +39,34 @@ List<String> withTuning(List<String> args, Map<String, dynamic>? t) {
   return out;
 }
 
-/// Several cards share the model, filled fastest first (the autotuner's measured read speed): the faster cards each run a
-/// run of the last layers completely, as whole layers - as many as their memory holds - and the slowest card runs the first
-/// layers with the expert pool, RAM and SSD behind it. One hand-over between cards per run of layers. Measured with two RTX 3060:
-/// Flint 72.8 tok/s against 53.2 on one card, Qwen 25.2 against 19.2, long prompts faster too.
-/// Each faster card also keeps its own [headroomGiB] free (one per card, in the order of [cards]) for the desktop and other
-/// apps; the slowest card's is the engine's own flag.
-/// shortcut: whole layers per card as (memory - 2.5 GiB - headroom) / one layer's experts - the engine streams the ones that do not fit
-List<String> cardFlags(List<({String name, int mib})> cards, int layers, int firstMoe, double layerGiB, {List<double>? headroomGiB}) {
+/// Several cards share the model, filled fastest first (the autotuner's measured read speed): the slowest card runs the first
+/// layers with the expert pool, RAM and SSD behind it, and each faster card runs a run of the last layers completely, as
+/// whole layers - as many as its memory holds while it keeps its VRAM headroom: the engine counts them (`X=auto`). One
+/// hand-over between cards per run of layers. Measured with two RTX 3060: Flint 72.8 tok/s against 53.2 on one card, Qwen
+/// 25.2 against 19.2, long prompts faster too.
+/// The engine gives the very last layers to the first card named `auto`, the layers before those to the next: the faster
+/// cards are named slowest first, so the fastest card has the layers right after the pool's, as before.
+List<String> cardFlags(List<({String name, int mib})> cards) {
   final pool = cards.last, fast = cards.sublist(0, cards.length - 1);
-  var left = layers - firstMoe - 2;   // at least the dense layers and two MoE layers stay with the pool
-  final counts = <int>[];
-  for (var i = 0; i < fast.length; i++) {
-    final c = fast[i];
-    final n = min(left, max(1, ((c.mib / 1024 - 2.5 - (headroomGiB?[i] ?? 0)) / layerGiB).floor()));
-    counts.add(n);
-    left -= n;
-  }
-  final nPool = layers - counts.fold(0, (a, n) => a + n);
-  final args = [
+  return [
     '--device', [pool.name, for (final c in fast) c.name].join(','),
-    '-ts', [nPool, ...counts].join(','),
     '--moe-stream-vram-device', pool.name,
+    for (final c in fast.reversed) ...['--moe-stream-gpu-layers-device', '${c.name}=auto'],
   ];
-  var first = nPool;
-  for (var i = 0; i < fast.length; i++) {
-    if (counts[i] > 0) args.addAll(['--moe-stream-gpu-layers-device', '${fast[i].name}=$first-${first + counts[i] - 1}']);
-    first += counts[i];
-  }
-  return args;
+}
+
+/// A size of graphics card memory as the engine reads it, in MiB.
+String vramSize(double gib) => '${(gib * 1024).round()}MiB';
+
+/// The value of `--moe-stream-vram-free`: each card's own VRAM headroom ([headroomGiB], one per card in the order of [cards]).
+/// Named cards get the list form (`POOL=512MiB,FAST=...`, the pool's card first), which also keeps the headroom free when the
+/// engine fits whole layers; cards without a name yet (read before the autotuner's first run) the pool's single size.
+String vramFreeValue(List<({String name, int mib})> cards, List<double> headroomGiB) {
+  if (cards.any((c) => c.name.isEmpty)) return vramSize(headroomGiB.last);
+  final last = cards.length - 1;
+  return [
+    for (final i in [last, for (var i = 0; i < last; i++) i]) '${cards[i].name}=${vramSize(headroomGiB[i])}',
+  ].join(',');
 }
 
 /// What each card's setting is saved under: its name as the engine lists it (with its place in the list when two cards
