@@ -40,6 +40,11 @@ String withContextLength(String command, int length) =>
 /// The RAM left free for the system and other apps when the user has not set it.
 const defaultHeadroomGiB = 1.5;
 
+/// The graphics card memory (VRAM) left free for the desktop and other apps when the user has not set it, and the least
+/// they may set.
+const defaultVramHeadroomGiB = 0.5;
+const minVramHeadroomGiB = 0.25;
+
 /// The context cache types the app offers: the engine's names.
 const kvTypes = ['q4_0', 'q8_0', 'f16'];
 
@@ -62,6 +67,13 @@ String withRamFree(String command, double gib) {
     return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-ram-free${m[2]}$str');
   }
   return '$command --moe-stream-ram-free $str';
+}
+
+/// [command] with the value of its --moe-stream-vram-free set to [gib]; a command without that flag (no graphics card
+/// memory in use) is unchanged.
+String withVramFree(String command, double gib) {
+  final pattern = RegExp(r'(^|\s)--moe-stream-vram-free([ =])\S+');
+  return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-vram-free${m[2]}${(gib * 1024).round()}MiB');
 }
 
 /// The smallest context length a command may use.

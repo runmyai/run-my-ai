@@ -889,9 +889,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   }
 
   /// How [run] starts an engine: an engine already running is the one asked for only if it was started with the
-  /// same flags and memory cap.
+  /// same flags, memory cap and graphics card headroom.
   @visibleForTesting
-  static String startedWith(EngineRun run) => '${run.memoryCapGiB}\n${run.flags}';
+  static String startedWith(EngineRun run) => '${run.memoryCapGiB}\n${run.vramHeadroomGiB}\n${run.flags}';
 
   /// Whether [engine] is the one asked for: running the model [modelId] at the length [run] says, started with its
   /// flags and memory cap. One started another way (a benchmark's test flags left running) is started again.
@@ -992,7 +992,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final tuned = await _tuned(local);
     // the table's row as the autotuner's card list now picks it (the first start may have shown another)
-    final flags = EngineFlags.parse(_flagsFor(local)[run.contextLength] ?? run.flags);
+    final flags = EngineFlags.parse(
+      withVramFree(_flagsFor(local)[run.contextLength] ?? run.flags, run.vramHeadroomGiB ?? defaultVramHeadroomGiB),
+    );
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
     final EngineProcess engine;

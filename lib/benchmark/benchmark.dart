@@ -326,6 +326,7 @@ class BenchmarkResult {
     required this.log,
     required this.disturbed,
     this.id,
+    this.vramHeadroomGiB,
     this.promptText = '',
     this.thinking,
     this.replyText = '',
@@ -348,6 +349,9 @@ class BenchmarkResult {
   final String profileName;
   final String flags;
   final double? memoryCapGiB;
+
+  /// The graphics card memory left free; null in a run saved before it was recorded.
+  final double? vramHeadroomGiB;
   final String promptLabel;
   final int replyLength;
   final List<String> warmups;
@@ -440,6 +444,7 @@ class BenchmarkResult {
     profileName: profileName,
     flags: flags,
     memoryCapGiB: memoryCapGiB,
+    vramHeadroomGiB: vramHeadroomGiB,
     promptLabel: promptLabel,
     replyLength: replyLength,
     warmups: warmups,
@@ -474,6 +479,7 @@ class BenchmarkResult {
     'profileName': profileName,
     'flags': flags,
     'memoryCapGiB': memoryCapGiB,
+    if (vramHeadroomGiB != null) 'vramHeadroomGiB': vramHeadroomGiB,
     'promptLabel': promptLabel,
     'replyLength': replyLength,
     'warmups': warmups,
@@ -509,6 +515,7 @@ class BenchmarkResult {
     profileName: j['profileName']! as String,
     flags: j['flags']! as String,
     memoryCapGiB: (j['memoryCapGiB'] as num?)?.toDouble(),
+    vramHeadroomGiB: (j['vramHeadroomGiB'] as num?)?.toDouble(),
     promptLabel: j['promptLabel']! as String,
     replyLength: j['replyLength']! as int,
     warmups: (j['warmups']! as List).cast<String>(),

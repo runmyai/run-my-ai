@@ -63,12 +63,13 @@ class ReplyLoaded extends ReplyEvent {
   const ReplyLoaded();
 }
 
-/// How to run a model: the engine's flags, the context length they set, and the memory cap.
+/// How to run a model: the engine's flags, the context length they set, the memory cap and the graphics card headroom.
 class EngineRun {
   const EngineRun({
     required this.flags,
     required this.contextLength,
     this.memoryCapGiB,
+    this.vramHeadroomGiB,
     this.keepState = true,
     this.reportProgress = false,
   });
@@ -79,6 +80,9 @@ class EngineRun {
   /// Null: all the RAM but 1 GB.
   final double? memoryCapGiB;
 
+  /// The graphics card memory left free; null: [defaultVramHeadroomGiB].
+  final double? vramHeadroomGiB;
+
   /// What a request asks besides the chat (these do not change how the engine starts): whether the engine saves the
   /// conversation's state when the reply ends, and whether it reports how far it is in reading the prompt.
   final bool keepState;
@@ -88,6 +92,7 @@ class EngineRun {
     flags: flags,
     contextLength: contextLength,
     memoryCapGiB: memoryCapGiB,
+    vramHeadroomGiB: vramHeadroomGiB,
     keepState: keepState,
     reportProgress: reportProgress,
   );
@@ -96,6 +101,7 @@ class EngineRun {
     flags: flags,
     contextLength: contextLength,
     memoryCapGiB: memoryCapGiB,
+    vramHeadroomGiB: vramHeadroomGiB,
     keepState: false,
     reportProgress: true,
   );

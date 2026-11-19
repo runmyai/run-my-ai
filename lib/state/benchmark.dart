@@ -15,6 +15,7 @@ import '../benchmark/series.dart';
 import '../benchmark/share.dart';
 import '../data/chat_db.dart' show ChatDb;
 import '../data/models.dart';
+import '../engine/commands.dart';
 import '../engine/engine_flags.dart';
 import '../engine/engine_process.dart';
 import 'about.dart';
@@ -511,6 +512,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         profileName: profileName,
         flags: run.flags,
         memoryCapGiB: run.memoryCapGiB,
+        vramHeadroomGiB: run.vramHeadroomGiB ?? defaultVramHeadroomGiB,
         promptLabel: setup.test.label,
         replyLength: setup.replyLength,
         warmups: setup.warmups,

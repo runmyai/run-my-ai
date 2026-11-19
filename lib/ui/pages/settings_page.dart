@@ -182,6 +182,8 @@ class _SettingsList extends ConsumerWidget {
         const _StateLimit(),
         const SizedBox(height: 20),
         const _Headroom(),
+        const SizedBox(height: 20),
+        const _VramHeadroom(),
         const SizedBox(height: 28),
         const FoldersSection(),
         const SizedBox(height: 28),
@@ -308,6 +310,32 @@ class _Headroom extends ConsumerWidget {
           Text('Download a model from the Store first.', style: TextStyle(fontSize: 13, color: c.textMuted))
         else
           HeadroomInput(file: entry.file),
+      ],
+    );
+  }
+}
+
+/// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs (shared by all models).
+class _VramHeadroom extends StatelessWidget {
+  const _VramHeadroom();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'VRAM headroom',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        const VramHeadroomInput(),
       ],
     );
   }

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../backend/backend.dart';
 import '../data/models.dart';
 import '../engine/commands.dart';
+import 'prefs.dart';
 import 'providers.dart';
 
 /// The profile that comes with each model. It cannot be changed; its commands can be copied.
@@ -124,7 +125,12 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
       command = withRamFree(command, headroom);
     }
     if (state[file.id]?.kv[length] case final type?) command = withKvType(command, type);
-    return EngineRun(flags: command, contextLength: length, memoryCapGiB: profile.memoryCapGiB);
+    return EngineRun(
+      flags: command,
+      contextLength: length,
+      memoryCapGiB: profile.memoryCapGiB,
+      vramHeadroomGiB: ref.read(prefsProvider).vramHeadroomGiB,
+    );
   }
 
   /// How to run [file] at [contextLength] with the profile [id].
@@ -141,6 +147,7 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
       flags: command,
       contextLength: length,
       memoryCapGiB: profile.memoryCapGiB,
+      vramHeadroomGiB: ref.read(prefsProvider).vramHeadroomGiB,
     );
   }
 

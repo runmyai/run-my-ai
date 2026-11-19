@@ -28,6 +28,7 @@ class PrefsData {
     this.speedHighlighted = false,
     this.stateLimitGiB = defaultStateLimitGiB,
     this.shareBenchmarks = true,
+    this.vramHeadroomGiB,
   });
 
   static const defaultStateLimitGiB = 10.0;
@@ -61,6 +62,9 @@ class PrefsData {
 
   /// The benchmark numbers (the hardware and the speeds, never a chat) may be shared.
   final bool shareBenchmarks;
+
+  /// The graphics card memory the engine leaves free; null: the default.
+  final double? vramHeadroomGiB;
 }
 
 /// Where the window was when it was last moved or resized: its normal size and place (also kept
@@ -125,6 +129,7 @@ class Storage {
       speedHighlighted: json['speedHighlighted'] as bool? ?? false,
       stateLimitGiB: (json['stateLimitGiB'] as num?)?.toDouble() ?? PrefsData.defaultStateLimitGiB,
       shareBenchmarks: json['shareBenchmarks'] as bool? ?? true,
+      vramHeadroomGiB: (json['vramHeadroomGiB'] as num?)?.toDouble(),
     );
   }
 
@@ -140,6 +145,7 @@ class Storage {
     'speedHighlighted': data.speedHighlighted,
     'stateLimitGiB': data.stateLimitGiB,
     'shareBenchmarks': data.shareBenchmarks,
+    'vramHeadroomGiB': data.vramHeadroomGiB,
   });
 
   WindowData? readWindow() {
