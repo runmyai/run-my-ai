@@ -29,6 +29,7 @@ class PrefsData {
     this.stateLimitGiB = defaultStateLimitGiB,
     this.shareBenchmarks = true,
     this.vramHeadroomGiB,
+    this.vramHeadroom = const {},
   });
 
   static const defaultStateLimitGiB = 10.0;
@@ -63,8 +64,12 @@ class PrefsData {
   /// The benchmark numbers (the hardware and the speeds, never a chat) may be shared.
   final bool shareBenchmarks;
 
-  /// The graphics card memory the engine leaves free; null: the default.
+  /// The one value older versions saved for the graphics card memory left free: read as the value of every card that has none
+  /// of its own, kept as it is, never written new.
   final double? vramHeadroomGiB;
+
+  /// The graphics card memory left free on each card, by the card's key (lib/engine/tuning.dart, [cardKeys]).
+  final Map<String, double> vramHeadroom;
 }
 
 /// Where the window was when it was last moved or resized: its normal size and place (also kept
@@ -130,6 +135,10 @@ class Storage {
       stateLimitGiB: (json['stateLimitGiB'] as num?)?.toDouble() ?? PrefsData.defaultStateLimitGiB,
       shareBenchmarks: json['shareBenchmarks'] as bool? ?? true,
       vramHeadroomGiB: (json['vramHeadroomGiB'] as num?)?.toDouble(),
+      vramHeadroom: {
+        for (final MapEntry(:key, :value) in (json['vramHeadroom'] as Map? ?? const {}).entries)
+          if (value is num) '$key': value.toDouble(),
+      },
     );
   }
 
@@ -145,7 +154,8 @@ class Storage {
     'speedHighlighted': data.speedHighlighted,
     'stateLimitGiB': data.stateLimitGiB,
     'shareBenchmarks': data.shareBenchmarks,
-    'vramHeadroomGiB': data.vramHeadroomGiB,
+    if (data.vramHeadroomGiB != null) 'vramHeadroomGiB': data.vramHeadroomGiB,
+    if (data.vramHeadroom.isNotEmpty) 'vramHeadroom': data.vramHeadroom,
   });
 
   WindowData? readWindow() {

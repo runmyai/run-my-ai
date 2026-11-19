@@ -335,16 +335,19 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return cards.isEmpty ? 0.0 : cards.map((c) => c.mib).reduce(max) / 1024;
   }
 
-  /// Whether there is a graphics card the engine can use: a separate card of any size and make, or a built-in GPU with
-  /// 24 GiB or more (the autotuner's list, [cardsFrom]; before its first run the one-time reading).
+  /// The cards the engine can use: the autotuner's list ([cardsFrom]: separate cards of any size and make, a built-in GPU
+  /// with 24 GiB or more); before its first run the one-time reading.
   @override
-  bool get hasCard => _cards.isNotEmpty;
+  List<({String key, String name, int mib})> get cards {
+    final list = _cards, keys = cardKeys(list);
+    return [for (var i = 0; i < list.length; i++) (key: keys[i], name: list[i].name, mib: list[i].mib)];
+  }
 
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
   /// largest card. With several cards all of them share the model, filled fastest first (cardFlags).
   /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
-  Map<int, String> _flagsFor(_LocalModel m, double vramHeadroomGiB) {
-    final cards = _cards;
+  Map<int, String> _flagsFor(_LocalModel m, VramHeadroom vramHeadroom) {
+    final cards = _cards, keys = cardKeys(cards);
     final gib = _largestCardGiB;
     final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
     if (identical(flags, m.cpuFlags)) return flags;
@@ -352,12 +355,14 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
       if (cards.length > 1 && cards.every((c) => c.name.isNotEmpty))
-        ...cardFlags(cards, m.layers, m.firstMoe, m.layerGiB, headroomGiB: vramHeadroomGiB)
+        ...cardFlags(cards, m.layers, m.firstMoe, m.layerGiB, headroomGiB: [for (final k in keys) vramHeadroom.of(k)])
       // one card: named, so a built-in GPU chosen for lack of a separate card is the one used
       else if (cards.length == 1 && cards[0].name.isNotEmpty)
         '--device ${cards[0].name}',
     ].join(' ');
-    return {for (final e in flags.entries) e.key: withVramFree(extra.isEmpty ? e.value : '${e.value} $extra', vramHeadroomGiB)};
+    // the slowest card holds the pool: its own headroom is the pool's free VRAM
+    final pool = vramHeadroom.of(keys.last);
+    return {for (final e in flags.entries) e.key: withVramFree(extra.isEmpty ? e.value : '${e.value} $extra', pool)};
   }
 
   static _LocalModel _local(ModelFile file) => _models.firstWhere((m) => m.model.files.contains(file));
@@ -399,9 +404,15 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       ? Stream.value(1)
       : Stream.error(EngineFailure('The model file is not on this computer: ${_modelPath(_local(file))}'));
 
+  /// The graphics card headroom saved in the settings.
+  VramHeadroom _vramHeadroom() {
+    final prefs = _storage.readPrefs();
+    return VramHeadroom(byCard: prefs.vramHeadroom, others: prefs.vramHeadroomGiB ?? defaultVramHeadroomGiB);
+  }
+
   @override
   Map<int, String> autoCommands(ModelFile file) =>
-      _flagsFor(_local(file), vramHeadroomOf(_storage.readPrefs().vramHeadroomGiB));
+      _flagsFor(_local(file), _vramHeadroom());
 
   @override
   int maxContext(ModelFile file) {
@@ -902,7 +913,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// How [run] starts an engine: an engine already running is the one asked for only if it was started with the
   /// same flags, memory cap and graphics card headroom.
   @visibleForTesting
-  static String startedWith(EngineRun run) => '${run.memoryCapGiB}\n${run.vramHeadroomGiB}\n${run.flags}';
+  static String startedWith(EngineRun run) => '${run.memoryCapGiB}\n${run.vramHeadroom.key}\n${run.flags}';
 
   /// Whether [engine] is the one asked for: running the model [modelId] at the length [run] says, started with its
   /// flags and memory cap. One started another way (a benchmark's test flags left running) is started again.
@@ -1003,8 +1014,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final tuned = await _tuned(local);
     // the table's row as the autotuner's card list now picks it (the first start may have shown another)
-    final headroom = vramHeadroomOf(run.vramHeadroomGiB);
-    final flags = EngineFlags.parse(withVramFree(_flagsFor(local, headroom)[run.contextLength] ?? run.flags, headroom));
+    final keys = cardKeys(_cards);
+    final pool = run.vramHeadroom.of(keys.isEmpty ? '' : keys.last);
+    final flags = EngineFlags.parse(withVramFree(_flagsFor(local, run.vramHeadroom)[run.contextLength] ?? run.flags, pool));
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
     final EngineProcess engine;

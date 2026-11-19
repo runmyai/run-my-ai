@@ -316,23 +316,32 @@ class _Headroom extends ConsumerWidget {
   }
 }
 
-/// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs (shared by all models).
+/// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs: one row per card the
+/// engine can use (the same for every model).
 class _VramHeadroom extends ConsumerWidget {
   const _VramHeadroom();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final backend = ref.watch(backendProvider);
-    // Shown only where the engine runs on a graphics card (the card list is read again when a tune ends).
     if (backend is! TuneControl) return const SizedBox.shrink();
     final tune = backend as TuneControl;
+    // (The cards are read again when a tune ends.)
     return ValueListenableBuilder<String?>(
       valueListenable: tune.tuning,
-      builder: (context, _, _) => tune.hasCard ? _row(context.colors) : const SizedBox.shrink(),
+      builder: (context, _, _) {
+        final cards = tune.cards;
+        return cards.isEmpty ? const SizedBox.shrink() : _section(context.colors, cards);
+      },
     );
   }
 
-  Widget _row(AppColors c) => Padding(
+  static String _gb(int mib) {
+    final gb = (mib / 1024).toStringAsFixed(1);
+    return '${gb.endsWith('.0') ? gb.substring(0, gb.length - 2) : gb} GB';
+  }
+
+  Widget _section(AppColors c, List<({String key, String name, int mib})> cards) => Padding(
     padding: const EdgeInsets.only(top: 20),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -346,8 +355,16 @@ class _VramHeadroom extends ConsumerWidget {
           'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
           style: TextStyle(fontSize: 13, color: c.textSecondary),
         ),
-        const SizedBox(height: 12),
-        const VramHeadroomInput(),
+        for (final card in cards) ...[
+          const SizedBox(height: 12),
+          Text(
+            card.name.isEmpty ? 'Graphics card, ${_gb(card.mib)}' : '${card.name}, ${_gb(card.mib)}',
+            key: Key('vram-card-${card.key}'),
+            style: TextStyle(fontSize: 13, color: c.text),
+          ),
+          const SizedBox(height: 6),
+          VramHeadroomInput(card: card.key),
+        ],
       ],
     ),
   );

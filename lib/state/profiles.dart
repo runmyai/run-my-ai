@@ -129,7 +129,7 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
       flags: command,
       contextLength: length,
       memoryCapGiB: profile.memoryCapGiB,
-      vramHeadroomGiB: ref.read(prefsProvider).vramHeadroomGiB,
+      vramHeadroom: ref.read(prefsProvider).vramHeadroomSetting,
     );
   }
 
@@ -147,7 +147,7 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
       flags: command,
       contextLength: length,
       memoryCapGiB: profile.memoryCapGiB,
-      vramHeadroomGiB: ref.read(prefsProvider).vramHeadroomGiB,
+      vramHeadroom: ref.read(prefsProvider).vramHeadroomSetting,
     );
   }
 

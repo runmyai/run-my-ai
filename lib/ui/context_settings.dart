@@ -231,21 +231,22 @@ class _HeadroomInputState extends ConsumerState<HeadroomInput> {
   }
 }
 
-/// The graphics card memory (VRAM) left free for the desktop and other apps, with Save and Reset.
+/// The graphics card memory (VRAM) left free on one card ([card]: its key), with Save and Reset.
 class VramHeadroomInput extends ConsumerStatefulWidget {
-  const VramHeadroomInput({super.key});
+  const VramHeadroomInput({super.key, required this.card});
+
+  final String card;
 
   @override
   ConsumerState<VramHeadroomInput> createState() => _VramHeadroomInputState();
 }
 
 class _VramHeadroomInputState extends ConsumerState<VramHeadroomInput> {
-  static String _show(double? gib) {
-    final v = gib ?? defaultVramHeadroomGiB;
-    return v == v.roundToDouble() ? '${v.round()}' : '$v';
-  }
+  static String _show(double gib) => gib == gib.roundToDouble() ? '${gib.round()}' : '$gib';
 
-  late final _text = TextEditingController(text: _show(ref.read(prefsProvider).vramHeadroomGiB));
+  double _current(WidgetRef ref) => ref.read(prefsProvider).vramHeadroomSetting.of(widget.card);
+
+  late final _text = TextEditingController(text: _show(_current(ref)));
   String? _problem;
 
   @override
@@ -260,18 +261,18 @@ class _VramHeadroomInputState extends ConsumerState<VramHeadroomInput> {
       setState(() => _problem = 'Enter a number of GB (e.g. 0.5 or 1).');
       return;
     }
-    ref.read(prefsProvider.notifier).setVramHeadroom(gib);
+    ref.read(prefsProvider.notifier).setVramHeadroom(widget.card, gib);
     setState(() {
       _problem = null;
       // (A value under the minimum shows as the minimum it was raised to.)
-      _text.text = _show(ref.read(prefsProvider).vramHeadroomGiB);
+      _text.text = _show(_current(ref));
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final current = ref.watch(prefsProvider.select((p) => p.vramHeadroomGiB));
+    final current = ref.watch(prefsProvider.select((p) => p.vramHeadroomSetting.of(widget.card)));
     final dirty = _text.text.trim() != _show(current);
 
     return Column(
@@ -282,7 +283,7 @@ class _VramHeadroomInputState extends ConsumerState<VramHeadroomInput> {
             SizedBox(
               width: 160,
               child: TextField(
-                key: const Key('vram-headroom'),
+                key: Key('vram-headroom-${widget.card}'),
                 controller: _text,
                 onChanged: (_) => setState(() => _problem = null),
                 style: TextStyle(fontSize: 13, color: c.text),
@@ -294,9 +295,10 @@ class _VramHeadroomInputState extends ConsumerState<VramHeadroomInput> {
             Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
             if (dirty) ...[
               const SizedBox(width: 12),
-              MainButton(key: const Key('vram-headroom-save'), label: 'Save', onTap: _save),
+              MainButton(key: Key('vram-headroom-save-${widget.card}'), label: 'Save', onTap: _save),
               const SizedBox(width: 6),
               AppButton(
+                key: Key('vram-headroom-reset-${widget.card}'),
                 label: 'Reset',
                 onTap: () => setState(() {
                   _text.text = _show(current);

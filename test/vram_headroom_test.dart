@@ -47,10 +47,10 @@ class _Backend implements Backend {
   Future<void> deleteDownload(ModelFile file) async {}
 }
 
-/// A backend that says whether this PC has a card, and a tune that can end.
+/// A backend with the cards it is told of, and a tune that can end.
 class _GpuBackend extends _Backend implements TuneControl {
   @override
-  bool hasCard = true;
+  List<({String key, String name, int mib})> cards = const [(key: 'CUDA0', name: 'CUDA0', mib: 12288)];
   final tuned = ValueNotifier<String?>(null);
   @override
   ValueListenable<String?> get tuning => tuned;
@@ -91,15 +91,16 @@ void main() {
     });
   });
 
-  test('several cards: the headroom is taken off each faster card\'s memory before its whole layers are counted', () {
-    final cards = [(name: 'CUDA1', mib: 12288), (name: 'CUDA0', mib: 12288)];
-    String fast(double headroom) =>
-        cardFlags(cards, 49, 2, 0.49, headroomGiB: headroom).join(' ').replaceFirst(RegExp(r'.*CUDA1='), '');
-    expect(fast(0), '30-48'); // (12 - 2.5) / 0.49: 19 layers
-    expect(fast(1), '32-48'); // (12 - 2.5 - 1) / 0.49: 17 layers
-    expect(fast(8), '46-48'); // 3 layers
-    // (A card that is left with less than one layer still gets one.)
-    expect(fast(20), '48-48');
+  test('several cards: each faster card\'s own headroom is taken off its memory before its whole layers are counted', () {
+    final cards = [(name: 'CUDA2', mib: 12288), (name: 'CUDA1', mib: 12288), (name: 'CUDA0', mib: 12288)];
+    String layers(List<double> headroom) =>
+        cardFlags(cards, 49, 2, 0.49, headroomGiB: headroom).where((a) => a.contains('=')).join(' ');
+    // (12 - 2.5) / 0.49 = 19 layers each; the slowest card, CUDA0, keeps the first 11 with the pool
+    expect(layers([0, 0, 0]), 'CUDA2=11-29 CUDA1=30-48');
+    expect(layers([8, 0, 0]), 'CUDA2=27-29 CUDA1=30-48'); // CUDA2: (12 - 2.5 - 8) / 0.49 = 3 layers
+    expect(layers([0, 8, 0]), 'CUDA2=27-45 CUDA1=46-48'); // CUDA1: 3 layers
+    expect(layers([20, 0, 0]), 'CUDA2=29-29 CUDA1=30-48', reason: 'a card left with less than a layer still gets one');
+    expect(cardFlags(cards, 49, 2, 0.49), cardFlags(cards, 49, 2, 0.49, headroomGiB: [0, 0, 0]));
   });
 
   group('the setting', () {
@@ -118,87 +119,110 @@ void main() {
       dir.deleteSync(recursive: true);
     });
 
-    test('0.5 GB until set, and a run carries what is set', () {
-      expect(container.read(prefsProvider).vramHeadroomGiB, isNull);
-      expect(container.read(profilesProvider.notifier).runFor(_file, 4096).vramHeadroomGiB, isNull);
-      container.read(prefsProvider.notifier).setVramHeadroom(1);
-      expect(container.read(profilesProvider.notifier).runFor(_file, 4096).vramHeadroomGiB, 1);
-      expect(container.read(profilesProvider.notifier).runWith(_file, autoProfileId, 4096).vramHeadroomGiB, 1);
+    VramHeadroom setting(ProviderContainer c) => c.read(prefsProvider).vramHeadroomSetting;
+
+    test('0.5 GB for a card without a value, and a run carries what is set', () {
+      expect(setting(container).of('CUDA0'), 0.5);
+      container.read(prefsProvider.notifier).setVramHeadroom('CUDA0', 1);
+      expect(setting(container).of('CUDA0'), 1);
+      expect(setting(container).of('CUDA1'), 0.5, reason: 'another card keeps the default');
+      expect(container.read(profilesProvider.notifier).runFor(_file, 4096).vramHeadroom.of('CUDA0'), 1);
+      expect(container.read(profilesProvider.notifier).runWith(_file, autoProfileId, 4096).vramHeadroom.of('CUDA0'), 1);
     });
 
     test('never under 0.25 GB', () {
-      container.read(prefsProvider.notifier).setVramHeadroom(0.1);
-      expect(container.read(prefsProvider).vramHeadroomGiB, minVramHeadroomGiB);
+      container.read(prefsProvider.notifier).setVramHeadroom('CUDA0', 0.1);
+      expect(setting(container).of('CUDA0'), minVramHeadroomGiB);
       // (A file edited by hand is raised too.)
-      File('${dir.path}/settings.json').writeAsStringSync('{"vramHeadroomGiB": 0.01}');
+      File('${dir.path}/settings.json').writeAsStringSync('{"vramHeadroom": {"CUDA0": 0.01}, "vramHeadroomGiB": 0.02}');
       final edited = open();
       addTearDown(edited.dispose);
-      expect(edited.read(prefsProvider).vramHeadroomGiB, minVramHeadroomGiB);
+      expect(setting(edited).of('CUDA0'), minVramHeadroomGiB);
+      expect(setting(edited).of('CUDA1'), minVramHeadroomGiB);
     });
 
-    test('it survives a restart, and the default is saved as no value', () {
-      container.read(prefsProvider.notifier).setVramHeadroom(2);
+    test('each card keeps its own value across a restart', () {
+      container.read(prefsProvider.notifier)
+        ..setVramHeadroom('CUDA0', 2)
+        ..setVramHeadroom('CUDA1', 0.75);
       final restarted = open();
       addTearDown(restarted.dispose);
-      expect(restarted.read(prefsProvider).vramHeadroomGiB, 2);
-      restarted.read(prefsProvider.notifier).setVramHeadroom(defaultVramHeadroomGiB);
-      expect(restarted.read(prefsProvider).vramHeadroomGiB, isNull);
+      expect(setting(restarted).of('CUDA0'), 2);
+      expect(setting(restarted).of('CUDA1'), 0.75);
+      expect(setting(restarted).of('CUDA2'), 0.5);
+    });
+
+    test('the single value older versions saved is the value of every card without its own, and is not changed', () {
+      File('${dir.path}/settings.json').writeAsStringSync('{"vramHeadroomGiB": 1.5}');
+      final old = open();
+      addTearDown(old.dispose);
+      expect(setting(old).of('CUDA0'), 1.5);
+      expect(setting(old).of('CUDA1'), 1.5);
+      old.read(prefsProvider.notifier).setVramHeadroom('CUDA0', 0.5);
+      expect(setting(old).of('CUDA0'), 0.5, reason: 'its own value, even the default');
+      expect(setting(old).of('CUDA1'), 1.5);
+      final saved = jsonDecode(File('${dir.path}/settings.json').readAsStringSync()) as Map;
+      expect(saved['vramHeadroomGiB'], 1.5, reason: 'kept as it was');
+      expect(saved['vramHeadroom'], {'CUDA0': 0.5});
     });
 
     test('a change starts the engine again at the next load', () {
       const a = EngineRun(flags: '-c 4096', contextLength: 4096);
-      const b = EngineRun(flags: '-c 4096', contextLength: 4096, vramHeadroomGiB: 1);
+      const b = EngineRun(flags: '-c 4096', contextLength: 4096, vramHeadroom: VramHeadroom(byCard: {'CUDA0': 1}));
+      const other = EngineRun(flags: '-c 4096', contextLength: 4096, vramHeadroom: VramHeadroom(byCard: {'CUDA1': 1}));
       expect(EngineBackend.startedWith(a), isNot(EngineBackend.startedWith(b)));
+      expect(EngineBackend.startedWith(b), isNot(EngineBackend.startedWith(other)));
       expect(EngineBackend.startedWith(b), EngineBackend.startedWith(b.withFlags('-c 4096')));
       expect(EngineBackend.startedWith(b.forBenchmark()), EngineBackend.startedWith(b));
     });
 
-    testWidgets('Settings: a value under the minimum is raised and saved; Reset puts the saved one back', (tester) async {
+    testWidgets('a card\'s box: a value under the minimum is raised and saved; Reset puts the saved one back', (tester) async {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: MaterialApp(theme: buildTheme(Brightness.dark), home: const Scaffold(body: VramHeadroomInput())),
+          child: MaterialApp(theme: buildTheme(Brightness.dark), home: const Scaffold(body: VramHeadroomInput(card: 'CUDA0'))),
         ),
       );
-      final box = find.byKey(const Key('vram-headroom'));
+      final box = find.byKey(const Key('vram-headroom-CUDA0'));
+      final save = find.byKey(const Key('vram-headroom-save-CUDA0'));
       expect(tester.widget<TextField>(box).controller!.text, '0.5');
-      expect(find.byKey(const Key('vram-headroom-save')), findsNothing);
+      expect(save, findsNothing);
       await tester.enterText(box, '0.1');
       await tester.pump();
-      await tester.tap(find.byKey(const Key('vram-headroom-save')));
+      await tester.tap(save);
       await tester.pump();
-      expect(container.read(prefsProvider).vramHeadroomGiB, 0.25);
+      expect(setting(container).of('CUDA0'), 0.25);
       expect(tester.widget<TextField>(box).controller!.text, '0.25');
       await tester.enterText(box, 'lots');
       await tester.pump();
-      await tester.tap(find.byKey(const Key('vram-headroom-save')));
+      await tester.tap(save);
       await tester.pump();
       expect(find.textContaining('Enter a number'), findsOneWidget);
-      expect(container.read(prefsProvider).vramHeadroomGiB, 0.25);
-      await tester.tap(find.text('Reset'));
+      expect(setting(container).of('CUDA0'), 0.25);
+      await tester.tap(find.byKey(const Key('vram-headroom-reset-CUDA0')));
       await tester.pump();
       expect(tester.widget<TextField>(box).controller!.text, '0.25');
     });
   });
 
-  test('a benchmark record keeps it, and an old record without it still reads', () {
+  test('a benchmark record keeps the values per card, and an old record without them still reads', () {
     final json = <String, Object?>{
       'at': 0, 'modelName': 'm', 'contextLength': 4096, 'profileName': 'Auto', 'flags': '-c 4096',
       'promptLabel': 'p', 'replyLength': 10, 'warmups': <String>[], 'loadMillis': 1, 'firstTokenMillis': 1,
       'promptTokens': 1, 'promptMillis': 1, 'replyTokens': 1, 'replyMillis': 1, 'tokenGaps': <num>[],
       'engineStats': <String, Object?>{}, 'log': <String>[], 'disturbed': <String>[],
     };
-    expect(BenchmarkResult.fromJson(json).vramHeadroomGiB, isNull);
-    final kept = BenchmarkResult.fromJson({...json, 'vramHeadroomGiB': 0.75});
-    expect(BenchmarkResult.fromJson(kept.toJson()).vramHeadroomGiB, 0.75);
+    expect(BenchmarkResult.fromJson(json).vramHeadroom, isEmpty);
+    final kept = BenchmarkResult.fromJson({'vramHeadroom': {'CUDA0': 0.75, 'CUDA1': 1}, ...json});
+    expect(BenchmarkResult.fromJson(kept.toJson()).vramHeadroom, {'CUDA0': 0.75, 'CUDA1': 1.0});
   });
 
-  group('the row shows only where the engine uses a graphics card', () {
+  group('Settings: one row per graphics card the engine can use', () {
     late Directory dir;
     setUp(() => dir = Directory.systemTemp.createTempSync('runmyai-vramrow-'));
     tearDown(() => dir.deleteSync(recursive: true));
 
-    Future<void> show(WidgetTester tester, Backend backend) async {
+    Future<ProviderContainer> show(WidgetTester tester, Backend backend) async {
       final container = ProviderContainer(
         overrides: [
           storageProvider.overrideWithValue(Storage(dir)),
@@ -216,25 +240,39 @@ void main() {
           ),
         ),
       );
+      return container;
     }
 
-    testWidgets('shown with a card, hidden without, and the saved value stays', (tester) async {
-      Storage(dir).writePrefs(const PrefsData(vramHeadroomGiB: 2));
-      final backend = _GpuBackend();
-      await show(tester, backend);
-      expect(find.text('VRAM headroom'), findsOneWidget);
-      expect(find.byKey(const Key('vram-headroom')), findsOneWidget);
-      backend.hasCard = false;
+    testWidgets('a row for each card, with its name and memory; none without a card; the saved values stay', (tester) async {
+      Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA1': 2}));
+      final backend = _GpuBackend()
+        ..cards = const [(key: 'CUDA1', name: 'CUDA1', mib: 12288), (key: 'CUDA0', name: 'CUDA0', mib: 8192)];
+      final container = await show(tester, backend);
+      expect(find.text('VRAM headroom'), findsOneWidget, reason: 'one explanation above the rows');
+      expect(find.text('CUDA1, 12 GB'), findsOneWidget);
+      expect(find.text('CUDA0, 8 GB'), findsOneWidget);
+      expect(tester.widget<TextField>(find.byKey(const Key('vram-headroom-CUDA1'))).controller!.text, '2');
+      expect(tester.widget<TextField>(find.byKey(const Key('vram-headroom-CUDA0'))).controller!.text, '0.5');
+      // one card, not yet named (before the autotuner's first run)
+      backend.cards = const [(key: 'gpu', name: '', mib: 12288)];
+      backend.tuned.value = 'm';
+      await tester.pump();
+      backend.tuned.value = null;
+      await tester.pump();
+      expect(find.text('Graphics card, 12 GB'), findsOneWidget);
+      expect(find.byKey(const Key('vram-headroom-CUDA1')), findsNothing);
+      backend.cards = const [];
       backend.tuned.value = 'm';
       await tester.pump();
       backend.tuned.value = null;
       await tester.pump();
       expect(find.text('VRAM headroom'), findsNothing);
-      expect(find.byKey(const Key('vram-headroom')), findsNothing);
-      expect(Storage(dir).readPrefs().vramHeadroomGiB, 2);
+      expect(find.byType(VramHeadroomInput), findsNothing);
+      expect(container.read(prefsProvider).vramHeadroom, {'CUDA1': 2});
+      expect(Storage(dir).readPrefs().vramHeadroom, {'CUDA1': 2});
     });
 
-    testWidgets('hidden when the backend does not measure the PC (no engine)', (tester) async {
+    testWidgets('no section when the backend does not measure the PC (no engine)', (tester) async {
       await show(tester, _Backend());
       expect(find.text('VRAM headroom'), findsNothing);
     });
@@ -253,29 +291,54 @@ void main() {
 
     Map<String, Object?> card(String name, int mib, int gbps) => {'name': name, 'mib': mib, 'gbps': gbps};
 
-    test('a separate card of any size or make counts, and a built-in GPU only with 24 GiB or more', () async {
-      expect((await withCards([card('CUDA0', 12 * 1024, 20)])).hasCard, isTrue);
-      expect((await withCards([card('Vulkan0', 2 * 1024, 5)])).hasCard, isTrue, reason: 'under 4 GB too, any make');
-      expect((await withCards([])).hasCard, isFalse);
-      expect((await withCards([], built: [8 * 1024])).hasCard, isFalse, reason: 'a small built-in GPU is not used');
-      expect((await withCards([], built: [32 * 1024])).hasCard, isTrue, reason: 'a built-in GPU the app uses as its card');
+    test('the cards: separate ones of any size or make, a built-in GPU only with 24 GiB or more; same names get their place', () async {
+      expect((await withCards([card('CUDA0', 12 * 1024, 20)])).cards, [(key: 'CUDA0', name: 'CUDA0', mib: 12288)]);
+      expect((await withCards([card('Vulkan0', 2 * 1024, 5)])).cards, hasLength(1), reason: 'under 4 GB too, any make');
+      expect((await withCards([])).cards, isEmpty);
+      expect((await withCards([], built: [8 * 1024])).cards, isEmpty, reason: 'a small built-in GPU is not used');
+      expect((await withCards([], built: [32 * 1024])).cards, hasLength(1), reason: 'a built-in GPU the app uses as its card');
+      final same = (await withCards([card('Vulkan0', 8192, 20), card('Vulkan0', 8192, 10)])).cards;
+      expect([for (final c in same) c.key], ['Vulkan0#0', 'Vulkan0#1']);
     });
 
-    test('two cards: the pool card\'s flag carries the headroom, and each faster card keeps it free too', () async {
+    test('two cards: each follows its own value - the pool card\'s flag, the faster card\'s layer count', () async {
       final backend = await withCards([card('CUDA0', 12 * 1024, 10), card('CUDA1', 12 * 1024, 20)]);
       final file = (await backend.loadCatalog()).first.files.first;
       String command() => backend.autoCommands(file)[4096]!;
-      int layersOfFast(String c) {
+      int fastLayers(String c) {
         final m = RegExp(r'CUDA1=(\d+)-(\d+)').firstMatch(c)!;
         return int.parse(m[2]!) - int.parse(m[1]!) + 1;
       }
 
+      String poolFlag(String c) => RegExp(r'--moe-stream-vram-free \S+').firstMatch(c)![0]!;
+      void save(Map<String, double> byCard) => Storage(dir).writePrefs(PrefsData(vramHeadroom: byCard));
+
+      // the pool is the slower card, CUDA0; a card without a value takes the default
       final byDefault = command();
-      expect(byDefault, contains('--moe-stream-vram-free 512MiB'));
-      Storage(dir).writePrefs(const PrefsData(vramHeadroomGiB: 3));
-      final more = command();
-      expect(more, contains('--moe-stream-vram-free 3072MiB'));
-      expect(layersOfFast(more), lessThan(layersOfFast(byDefault)));
+      expect(poolFlag(byDefault), '--moe-stream-vram-free 512MiB');
+      // only the faster card's value changes: its layers follow, the pool's flag stays
+      save({'CUDA1': 4});
+      expect(fastLayers(command()), lessThan(fastLayers(byDefault)));
+      expect(poolFlag(command()), '--moe-stream-vram-free 512MiB');
+      // only the pool card's value changes: its flag follows, the faster card's layers stay
+      save({'CUDA0': 3});
+      expect(poolFlag(command()), '--moe-stream-vram-free 3072MiB');
+      expect(fastLayers(command()), fastLayers(byDefault));
+      // both
+      save({'CUDA0': 1, 'CUDA1': 4});
+      expect(poolFlag(command()), '--moe-stream-vram-free 1024MiB');
+      expect(fastLayers(command()), lessThan(fastLayers(byDefault)));
+      // the older single value reaches every card without a value of its own
+      Storage(dir).writePrefs(const PrefsData(vramHeadroomGiB: 2));
+      expect(poolFlag(command()), '--moe-stream-vram-free 2048MiB');
+      expect(fastLayers(command()), lessThan(fastLayers(byDefault)));
+    });
+
+    test('one card: that card\'s value', () async {
+      final backend = await withCards([card('CUDA0', 12 * 1024, 10)]);
+      final file = (await backend.loadCatalog()).first.files.first;
+      Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA0': 1.5}));
+      expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free 1536MiB'));
     });
   });
 }

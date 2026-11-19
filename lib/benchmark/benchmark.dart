@@ -326,7 +326,7 @@ class BenchmarkResult {
     required this.log,
     required this.disturbed,
     this.id,
-    this.vramHeadroomGiB,
+    this.vramHeadroom = const {},
     this.promptText = '',
     this.thinking,
     this.replyText = '',
@@ -350,8 +350,9 @@ class BenchmarkResult {
   final String flags;
   final double? memoryCapGiB;
 
-  /// The graphics card memory left free; null in a run saved before it was recorded.
-  final double? vramHeadroomGiB;
+  /// The graphics card memory left free on each card, by the card's key; empty when there was no card or the run was saved
+  /// before it was recorded.
+  final Map<String, double> vramHeadroom;
   final String promptLabel;
   final int replyLength;
   final List<String> warmups;
@@ -444,7 +445,7 @@ class BenchmarkResult {
     profileName: profileName,
     flags: flags,
     memoryCapGiB: memoryCapGiB,
-    vramHeadroomGiB: vramHeadroomGiB,
+    vramHeadroom: vramHeadroom,
     promptLabel: promptLabel,
     replyLength: replyLength,
     warmups: warmups,
@@ -479,7 +480,7 @@ class BenchmarkResult {
     'profileName': profileName,
     'flags': flags,
     'memoryCapGiB': memoryCapGiB,
-    if (vramHeadroomGiB != null) 'vramHeadroomGiB': vramHeadroomGiB,
+    if (vramHeadroom.isNotEmpty) 'vramHeadroom': vramHeadroom,
     'promptLabel': promptLabel,
     'replyLength': replyLength,
     'warmups': warmups,
@@ -515,7 +516,10 @@ class BenchmarkResult {
     profileName: j['profileName']! as String,
     flags: j['flags']! as String,
     memoryCapGiB: (j['memoryCapGiB'] as num?)?.toDouble(),
-    vramHeadroomGiB: (j['vramHeadroomGiB'] as num?)?.toDouble(),
+    vramHeadroom: {
+      for (final MapEntry(:key, :value) in (j['vramHeadroom'] as Map? ?? const {}).entries)
+        if (value is num) '$key': value.toDouble(),
+    },
     promptLabel: j['promptLabel']! as String,
     replyLength: j['replyLength']! as int,
     warmups: (j['warmups']! as List).cast<String>(),

@@ -47,8 +47,19 @@ const defaultHeadroomGiB = 1.5;
 const defaultVramHeadroomGiB = 0.5;
 const minVramHeadroomGiB = 0.25;
 
-/// The graphics card headroom a run uses: [gib] (null: the default), at least the minimum.
-double vramHeadroomOf(double? gib) => max(gib ?? defaultVramHeadroomGiB, minVramHeadroomGiB);
+/// The graphics card memory left free on each card: the user's value per card (by [cardKeys]), and [others] for a card
+/// without one of its own (the single value older versions saved, else the default). Never under the minimum.
+class VramHeadroom {
+  const VramHeadroom({this.byCard = const {}, this.others = defaultVramHeadroomGiB});
+
+  final Map<String, double> byCard;
+  final double others;
+
+  double of(String card) => max(byCard[card] ?? others, minVramHeadroomGiB);
+
+  /// The same settings give the same text, so an engine started with them can be told from one started with others.
+  String get key => '$others ${(byCard.entries.toList()..sort((a, b) => a.key.compareTo(b.key))).map((e) => '${e.key}=${e.value}').join(',')}';
+}
 
 /// The context cache types the app offers: the engine's names.
 const kvTypes = ['q4_0', 'q8_0', 'f16'];

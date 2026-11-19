@@ -26,7 +26,7 @@ import 'package:runmyai/ui/pages/store_page.dart';
 /// A backend whose tunes end when the test says, with an engine that only remembers what it was told.
 class _Backend implements Backend, EngineControl, TuneControl {
   @override
-  bool get hasCard => true;
+  List<({String key, String name, int mib})> get cards => const [(key: 'CUDA0', name: 'CUDA0', mib: 12288)];
   final calls = <String>[];
   final kept = <String, Map<String, dynamic>>{};
   Completer<void> gate = Completer<void>()..complete();

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../data/models.dart';
+import '../engine/commands.dart';
 import '../engine/engine_process.dart';
 
 /// The context length of a fresh install, in tokens.
@@ -69,7 +70,7 @@ class EngineRun {
     required this.flags,
     required this.contextLength,
     this.memoryCapGiB,
-    this.vramHeadroomGiB,
+    this.vramHeadroom = const VramHeadroom(),
     this.keepState = true,
     this.reportProgress = false,
   });
@@ -80,8 +81,8 @@ class EngineRun {
   /// Null: all the RAM but 1 GB.
   final double? memoryCapGiB;
 
-  /// The graphics card memory left free; null: [defaultVramHeadroomGiB].
-  final double? vramHeadroomGiB;
+  /// The graphics card memory left free on each card.
+  final VramHeadroom vramHeadroom;
 
   /// What a request asks besides the chat (these do not change how the engine starts): whether the engine saves the
   /// conversation's state when the reply ends, and whether it reports how far it is in reading the prompt.
@@ -92,7 +93,7 @@ class EngineRun {
     flags: flags,
     contextLength: contextLength,
     memoryCapGiB: memoryCapGiB,
-    vramHeadroomGiB: vramHeadroomGiB,
+    vramHeadroom: vramHeadroom,
     keepState: keepState,
     reportProgress: reportProgress,
   );
@@ -101,7 +102,7 @@ class EngineRun {
     flags: flags,
     contextLength: contextLength,
     memoryCapGiB: memoryCapGiB,
-    vramHeadroomGiB: vramHeadroomGiB,
+    vramHeadroom: vramHeadroom,
     keepState: false,
     reportProgress: true,
   );
@@ -252,7 +253,8 @@ abstract class TuneControl {
   /// The model file being measured right now, also when the engine measures one by itself before its first load.
   ValueListenable<String?> get tuning;
 
-  /// Whether this PC has a graphics card the engine can use: a separate card of any size and make, or a built-in GPU the
-  /// app uses as its card.
-  bool get hasCard;
+  /// The graphics cards the engine can use, fastest first: separate cards of any size and make, or a built-in GPU the app
+  /// uses as its card (empty: none). [key]: what the card's settings are saved under; [name]: as the engine lists it (empty
+  /// before the autotuner's first run).
+  List<({String key, String name, int mib})> get cards;
 }
