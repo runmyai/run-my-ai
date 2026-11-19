@@ -44,13 +44,14 @@ List<String> withTuning(List<String> args, Map<String, dynamic>? t) {
 /// run of the last layers completely, as whole layers - as many as their memory holds - and the slowest card runs the first
 /// layers with the expert pool, RAM and SSD behind it. One hand-over between cards per run of layers. Measured with two RTX 3060:
 /// Flint 72.8 tok/s against 53.2 on one card, Qwen 25.2 against 19.2, long prompts faster too.
-/// shortcut: whole layers per card as (memory - 2.5 GiB) / one layer's experts - the engine streams the ones that do not fit
-List<String> cardFlags(List<({String name, int mib})> cards, int layers, int firstMoe, double layerGiB) {
+/// Each faster card also keeps [headroomGiB] free for the desktop and other apps (the slowest card's is the engine's own flag).
+/// shortcut: whole layers per card as (memory - 2.5 GiB - headroom) / one layer's experts - the engine streams the ones that do not fit
+List<String> cardFlags(List<({String name, int mib})> cards, int layers, int firstMoe, double layerGiB, {double headroomGiB = 0}) {
   final pool = cards.last, fast = cards.sublist(0, cards.length - 1);
   var left = layers - firstMoe - 2;   // at least the dense layers and two MoE layers stay with the pool
   final counts = <int>[];
   for (final c in fast) {
-    final n = min(left, max(1, ((c.mib / 1024 - 2.5) / layerGiB).floor()));
+    final n = min(left, max(1, ((c.mib / 1024 - 2.5 - headroomGiB) / layerGiB).floor()));
     counts.add(n);
     left -= n;
   }

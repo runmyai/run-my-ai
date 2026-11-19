@@ -328,7 +328,7 @@ class _VramHeadroom extends ConsumerWidget {
     final tune = backend as TuneControl;
     return ValueListenableBuilder<String?>(
       valueListenable: tune.tuning,
-      builder: (context, _, _) => tune.usesGpu ? _row(context.colors) : const SizedBox.shrink(),
+      builder: (context, _, _) => tune.hasCard ? _row(context.colors) : const SizedBox.shrink(),
     );
   }
 

@@ -252,7 +252,7 @@ abstract class TuneControl {
   /// The model file being measured right now, also when the engine measures one by itself before its first load.
   ValueListenable<String?> get tuning;
 
-  /// Whether the engine starts with the graphics card commands on this PC (a card of 4 GiB or more: the large-GPU or
-  /// small-GPU commands) and not the CPU-only ones.
-  bool get usesGpu;
+  /// Whether this PC has a graphics card the engine can use: a separate card of any size and make, or a built-in GPU the
+  /// app uses as its card.
+  bool get hasCard;
 }

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'engine_flags.dart';
 
 /// The context length a command runs with (its -c flag); null if it has none or it is not a number.
@@ -44,6 +46,9 @@ const defaultHeadroomGiB = 1.5;
 /// they may set.
 const defaultVramHeadroomGiB = 0.5;
 const minVramHeadroomGiB = 0.25;
+
+/// The graphics card headroom a run uses: [gib] (null: the default), at least the minimum.
+double vramHeadroomOf(double? gib) => max(gib ?? defaultVramHeadroomGiB, minVramHeadroomGiB);
 
 /// The context cache types the app offers: the engine's names.
 const kvTypes = ['q4_0', 'q8_0', 'f16'];

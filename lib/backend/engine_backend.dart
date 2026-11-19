@@ -208,28 +208,18 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     ),
   ];
 
-  /// The largest graphics card's memory right now, read through NVML / AMD's driver files; null when it cannot be read.
-  static double? _readCardGiB() {
+  /// The largest graphics card's memory, read once through NVML / AMD's driver files: the cards before the autotuner's
+  /// first run.
+  static final ({double giB}) _gpu = () {
+    final nvidia = NvmlReader.open();
+    final amd = AmdGpuReader.open(const DiskFiles(), firstIndex: nvidia?.names.length ?? 0);
+    final gpus = GpuSources([?nvidia, ?amd]);
     try {
-      final nvidia = NvmlReader.open();
-      final amd = AmdGpuReader.open(const DiskFiles(), firstIndex: nvidia?.names.length ?? 0);
-      final gpus = GpuSources([?nvidia, ?amd]);
-      try {
-        return gpus.read().entries.where((e) => e.key.endsWith('.vramTotal')).fold<double>(0.0, (a, e) => max(a, e.value ?? 0));
-      } finally {
-        gpus.close();
-      }
-    } on Object {
-      return null;
+      return (giB: gpus.read().entries.where((e) => e.key.endsWith('.vramTotal')).fold(0.0, (a, e) => max(a, e.value ?? 0)));
+    } finally {
+      gpus.close();
     }
-  }
-
-  /// How the live reading is made (tests put their own).
-  @visibleForTesting
-  static double? Function() liveCardGiB = _readCardGiB;
-
-  /// The largest graphics card's memory, read once: the cards before the autotuner's first run.
-  static final ({double giB}) _gpu = (giB: _readCardGiB() ?? 0);
+  }();
 
   static const _tuneVersion = 2;
 
@@ -345,21 +335,15 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return cards.isEmpty ? 0.0 : cards.map((c) => c.mib).reduce(max) / 1024;
   }
 
-  /// From the cards as they are now: laptops switch the card off and on, so the autotuner's saved list (from a run when it
-  /// may have been the other way) does not decide. A built-in GPU the autotuner counted as the card (24 GiB or more) stays
-  /// from the saved list: it cannot be switched off. When the cards cannot be read, the saved list decides.
+  /// Whether there is a graphics card the engine can use: a separate card of any size and make, or a built-in GPU with
+  /// 24 GiB or more (the autotuner's list, [cardsFrom]; before its first run the one-time reading).
   @override
-  bool get usesGpu {
-    final live = liveCardGiB();
-    if (live == null) return _largestCardGiB >= 4;
-    final built = [for (final g in (_savedTune?['igpus'] as List?) ?? const []) (g as Map)['mib'] as int];
-    return live >= 4 || built.fold(0, max) >= 24 * 1024;
-  }
+  bool get hasCard => _cards.isNotEmpty;
 
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
   /// largest card. With several cards all of them share the model, filled fastest first (cardFlags).
   /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
-  Map<int, String> _flagsFor(_LocalModel m) {
+  Map<int, String> _flagsFor(_LocalModel m, double vramHeadroomGiB) {
     final cards = _cards;
     final gib = _largestCardGiB;
     final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
@@ -368,12 +352,12 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
       if (cards.length > 1 && cards.every((c) => c.name.isNotEmpty))
-        ...cardFlags(cards, m.layers, m.firstMoe, m.layerGiB)
+        ...cardFlags(cards, m.layers, m.firstMoe, m.layerGiB, headroomGiB: vramHeadroomGiB)
       // one card: named, so a built-in GPU chosen for lack of a separate card is the one used
       else if (cards.length == 1 && cards[0].name.isNotEmpty)
         '--device ${cards[0].name}',
     ].join(' ');
-    return extra.isEmpty ? flags : {for (final e in flags.entries) e.key: '${e.value} $extra'};
+    return {for (final e in flags.entries) e.key: withVramFree(extra.isEmpty ? e.value : '${e.value} $extra', vramHeadroomGiB)};
   }
 
   static _LocalModel _local(ModelFile file) => _models.firstWhere((m) => m.model.files.contains(file));
@@ -416,7 +400,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       : Stream.error(EngineFailure('The model file is not on this computer: ${_modelPath(_local(file))}'));
 
   @override
-  Map<int, String> autoCommands(ModelFile file) => _flagsFor(_local(file));
+  Map<int, String> autoCommands(ModelFile file) =>
+      _flagsFor(_local(file), vramHeadroomOf(_storage.readPrefs().vramHeadroomGiB));
 
   @override
   int maxContext(ModelFile file) {
@@ -1018,9 +1003,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final tuned = await _tuned(local);
     // the table's row as the autotuner's card list now picks it (the first start may have shown another)
-    final flags = EngineFlags.parse(
-      withVramFree(_flagsFor(local)[run.contextLength] ?? run.flags, run.vramHeadroomGiB ?? defaultVramHeadroomGiB),
-    );
+    final headroom = vramHeadroomOf(run.vramHeadroomGiB);
+    final flags = EngineFlags.parse(withVramFree(_flagsFor(local, headroom)[run.contextLength] ?? run.flags, headroom));
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
     final EngineProcess engine;

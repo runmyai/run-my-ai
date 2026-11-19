@@ -14,6 +14,7 @@ import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
 import 'package:runmyai/engine/auto_commands.dart';
 import 'package:runmyai/engine/commands.dart';
+import 'package:runmyai/engine/tuning.dart';
 import 'package:runmyai/state/library.dart';
 import 'package:runmyai/state/prefs.dart';
 import 'package:runmyai/state/profiles.dart';
@@ -49,7 +50,7 @@ class _Backend implements Backend {
 /// A backend that says whether this PC has a card, and a tune that can end.
 class _GpuBackend extends _Backend implements TuneControl {
   @override
-  bool usesGpu = true;
+  bool hasCard = true;
   final tuned = ValueNotifier<String?>(null);
   @override
   ValueListenable<String?> get tuning => tuned;
@@ -88,6 +89,17 @@ void main() {
         }
       }
     });
+  });
+
+  test('several cards: the headroom is taken off each faster card\'s memory before its whole layers are counted', () {
+    final cards = [(name: 'CUDA1', mib: 12288), (name: 'CUDA0', mib: 12288)];
+    String fast(double headroom) =>
+        cardFlags(cards, 49, 2, 0.49, headroomGiB: headroom).join(' ').replaceFirst(RegExp(r'.*CUDA1='), '');
+    expect(fast(0), '30-48'); // (12 - 2.5) / 0.49: 19 layers
+    expect(fast(1), '32-48'); // (12 - 2.5 - 1) / 0.49: 17 layers
+    expect(fast(8), '46-48'); // 3 layers
+    // (A card that is left with less than one layer still gets one.)
+    expect(fast(20), '48-48');
   });
 
   group('the setting', () {
@@ -212,7 +224,7 @@ void main() {
       await show(tester, backend);
       expect(find.text('VRAM headroom'), findsOneWidget);
       expect(find.byKey(const Key('vram-headroom')), findsOneWidget);
-      backend.usesGpu = false;
+      backend.hasCard = false;
       backend.tuned.value = 'm';
       await tester.pump();
       backend.tuned.value = null;
@@ -227,43 +239,43 @@ void main() {
       expect(find.text('VRAM headroom'), findsNothing);
     });
 
-    test('the engine backend decides as the recipe tables are chosen: a card of 4 GiB or more', () {
-      final reading = EngineBackend.liveCardGiB;
-      addTearDown(() => EngineBackend.liveCardGiB = reading);
-      EngineBackend.liveCardGiB = () => null;
-      bool uses({List<int> cards = const [], List<int> built = const []}) {
-        File('${dir.path}/autotuner.json').writeAsStringSync(
-          jsonEncode({
-            'version': 2,
-            'gpus': [for (final m in cards) {'name': 'g', 'mib': m}],
-            'igpus': [for (final m in built) {'name': 'i', 'mib': m}],
-            'models': <String, Object?>{},
-          }),
-        );
-        return EngineBackend(Storage(dir)).usesGpu;
-      }
+    Future<EngineBackend> withCards(List<Map<String, Object?>> cards, {List<int> built = const []}) async {
+      File('${dir.path}/autotuner.json').writeAsStringSync(
+        jsonEncode({
+          'version': 2,
+          'gpus': cards,
+          'igpus': [for (final m in built) {'name': 'i', 'mib': m}],
+          'models': <String, Object?>{},
+        }),
+      );
+      return EngineBackend(Storage(dir));
+    }
 
-      expect(uses(cards: [12 * 1024]), isTrue);
-      expect(uses(cards: [4 * 1024]), isTrue);
-      expect(uses(cards: [2 * 1024]), isFalse);
-      expect(uses(), isFalse);
-      expect(uses(built: [8 * 1024]), isFalse, reason: 'a small built-in GPU is not used');
-      expect(uses(built: [32 * 1024]), isTrue, reason: 'a built-in GPU with 24 GiB or more counts as the card');
+    Map<String, Object?> card(String name, int mib, int gbps) => {'name': name, 'mib': mib, 'gbps': gbps};
+
+    test('a separate card of any size or make counts, and a built-in GPU only with 24 GiB or more', () async {
+      expect((await withCards([card('CUDA0', 12 * 1024, 20)])).hasCard, isTrue);
+      expect((await withCards([card('Vulkan0', 2 * 1024, 5)])).hasCard, isTrue, reason: 'under 4 GB too, any make');
+      expect((await withCards([])).hasCard, isFalse);
+      expect((await withCards([], built: [8 * 1024])).hasCard, isFalse, reason: 'a small built-in GPU is not used');
+      expect((await withCards([], built: [32 * 1024])).hasCard, isTrue, reason: 'a built-in GPU the app uses as its card');
     });
 
-    test('the cards as they are now decide, not the saved list; the saved list only when they cannot be read', () {
-      final reading = EngineBackend.liveCardGiB;
-      addTearDown(() => EngineBackend.liveCardGiB = reading);
-      File('${dir.path}/autotuner.json').writeAsStringSync(
-        jsonEncode({'version': 2, 'gpus': [{'name': 'g', 'mib': 12288}], 'igpus': <Object>[], 'models': <String, Object?>{}}),
-      );
-      final backend = EngineBackend(Storage(dir));
-      EngineBackend.liveCardGiB = () => 0; // the card is switched off now
-      expect(backend.usesGpu, isFalse);
-      EngineBackend.liveCardGiB = () => 12; // and on again, with no new tune
-      expect(backend.usesGpu, isTrue);
-      EngineBackend.liveCardGiB = () => null; // not readable: the saved list
-      expect(backend.usesGpu, isTrue);
+    test('two cards: the pool card\'s flag carries the headroom, and each faster card keeps it free too', () async {
+      final backend = await withCards([card('CUDA0', 12 * 1024, 10), card('CUDA1', 12 * 1024, 20)]);
+      final file = (await backend.loadCatalog()).first.files.first;
+      String command() => backend.autoCommands(file)[4096]!;
+      int layersOfFast(String c) {
+        final m = RegExp(r'CUDA1=(\d+)-(\d+)').firstMatch(c)!;
+        return int.parse(m[2]!) - int.parse(m[1]!) + 1;
+      }
+
+      final byDefault = command();
+      expect(byDefault, contains('--moe-stream-vram-free 512MiB'));
+      Storage(dir).writePrefs(const PrefsData(vramHeadroomGiB: 3));
+      final more = command();
+      expect(more, contains('--moe-stream-vram-free 3072MiB'));
+      expect(layersOfFast(more), lessThan(layersOfFast(byDefault)));
     });
   });
 }
