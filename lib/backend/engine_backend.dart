@@ -208,18 +208,28 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     ),
   ];
 
-  /// The largest graphics card's memory, read once through NVML / AMD's driver files: the cards before the autotuner's
-  /// first run.
-  static final ({double giB}) _gpu = () {
-    final nvidia = NvmlReader.open();
-    final amd = AmdGpuReader.open(const DiskFiles(), firstIndex: nvidia?.names.length ?? 0);
-    final gpus = GpuSources([?nvidia, ?amd]);
+  /// The largest graphics card's memory right now, read through NVML / AMD's driver files; null when it cannot be read.
+  static double? _readCardGiB() {
     try {
-      return (giB: gpus.read().entries.where((e) => e.key.endsWith('.vramTotal')).fold(0.0, (a, e) => max(a, e.value ?? 0)));
-    } finally {
-      gpus.close();
+      final nvidia = NvmlReader.open();
+      final amd = AmdGpuReader.open(const DiskFiles(), firstIndex: nvidia?.names.length ?? 0);
+      final gpus = GpuSources([?nvidia, ?amd]);
+      try {
+        return gpus.read().entries.where((e) => e.key.endsWith('.vramTotal')).fold<double>(0.0, (a, e) => max(a, e.value ?? 0));
+      } finally {
+        gpus.close();
+      }
+    } on Object {
+      return null;
     }
-  }();
+  }
+
+  /// How the live reading is made (tests put their own).
+  @visibleForTesting
+  static double? Function() liveCardGiB = _readCardGiB;
+
+  /// The largest graphics card's memory, read once: the cards before the autotuner's first run.
+  static final ({double giB}) _gpu = (giB: _readCardGiB() ?? 0);
 
   static const _tuneVersion = 2;
 
@@ -330,12 +340,28 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return savedTune(file) ?? await tune(file);
   }
 
+  double get _largestCardGiB {
+    final cards = _cards;
+    return cards.isEmpty ? 0.0 : cards.map((c) => c.mib).reduce(max) / 1024;
+  }
+
+  /// From the cards as they are now: laptops switch the card off and on, so the autotuner's saved list (from a run when it
+  /// may have been the other way) does not decide. A built-in GPU the autotuner counted as the card (24 GiB or more) stays
+  /// from the saved list: it cannot be switched off. When the cards cannot be read, the saved list decides.
+  @override
+  bool get usesGpu {
+    final live = liveCardGiB();
+    if (live == null) return _largestCardGiB >= 4;
+    final built = [for (final g in (_savedTune?['igpus'] as List?) ?? const []) (g as Map)['mib'] as int];
+    return live >= 4 || built.fold(0, max) >= 24 * 1024;
+  }
+
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
   /// largest card. With several cards all of them share the model, filled fastest first (cardFlags).
   /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
   Map<int, String> _flagsFor(_LocalModel m) {
     final cards = _cards;
-    final gib = cards.isEmpty ? 0.0 : cards.map((c) => c.mib).reduce(max) / 1024;
+    final gib = _largestCardGiB;
     final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
     if (identical(flags, m.cpuFlags)) return flags;
     // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)

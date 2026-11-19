@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../dev/dev_build.dart';
 import '../../state/motion.dart';
+import '../../backend/backend.dart';
 import '../../state/prefs.dart';
 import '../../state/library.dart';
+import '../../state/providers.dart';
 import '../../system/chime.dart';
 import '../../theme.dart';
 import '../buttons.dart';
@@ -182,7 +184,6 @@ class _SettingsList extends ConsumerWidget {
         const _StateLimit(),
         const SizedBox(height: 20),
         const _Headroom(),
-        const SizedBox(height: 20),
         const _VramHeadroom(),
         const SizedBox(height: 28),
         const FoldersSection(),
@@ -316,13 +317,24 @@ class _Headroom extends ConsumerWidget {
 }
 
 /// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs (shared by all models).
-class _VramHeadroom extends StatelessWidget {
+class _VramHeadroom extends ConsumerWidget {
   const _VramHeadroom();
 
   @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return Column(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final backend = ref.watch(backendProvider);
+    // Shown only where the engine runs on a graphics card (the card list is read again when a tune ends).
+    if (backend is! TuneControl) return const SizedBox.shrink();
+    final tune = backend as TuneControl;
+    return ValueListenableBuilder<String?>(
+      valueListenable: tune.tuning,
+      builder: (context, _, _) => tune.usesGpu ? _row(context.colors) : const SizedBox.shrink(),
+    );
+  }
+
+  Widget _row(AppColors c) => Padding(
+    padding: const EdgeInsets.only(top: 20),
+    child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
@@ -337,8 +349,8 @@ class _VramHeadroom extends StatelessWidget {
         const SizedBox(height: 12),
         const VramHeadroomInput(),
       ],
-    );
-  }
+    ),
+  );
 }
 
 /// The context length new chats load the shown model with, and each length's cache type.
