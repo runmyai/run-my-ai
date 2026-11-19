@@ -24,7 +24,7 @@ class _Sys implements FileSource {
 /// says it is not removable (sda; only udev knows it is on USB).
 final _sys = _Sys(
   {
-    for (final p in ['nvme0n1p1', 'nvme0n1p2', 'nvme0n1p3', 'nvme0n1p4', 'sda1', 'sdb1'])
+    for (final p in ['nvme0n1p1', 'nvme0n1p2', 'nvme0n1p3', 'nvme0n1p4', 'sda1', 'sdb1', 'sdc1', 'sdd1'])
       '/sys/class/block/$p/partition': '1',
     '/sys/block/nvme0n1/removable': '0',
     '/sys/block/nvme0n1/queue/rotational': '0',
@@ -36,10 +36,15 @@ final _sys = _Sys(
     '/sys/block/sdb/removable': '0',
     '/sys/block/sdb/queue/rotational': '1',
     '/sys/block/sdb/dev': '8:16',
+    '/sys/block/sdc/removable': '1',
+    '/sys/block/sdc/queue/rotational': '0',
+    '/sys/block/sdd/removable': '0',
     '/sys/block/dm-0/dm/name': 'luks-1234',
   },
   {
-    '/sys/block': ['nvme0n1', 'sda', 'sdb', 'dm-0'],
+    '/sys/block': ['nvme0n1', 'sda', 'sdb', 'sdc', 'sdd', 'dm-0'],
+    '/sys/block/sdc': ['sdc1', 'queue'],
+    '/sys/block/sdd': ['sdd1', 'queue'],
     '/sys/block/nvme0n1': ['nvme0n1p1', 'nvme0n1p2', 'nvme0n1p3', 'nvme0n1p4', 'queue', 'removable'],
     '/sys/block/sda': ['sda1', 'queue'],
     '/sys/block/sdb': ['sdb1', 'queue'],
@@ -58,6 +63,8 @@ tmpfs /tmp tmpfs rw,nosuid,nodev 0 0
 /dev/mapper/luks-1234 /mnt/secret ext4 rw,relatime 0 0
 /dev/sda1 /run/media/u/Stick exfat rw,nosuid 0 0
 /dev/sdb1 /mnt/hdd ext4 rw,relatime 0 0
+/dev/sdc1 /run/media/u/Card ext4 rw 0 0
+/dev/sdd1 /run/media/u/Mystery ext4 rw 0 0
 /dev/nvme0n1p3 /run/media/u/OldOS ntfs3 ro,noatime 0 0
 server:/export /mnt/nfs nfs4 rw,relatime 0 0
 /dev/loop0 /var/lib/snapd/snap/core squashfs ro 0 0
@@ -112,17 +119,48 @@ void main() {
     expect(_choose(mounts: '', free: const {}), '/home/u/Run My AI');
   });
 
-  test('Windows: the fixed NTFS drive with the most free space', () {
+  test('Windows: the fixed NTFS drive with the most free space, an SSD before a hard disk, never USB', () {
+    WindowsDrive drive(String letter, String fs, int free, DriveKind kind) =>
+        (letter: letter, fileSystem: fs, free: free, kind: kind);
     expect(
       chooseMainFolderWindows([
-        (letter: 'C:', fileSystem: 'NTFS', free: 100),
-        (letter: 'D:', fileSystem: 'NTFS', free: 300),
-        (letter: 'E:', fileSystem: 'FAT32', free: 900),
-        (letter: 'F:', fileSystem: 'exFAT', free: 800),
+        drive('C:', 'NTFS', 100, DriveKind.unknown),
+        drive('D:', 'NTFS', 300, DriveKind.unknown),
+        drive('E:', 'FAT32', 900, DriveKind.ssd),
+        drive('F:', 'exFAT', 800, DriveKind.ssd),
       ]),
       r'D:\Run My AI',
     );
-    expect(chooseMainFolderWindows([(letter: 'E:', fileSystem: 'FAT32', free: 9)]), r'C:\Run My AI');
+    final hdd = drive('D:', 'NTFS', 4000, DriveKind.hardDisk), ssd = drive('C:', 'NTFS', 100, DriveKind.ssd);
+    expect(chooseMainFolderWindows([hdd, ssd]), r'C:\Run My AI');
+    expect(chooseMainFolderWindows([ssd, hdd]), r'C:\Run My AI');
+    expect(chooseMainFolderWindows([ssd, drive('E:', 'NTFS', 900, DriveKind.ssd), hdd]), r'E:\Run My AI');
+    expect(chooseMainFolderWindows([hdd, drive('E:', 'NTFS', 9000, DriveKind.usb)]), r'D:\Run My AI');
+    expect(chooseMainFolderWindows([drive('E:', 'FAT32', 9, DriveKind.ssd)]), r'C:\Run My AI');
+  });
+
+  test('Windows: Get-PhysicalDisk\'s answer gives the kind', () {
+    expect(parseWindowsKind('SSD/NVMe\r\n'), DriveKind.ssd);
+    expect(parseWindowsKind('SSD/SATA'), DriveKind.ssd);
+    expect(parseWindowsKind('Unspecified/NVMe'), DriveKind.ssd);
+    expect(parseWindowsKind('HDD/SATA'), DriveKind.hardDisk);
+    expect(parseWindowsKind('SSD/USB'), DriveKind.usb);
+    expect(parseWindowsKind('Unspecified/SATA'), DriveKind.unknown);
+    expect(parseWindowsKind(''), DriveKind.unknown);
+  });
+
+  test('Linux: the kind of the drive that holds a folder', () {
+    DriveKind kind(String path) => driveKindLinux(mounts: _mounts, path: path, sys: _sys);
+    expect(kind('/home/u/models'), DriveKind.ssd);
+    expect(kind('/run/media/u/My Data/Run My AI/models'), DriveKind.ssd);
+    expect(kind('/mnt/secret/x'), DriveKind.ssd); // an encrypted volume on the SSD
+    expect(kind('/mnt/hdd/models'), DriveKind.hardDisk);
+    expect(kind('/run/media/u/Stick/models'), DriveKind.usb); // not removable, but udev says USB
+    expect(kind('/run/media/u/Card'), DriveKind.usb); // removable
+    expect(kind('/run/media/u/Mystery'), DriveKind.unknown); // /sys does not say
+    expect(kind('/mnt/nfs/models'), DriveKind.unknown);
+    expect(kind('/var/lib/snapd/snap/core/x'), DriveKind.unknown);
+    expect(driveKindLinux(mounts: '', path: '/x', sys: _sys), DriveKind.unknown);
   });
 
   group('saved folders', () {

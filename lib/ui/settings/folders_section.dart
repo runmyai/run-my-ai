@@ -15,6 +15,7 @@ import '../../system/relaunch.dart';
 import '../../theme.dart';
 import '../buttons.dart';
 import '../engine_setup.dart';
+import 'slow_drive.dart';
 
 /// Settings' folders: where models are downloaded, the folders models are also read from, the chats, the saved
 /// chat states and the engine. Moving one copies its files to the new place and then removes the old ones (on the
@@ -51,8 +52,11 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
     Future<void> Function() before,
     void Function(String to) save, {
     String Function(String picked)? target,
+    bool holdsModels = false,
   }) async {
-    final picked = await getDirectoryPath(initialDirectory: from, confirmButtonText: 'Move here');
+    final picked = holdsModels
+        ? await pickModelsFolder(context, initialDirectory: from, confirmButtonText: 'Move here')
+        : await getDirectoryPath(initialDirectory: from, confirmButtonText: 'Move here');
     if (picked == null || !mounted) return false;
     final to = target?.call(picked) ?? picked;
     setState(() {
@@ -185,6 +189,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
                 target: (picked) => picked.split(sep).last == mainFolderName
                     ? picked
                     : '$picked${picked.endsWith(sep) ? '' : sep}$mainFolderName',
+                holdsModels: true,
               );
               if (moved && chatsMove) await relaunchApp();
             },
@@ -194,17 +199,23 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
           'Models',
           'Downloaded models go here.',
           folders.models,
-          onMove: () => _move('models', folders.models, () async {
-            await ref.read(libraryProvider.notifier).pauseAll();
-            await _stopEngine();
-          }, (to) => notifier.set(folders.copyWith(models: to, readFrom: [...folders.readFrom]..remove(to)))),
+          onMove: () => _move(
+            'models',
+            folders.models,
+            () async {
+              await ref.read(libraryProvider.notifier).pauseAll();
+              await _stopEngine();
+            },
+            (to) => notifier.set(folders.copyWith(models: to, readFrom: [...folders.readFrom]..remove(to))),
+            holdsModels: true,
+          ),
         ),
         if (!first)
           _ReadFolders(
             folders: folders.readFrom,
             enabled: !busy,
             onAdd: () async {
-              final dir = await getDirectoryPath(confirmButtonText: 'Read models here');
+              final dir = await pickModelsFolder(context, confirmButtonText: 'Read models here');
               if (dir == null || dir == folders.models || folders.readFrom.contains(dir)) return;
               notifier.set(folders.copyWith(readFrom: [...folders.readFrom, dir]));
             },
