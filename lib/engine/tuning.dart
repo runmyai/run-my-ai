@@ -44,14 +44,14 @@ List<String> withTuning(List<String> args, Map<String, dynamic>? t) {
 /// whole layers - as many as its memory holds while it keeps its VRAM headroom: the engine counts them (`X=auto`). One
 /// hand-over between cards per run of layers. Measured with two RTX 3060: Flint 72.8 tok/s against 53.2 on one card, Qwen
 /// 25.2 against 19.2, long prompts faster too.
-/// The engine gives the very last layers to the first card named `auto`, the layers before those to the next: the faster
-/// cards are named slowest first, so the fastest card has the layers right after the pool's, as before.
+/// The engine fills the first card named `auto` first (it gets the very last layers), then the next: the faster cards are
+/// named fastest first, so the fastest card is filled fully before the next.
 List<String> cardFlags(List<({String name, int mib})> cards) {
   final pool = cards.last, fast = cards.sublist(0, cards.length - 1);
   return [
     '--device', [pool.name, for (final c in fast) c.name].join(','),
     '--moe-stream-vram-device', pool.name,
-    for (final c in fast.reversed) ...['--moe-stream-gpu-layers-device', '${c.name}=auto'],
+    for (final c in fast) ...['--moe-stream-gpu-layers-device', '${c.name}=auto'],
   ];
 }
 

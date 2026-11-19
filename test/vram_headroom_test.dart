@@ -332,7 +332,7 @@ void main() {
       expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free CUDA0=2048MiB,CUDA1=2048MiB '));
     });
 
-    test('three cards: the pool is the slowest, the faster ones are named slowest first (the fastest keeps the layers after the pool)', () async {
+    test('three cards: the pool is the slowest, the faster ones are named fastest first (the fastest card is filled first)', () async {
       final backend = await withCards([card('CUDA0', 8 * 1024, 5), card('CUDA1', 24 * 1024, 20), card('CUDA2', 12 * 1024, 10)]);
       final file = (await backend.loadCatalog()).first.files.first;
       Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA0': 1, 'CUDA1': 0.75, 'CUDA2': 2}));
@@ -341,7 +341,7 @@ void main() {
         c,
         '${withVramFree(lingAuto[4096]!, 'CUDA0=1024MiB,CUDA1=768MiB,CUDA2=2048MiB')} '
         '${extra('--device CUDA0,CUDA1,CUDA2 --moe-stream-vram-device CUDA0 '
-            '--moe-stream-gpu-layers-device CUDA2=auto --moe-stream-gpu-layers-device CUDA1=auto')}',
+            '--moe-stream-gpu-layers-device CUDA1=auto --moe-stream-gpu-layers-device CUDA2=auto')}',
       );
       expect(c, isNot(contains(' -ts ')));
       expect(RegExp(r'gpu-layers-device \S+=\d').hasMatch(c), isFalse);
