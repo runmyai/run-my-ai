@@ -51,6 +51,8 @@ class _Backend implements Backend {
 class _GpuBackend extends _Backend implements TuneControl {
   @override
   List<({String key, String name, int mib})> cards = const [(key: 'CUDA0', name: 'CUDA0', mib: 12288)];
+  @override
+  bool sharesRam = false;
   final tuned = ValueNotifier<String?>(null);
   @override
   ValueListenable<String?> get tuning => tuned;
@@ -296,6 +298,18 @@ void main() {
       expect((await withCards([], built: [32 * 1024])).cards, hasLength(1), reason: 'a built-in GPU the app uses as its card');
       final same = (await withCards([card('Vulkan0', 8192, 20), card('Vulkan0', 8192, 10)])).cards;
       expect([for (final c in same) c.key], ['Vulkan0#0', 'Vulkan0#1']);
+    });
+
+    test('elastic RAM only beside a separate card: a built-in GPU used as the card runs with fixed memory, no VRAM row', () async {
+      final separate = await withCards([card('CUDA0', 12 * 1024, 10)]);
+      final file = (await separate.loadCatalog()).first.files.first;
+      expect(separate.sharesRam, isFalse);
+      expect(separate.autoCommands(file)[4096], contains('--moe-stream-elastic 1'));
+      final built = await withCards([], built: [32 * 1024]);
+      expect(built.sharesRam, isTrue);
+      expect(built.autoCommands(file)[4096], isNot(contains('--moe-stream-elastic')));
+      expect((await withCards([])).sharesRam, isFalse, reason: 'no card at all: the CPU-only table, already fixed');
+      expect(lingAutoCpu.values.any((c) => c.contains('--moe-stream-elastic')), isFalse);
     });
 
     String extra(String flags) => '${Platform.isWindows ? '--moe-stream-async-h2d 0 ' : ''}$flags';

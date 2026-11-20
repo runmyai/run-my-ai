@@ -9,7 +9,6 @@ import '../benchmark/amd_gpu.dart';
 import '../benchmark/share.dart' show installIdIn;
 import '../benchmark/hardware.dart';
 import '../benchmark/nvml.dart';
-import '../benchmark/win32_metrics.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
 import '../engine/auto_commands.dart';
@@ -329,6 +328,12 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return [for (var i = 0; i < list.length; i++) (key: keys[i], name: list[i].name, mib: list[i].mib)];
   }
 
+  @override
+  bool get sharesRam {
+    final tune = _savedTune;
+    return tune != null && ((tune['gpus'] as List?) ?? const []).isEmpty && _cards.isNotEmpty;
+  }
+
   /// The value of `--moe-stream-vram-free`: each card's own headroom, the pool's card's too (see [vramFreeValue]).
   String _vramFree(VramHeadroom headroom) {
     final cards = _cards, keys = cardKeys(cards);
@@ -341,8 +346,10 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   Map<int, String> _flagsFor(_LocalModel m, VramHeadroom vramHeadroom) {
     final cards = _cards;
     final gib = _largestCardGiB;
-    final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
-    if (identical(flags, m.cpuFlags)) return flags;
+    final table = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
+    if (identical(table, m.cpuFlags)) return table;
+    // elastic RAM only beside a separate card: a built-in GPU's memory is the RAM, so it runs with fixed memory
+    final flags = sharesRam ? {for (final e in table.entries) e.key: e.value.replaceAll(' --moe-stream-elastic 1', '')} : table;
     // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
@@ -1004,9 +1011,11 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final tuned = await _tuned(local);
-    // the table's row as the autotuner's card list now picks it (the first start may have shown another)
+    // the table's row as the autotuner's card list now picks it (the first start may have shown another), with the
+    // user's Memory headroom and context cache type from the Settings
+    final row = _flagsFor(local, run.vramHeadroom)[run.contextLength];
     final flags = EngineFlags.parse(
-      withVramFree(_flagsFor(local, run.vramHeadroom)[run.contextLength] ?? run.flags, _vramFree(run.vramHeadroom)),
+      withVramFree(row == null ? run.flags : withUserChoices(row, run.flags), _vramFree(run.vramHeadroom)),
     );
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
@@ -1014,7 +1023,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     try {
       engine = await EngineProcess.start(
         command: [
-          ..._memoryCap(run.memoryCapGiB),
           program,
           '-m',
           _modelPath(local),
@@ -1044,7 +1052,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           ...launcherEnvironment(installIdIn(_storage.dir), prefs.shareBenchmarks),
         },
         workingDirectory: folder,
-        memoryCapBytes: _windowsJobCap(run.memoryCapGiB, tuned),
         onOutput: _logChanged.changed,
       );
       _lastEngine = engine;
@@ -1077,44 +1084,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     required String apiKey,
     Map<String, String> environment = const {},
   }) => (arguments: ['--alias', alias, '--metrics'], environment: {...environment, 'LLAMA_API_KEY': apiKey});
-
-  /// Keeps the engine within headroom of RAM (default: all the RAM but 1 GB), so running out of memory ends only the
-  /// engine.
-  static List<String> _memoryCap(double? headroomGiB) {
-    if (!Directory('/run/systemd/system').existsSync()) return const [];
-    final total = RegExp(r'MemTotal:\s+(\d+) kB').firstMatch(File('/proc/meminfo').readAsStringSync());
-    if (total == null) return const [];
-    final totalKiB = int.parse(total[1]!);
-    final headroomKiB = ((headroomGiB ?? defaultHeadroomGiB) * 1048576).round();
-    final capKiB = (totalKiB - headroomKiB).clamp(4 * 1048576, totalKiB - 524288);
-    return ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=${capKiB}K', '-p', 'MemorySwapMax=0', '--'];
-  }
-
-  /// The Windows job's memory limit that leaves [headroomGiB] of RAM free (default [defaultHeadroomGiB]), as [_memoryCap] does on Linux:
-  /// all the RAM but the headroom, at least 4 GiB and at most all but 0.5 GiB. Windows counts what a program puts in the
-  /// graphics card's memory against the job's limit too, and the engine fills the card, so the job also gets the cards'
-  /// video memory: the headroom then stays free in RAM. The cards are the autotuner's (every discrete card, any make;
-  /// built-in GPUs share the RAM and are listed apart), else NVIDIA's read through NVML.
-  static int? _windowsJobCap(double? headroomGiB, Map<String, dynamic>? tuned) {
-    if (!Platform.isWindows) return null;
-    final totalGiB = Win32Metrics().memory()?.totalGiB;
-    if (totalGiB == null) return null;
-    var bytes = ((totalGiB - (headroomGiB ?? defaultHeadroomGiB)).clamp(4.0, totalGiB - 0.5) * 1073741824).round();
-    if (tuned?['gpus'] case final List cards when cards.isNotEmpty) {
-      return bytes + cards.fold<int>(0, (sum, g) => sum + ((g as Map)['mib'] as int)) * 1048576;
-    }
-    final gpus = NvmlReader.open();
-    if (gpus == null) return bytes;
-    try {
-      for (final reading in gpus.read().entries) {
-        final gib = reading.value;
-        if (reading.key.endsWith('.vramTotal') && gib != null) bytes += (gib * 1073741824).round();
-      }
-    } finally {
-      gpus.close();
-    }
-    return bytes;
-  }
 }
 
 class _Changed extends ChangeNotifier {

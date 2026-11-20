@@ -331,7 +331,7 @@ class _VramHeadroom extends ConsumerWidget {
       valueListenable: tune.tuning,
       builder: (context, _, _) {
         final cards = tune.cards;
-        return cards.isEmpty ? const SizedBox.shrink() : _section(context.colors, cards);
+        return cards.isEmpty || tune.sharesRam ? const SizedBox.shrink() : _section(context.colors, cards);
       },
     );
   }
