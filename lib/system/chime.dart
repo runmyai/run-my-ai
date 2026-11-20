@@ -122,11 +122,17 @@ class SoundPlayer {
         _queue.forEach(message.send);
         _queue.clear();
       } else if (message == false) {
-        _playing = false;   // the sound ended, or the device could not play it
+        _playing = false; // the sound ended, or the device could not play it
+      } else if (message == null) {
+        _gone(); // the device's isolate ended (its library failed to load, or it crashed)
       }
     };
-    Isolate.spawn(_deviceLoop, (_replies.sendPort, _libraryPath), debugName: 'sound device')
-        .then<void>((_) {}, onError: (Object _) => _replies.close());
+    Isolate.spawn(
+      _deviceLoop,
+      (_replies.sendPort, _libraryPath),
+      debugName: 'sound device',
+      onExit: _replies.sendPort,
+    ).then<void>((_) {}, onError: (Object _) => _gone());
   }
 
   /// The player, or null when it is not there (as in the tests).
@@ -158,7 +164,21 @@ class SoundPlayer {
   final _queue = <Object>[];
   var _playing = false;
 
-  void _send(Object message) => _device == null ? _queue.add(message) : _device!.send(message);
+  /// No device: sounds are not played (play() says so) and nothing waits in the queue.
+  bool _broken = false;
+
+  void _gone() {
+    _broken = true;
+    _device = null;
+    _playing = false;
+    _queue.clear();
+    _replies.close();
+  }
+
+  void _send(Object message) {
+    if (_broken) return;
+    _device == null ? _queue.add(message) : _device!.send(message);
+  }
 
   /// The device's isolate: plays and stops what it is sent, and says when a sound has ended (or could not start).
   static void _deviceLoop((SendPort, String) start) {
@@ -213,7 +233,7 @@ class SoundPlayer {
   /// Plays the file from its start, in place of any sound still playing; false when it cannot be played. Returns at
   /// once: the device starts on the player's isolate.
   bool play(String path) {
-    if (!check(path)) return false;
+    if (_broken || !check(path)) return false;
     _playing = true;
     _send(path);
     return true;
