@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'engine_flags.dart';
 
 /// The context length a command runs with (its -c flag); null if it has none or it is not a number.
@@ -40,6 +42,25 @@ String withContextLength(String command, int length) =>
 /// The RAM left free for the system and other apps when the user has not set it.
 const defaultHeadroomGiB = 1.5;
 
+/// The graphics card memory (VRAM) left free for the desktop and other apps when the user has not set it, and the least
+/// they may set.
+const defaultVramHeadroomGiB = 0.5;
+const minVramHeadroomGiB = 0.25;
+
+/// The graphics card memory left free on each card: the user's value per card (by [cardKeys]), and [others] for a card
+/// without one of its own (the single value older versions saved, else the default). Never under the minimum.
+class VramHeadroom {
+  const VramHeadroom({this.byCard = const {}, this.others = defaultVramHeadroomGiB});
+
+  final Map<String, double> byCard;
+  final double others;
+
+  double of(String card) => max(byCard[card] ?? others, minVramHeadroomGiB);
+
+  /// The same settings give the same text, so an engine started with them can be told from one started with others.
+  String get key => '$others ${(byCard.entries.toList()..sort((a, b) => a.key.compareTo(b.key))).map((e) => '${e.key}=${e.value}').join(',')}';
+}
+
 /// The context cache types the app offers: the engine's names.
 const kvTypes = ['q4_0', 'q8_0', 'f16'];
 
@@ -62,6 +83,13 @@ String withRamFree(String command, double gib) {
     return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-ram-free${m[2]}$str');
   }
   return '$command --moe-stream-ram-free $str';
+}
+
+/// [command] with the value of its --moe-stream-vram-free set to [value] (a size, or a list per card); a command without
+/// that flag (no graphics card memory in use) is unchanged.
+String withVramFree(String command, String value) {
+  final pattern = RegExp(r'(^|\s)--moe-stream-vram-free([ =])\S+');
+  return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-vram-free${m[2]}$value');
 }
 
 /// The smallest context length a command may use.

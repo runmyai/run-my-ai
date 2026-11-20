@@ -1,8 +1,11 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/storage.dart';
 import '../dev/dev_build.dart';
+import '../engine/commands.dart';
 import 'providers.dart';
 
 class Prefs {
@@ -20,6 +23,8 @@ class Prefs {
     this.speedHighlighted = false,
     this.stateLimitGiB = PrefsData.defaultStateLimitGiB,
     this.shareBenchmarks = true,
+    this.vramHeadroomGiB,
+    this.vramHeadroom = const {},
   });
 
   /// System until the user picks one in Settings: then Run My AI Dark, unless the computer is set to light (see
@@ -61,6 +66,16 @@ class Prefs {
   /// The benchmark numbers (the hardware and the speeds, never a chat) may be shared.
   final bool shareBenchmarks;
 
+  /// The value older versions saved for all cards: the one for a card that has none of its own (null: the default).
+  final double? vramHeadroomGiB;
+
+  /// The graphics card memory (VRAM) the engine leaves free on each card, by [cardKeys].
+  final Map<String, double> vramHeadroom;
+
+  /// What the engine is started with.
+  VramHeadroom get vramHeadroomSetting =>
+      VramHeadroom(byCard: vramHeadroom, others: vramHeadroomGiB ?? defaultVramHeadroomGiB);
+
   /// The text sizes Ctrl+= and Ctrl+- step through.
   static const textScales = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4];
 
@@ -77,6 +92,7 @@ class Prefs {
     bool? speedHighlighted,
     double? stateLimitGiB,
     bool? shareBenchmarks,
+    Map<String, double>? vramHeadroom,
   }) => Prefs(
     theme: theme ?? this.theme,
     darkStyle: darkStyle ?? this.darkStyle,
@@ -91,6 +107,8 @@ class Prefs {
     speedHighlighted: speedHighlighted ?? this.speedHighlighted,
     stateLimitGiB: stateLimitGiB ?? this.stateLimitGiB,
     shareBenchmarks: shareBenchmarks ?? this.shareBenchmarks,
+    vramHeadroomGiB: vramHeadroomGiB,
+    vramHeadroom: vramHeadroom ?? this.vramHeadroom,
   );
 }
 
@@ -125,6 +143,8 @@ class PrefsNotifier extends Notifier<Prefs> {
       speedHighlighted: saved.speedHighlighted,
       stateLimitGiB: saved.stateLimitGiB,
       shareBenchmarks: saved.shareBenchmarks,
+      vramHeadroomGiB: saved.vramHeadroomGiB,
+      vramHeadroom: saved.vramHeadroom,
     );
   }
 
@@ -149,6 +169,11 @@ class PrefsNotifier extends Notifier<Prefs> {
   void setSpeedHighlighted(bool on) => _save(state.copyWith(speedHighlighted: on));
 
   void setShareBenchmarks(bool on) => _save(state.copyWith(shareBenchmarks: on));
+
+  /// The graphics card memory to leave free on the card [card] (its key), at least [minVramHeadroomGiB]. Applies the next
+  /// time the model loads. Always saved as the card's own value: a card with one no longer takes the older single value.
+  void setVramHeadroom(String card, double gib) =>
+      _save(state.copyWith(vramHeadroom: {...state.vramHeadroom, card: max(gib, minVramHeadroomGiB)}));
 
   void toggleThinking() => _save(state.copyWith(thinking: !state.thinking));
 
@@ -190,6 +215,8 @@ class PrefsNotifier extends Notifier<Prefs> {
             soundName: prefs.soundName,
             soundFile: prefs.soundFile,
             shareBenchmarks: prefs.shareBenchmarks,
+            vramHeadroomGiB: prefs.vramHeadroomGiB,
+            vramHeadroom: prefs.vramHeadroom,
           ),
         );
   }

@@ -511,6 +511,10 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         profileName: profileName,
         flags: run.flags,
         memoryCapGiB: run.memoryCapGiB,
+        vramHeadroom: {
+          if (backend is TuneControl)
+            for (final c in (backend as TuneControl).cards) c.key: run.vramHeadroom.of(c.key),
+        },
         promptLabel: setup.test.label,
         replyLength: setup.replyLength,
         warmups: setup.warmups,

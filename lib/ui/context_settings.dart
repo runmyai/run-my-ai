@@ -5,6 +5,7 @@ import '../data/models.dart';
 import '../engine/commands.dart';
 import '../state/chats.dart';
 import '../state/library.dart';
+import '../state/prefs.dart';
 import '../state/profiles.dart';
 import '../state/providers.dart';
 import '../theme.dart';
@@ -214,6 +215,93 @@ class _HeadroomInputState extends ConsumerState<HeadroomInput> {
                 label: 'Reset',
                 onTap: () => setState(() {
                   _text.text = _show(currentCap);
+                  _problem = null;
+                }),
+              ),
+            ],
+          ],
+        ),
+        if (_problem != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(_problem!, style: TextStyle(fontSize: 13, color: c.danger)),
+          ),
+      ],
+    );
+  }
+}
+
+/// The graphics card memory (VRAM) left free on one card ([card]: its key), with Save and Reset.
+class VramHeadroomInput extends ConsumerStatefulWidget {
+  const VramHeadroomInput({super.key, required this.card});
+
+  final String card;
+
+  @override
+  ConsumerState<VramHeadroomInput> createState() => _VramHeadroomInputState();
+}
+
+class _VramHeadroomInputState extends ConsumerState<VramHeadroomInput> {
+  static String _show(double gib) => gib == gib.roundToDouble() ? '${gib.round()}' : '$gib';
+
+  double _current(WidgetRef ref) => ref.read(prefsProvider).vramHeadroomSetting.of(widget.card);
+
+  late final _text = TextEditingController(text: _show(_current(ref)));
+  String? _problem;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final gib = double.tryParse(_text.text.trim());
+    if (gib == null || !gib.isFinite || gib <= 0) {
+      setState(() => _problem = 'Enter a number of GB (e.g. 0.5 or 1).');
+      return;
+    }
+    ref.read(prefsProvider.notifier).setVramHeadroom(widget.card, gib);
+    setState(() {
+      _problem = null;
+      // (A value under the minimum shows as the minimum it was raised to.)
+      _text.text = _show(_current(ref));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final current = ref.watch(prefsProvider.select((p) => p.vramHeadroomSetting.of(widget.card)));
+    final dirty = _text.text.trim() != _show(current);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            SizedBox(
+              width: 160,
+              child: TextField(
+                key: Key('vram-headroom-${widget.card}'),
+                controller: _text,
+                onChanged: (_) => setState(() => _problem = null),
+                style: TextStyle(fontSize: 13, color: c.text),
+                cursorColor: c.text,
+                decoration: _boxDecoration(c, hint: '$defaultVramHeadroomGiB'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
+            if (dirty) ...[
+              const SizedBox(width: 12),
+              MainButton(key: Key('vram-headroom-save-${widget.card}'), label: 'Save', onTap: _save),
+              const SizedBox(width: 6),
+              AppButton(
+                key: Key('vram-headroom-reset-${widget.card}'),
+                label: 'Reset',
+                onTap: () => setState(() {
+                  _text.text = _show(current);
                   _problem = null;
                 }),
               ),
