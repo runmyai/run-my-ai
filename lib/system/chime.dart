@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 import 'package:file_selector/file_selector.dart';
@@ -111,36 +112,102 @@ class Chime {
 }
 
 /// The app's sound player (native/sound.c), loaded from next to the app.
+/// Opening, starting and closing the sound device can take half a second (Windows' audio service), so that is done
+/// on the player's own isolate: the window never waits for it. Only [check], which reads the file, runs here.
 class SoundPlayer {
-  SoundPlayer(DynamicLibrary lib)
-    : _check = Platform.isWindows
-          ? _wide(lib.lookupFunction<Int32 Function(Pointer<Utf16>), int Function(Pointer<Utf16>)>('sound_check_w'))
-          : _utf8(lib.lookupFunction<Int32 Function(Pointer<Utf8>), int Function(Pointer<Utf8>)>('sound_check')),
-      _play = Platform.isWindows
-          ? _wide(lib.lookupFunction<Int32 Function(Pointer<Utf16>), int Function(Pointer<Utf16>)>('sound_play_w'))
-          : _utf8(lib.lookupFunction<Int32 Function(Pointer<Utf8>), int Function(Pointer<Utf8>)>('sound_play')),
-      _playing = lib.lookupFunction<Int32 Function(), int Function()>('sound_playing'),
-      _stop = lib.lookupFunction<Void Function(), void Function()>('sound_stop');
+  SoundPlayer._(DynamicLibrary lib) : _check = _function(lib, 'sound_check') {
+    _replies.handler = (Object? message) {
+      if (message is SendPort) {
+        _device = message;
+        _queue.forEach(message.send);
+        _queue.clear();
+      } else if (message == false) {
+        _playing = false; // the sound ended, or the device could not play it
+      } else if (message == null) {
+        _gone(); // the device's isolate ended (its library failed to load, or it crashed)
+      }
+    };
+    Isolate.spawn(
+      _deviceLoop,
+      (_replies.sendPort, _libraryPath),
+      debugName: 'sound device',
+      onExit: _replies.sendPort,
+    ).then<void>((_) {}, onError: (Object _) => _gone());
+  }
 
   /// The player, or null when it is not there (as in the tests).
   static SoundPlayer? load() {
-    final dir = File(Platform.resolvedExecutable).parent.path;
-    final path = Platform.isWindows
-        ? '$dir/runmyai_sound.dll'
-        : Platform.isMacOS
-        ? '$dir/../Frameworks/librunmyai_sound.dylib'
-        : '$dir/lib/librunmyai_sound.so';
     try {
-      return SoundPlayer(DynamicLibrary.open(path));
+      return SoundPlayer._(DynamicLibrary.open(_libraryPath));
     } on Object catch (_) {
       return null;
     }
   }
 
+  static String get _libraryPath {
+    final dir = File(Platform.resolvedExecutable).parent.path;
+    return Platform.isWindows
+        ? '$dir/runmyai_sound.dll'
+        : Platform.isMacOS
+        ? '$dir/../Frameworks/librunmyai_sound.dylib'
+        : '$dir/lib/librunmyai_sound.so';
+  }
+
+  /// sound_check / sound_play: the path as Windows' own (UTF-16) text there, UTF-8 elsewhere.
+  static int Function(String) _function(DynamicLibrary lib, String name) => Platform.isWindows
+      ? _wide(lib.lookupFunction<Int32 Function(Pointer<Utf16>), int Function(Pointer<Utf16>)>('${name}_w'))
+      : _utf8(lib.lookupFunction<Int32 Function(Pointer<Utf8>), int Function(Pointer<Utf8>)>(name));
+
   final int Function(String) _check;
-  final int Function(String) _play;
-  final int Function() _playing;
-  final void Function() _stop;
+  final _replies = RawReceivePort();
+  SendPort? _device;
+  final _queue = <Object>[];
+  var _playing = false;
+
+  /// No device: sounds are not played (play() says so) and nothing waits in the queue.
+  bool _broken = false;
+
+  void _gone() {
+    _broken = true;
+    _device = null;
+    _playing = false;
+    _queue.clear();
+    _replies.close();
+  }
+
+  void _send(Object message) {
+    if (_broken) return;
+    _device == null ? _queue.add(message) : _device!.send(message);
+  }
+
+  /// The device's isolate: plays and stops what it is sent, and says when a sound has ended (or could not start).
+  static void _deviceLoop((SendPort, String) start) {
+    final (reply, path) = start;
+    final lib = DynamicLibrary.open(path);
+    final play = _function(lib, 'sound_play');
+    final playing = lib.lookupFunction<Int32 Function(), int Function()>('sound_playing');
+    final stop = lib.lookupFunction<Void Function(), void Function()>('sound_stop');
+    final inbox = RawReceivePort();
+    Timer? watch;
+    inbox.handler = (Object? message) {
+      watch?.cancel();
+      if (message is String) {
+        if (play(message) != 1) {
+          reply.send(false);
+          return;
+        }
+        watch = Timer.periodic(const Duration(milliseconds: 100), (_) {
+          if (playing() != 1) {
+            watch?.cancel();
+            reply.send(false);
+          }
+        });
+      } else {
+        stop();
+      }
+    };
+    reply.send(inbox.sendPort);
+  }
 
   static int Function(String) _utf8(int Function(Pointer<Utf8>) f) => (path) {
     final p = path.toNativeUtf8();
@@ -163,13 +230,22 @@ class SoundPlayer {
   /// Whether the file can be played.
   bool check(String path) => _check(path) == 1;
 
-  /// Plays the file from its start, in place of any sound still playing; false when it cannot be played.
-  bool play(String path) => _play(path) == 1;
+  /// Plays the file from its start, in place of any sound still playing; false when it cannot be played. Returns at
+  /// once: the device starts on the player's isolate.
+  bool play(String path) {
+    if (_broken || !check(path)) return false;
+    _playing = true;
+    _send(path);
+    return true;
+  }
 
-  bool get playing => _playing() == 1;
+  bool get playing => _playing;
 
   /// Stops the sound and closes the sound device.
-  void stop() => _stop();
+  void stop() {
+    _playing = false;
+    _send('stop');
+  }
 }
 
 final chimeProvider = Provider<Chime>(Chime.new);
