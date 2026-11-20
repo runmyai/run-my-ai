@@ -12,9 +12,13 @@ import 'downloads.dart';
 /// its private key. Nothing is installed whose checksum is not covered by a signature this key verifies.
 const updateKey = 'lShWZZ8GZEQ/xfNza+uGHveSCMOtk+utSJBiE5TyKTw=';
 
-/// The key signatures are checked against: [updateKey] (tests sign their own releases with a key of their own).
+/// A test build's own public key (`flutter build --dart-define=RUNMYAI_TEST_UPDATE_KEY=<base64>`), to test updates from a local
+/// stand-in signed with a test key; the release builds never set it.
+const _testBuildKey = String.fromEnvironment('RUNMYAI_TEST_UPDATE_KEY');
+
+/// The key signatures are checked against: [updateKey], or a test build's own (tests sign their own releases too).
 @visibleForTesting
-String checkKey = updateKey;
+String checkKey = _testBuildKey.isEmpty ? updateKey : _testBuildKey;
 
 /// Whether [signature] (base64, as in SHA256SUMS.sig) is [key]'s (default [checkKey]) Ed25519 signature of [data].
 bool signedByUs(List<int> data, String signature, {String? key}) {
