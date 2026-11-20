@@ -117,6 +117,21 @@ String withUserChoices(String row, String chosen) {
   return kv == null ? row : withKvType(row, kv[2]!);
 }
 
+/// [args] with the model's data taken from separate files next to the model file at [modelPath] where they exist
+/// (`<model>.correction`, `<model>.vram-experts.json`), instead of the copy inside the model file (`model`): an update of
+/// that data then downloads a few MB, not the model. [exists] is for tests.
+List<String> withModelData(List<String> args, String modelPath, {bool Function(String path)? exists}) {
+  final there = exists ?? (String p) => File(p).existsSync();
+  const files = {'--moe-stream-correction': '.correction', '--moe-stream-vram-experts-file': '.vram-experts.json'};
+  return [
+    for (var i = 0; i < args.length; i++)
+      if (i > 0 && args[i] == 'model' && files[args[i - 1]] != null && there('$modelPath${files[args[i - 1]]}'))
+        '$modelPath${files[args[i - 1]]}'
+      else
+        args[i],
+  ];
+}
+
 /// The smallest context length a command may use.
 const minContextLength = 1024;
 

@@ -188,6 +188,25 @@ jobs:
           sha256sum -c SHA256SUMS
           cat SHA256SUMS
 
+      - name: Sign SHA256SUMS
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          cd release-assets
+          # the app trusts a checksum only when this signature verifies against the public key built into it
+          umask 077
+          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$RUNNER_TEMP/key.pem"
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in SHA256SUMS -out "$RUNNER_TEMP/sig.bin"
+          rm -f "$RUNNER_TEMP/key.pem"
+          base64 -w0 "$RUNNER_TEMP/sig.bin" > SHA256SUMS.sig
+          cat > "$RUNNER_TEMP/pub.pem" <<'KEY'
+          -----BEGIN PUBLIC KEY-----
+          MCowBQYDK2VwAyEAlShWZZ8GZEQ/xfNza+uGHveSCMOtk+utSJBiE5TyKTw=
+          -----END PUBLIC KEY-----
+          KEY
+          sed -i 's/^ *//' "$RUNNER_TEMP/pub.pem"
+          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/pub.pem" -rawin -in SHA256SUMS -sigfile "$RUNNER_TEMP/sig.bin"
+
       - name: Upload combined release bundle artifact
         uses: actions/upload-artifact@v4
         with:

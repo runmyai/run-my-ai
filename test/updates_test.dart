@@ -29,9 +29,12 @@ import 'package:runmyai/state/updates.dart';
 import 'package:runmyai/system/chime.dart';
 import 'package:runmyai/system/folders.dart';
 import 'package:runmyai/system/relaunch.dart';
+import 'package:runmyai/system/signature.dart';
 import 'package:runmyai/system/updater.dart';
 import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/update_page.dart';
+
+import 'signing.dart';
 
 class _Folders extends FoldersNotifier {
   _Folders(this.main);
@@ -173,6 +176,12 @@ class _Server {
         } else {
           response.write(modelList);
         }
+      } else if (path == '/runmyai/m/resolve/main/runmyai.json.sig') {
+        if (modelList == null) {
+          response.statusCode = 404;
+        } else {
+          response.write(testSign(utf8.encode(modelList!)));
+        }
       } else if (path.startsWith('/runmyai/m/resolve/main/') && repo.containsKey(path.split('/').last)) {
         final bytes = repo[path.split('/').last]!;
         final range = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(request.headers.value(HttpHeaders.rangeHeader) ?? '');
@@ -196,7 +205,10 @@ List<int> _engineTar(String text) {
 
 void main() {
   // the widget test's binding answers every request with 400; these talk to a real local server
-  setUpAll(() => HttpOverrides.global = null);
+  setUpAll(() {
+    HttpOverrides.global = null;
+    useTestKey();
+  });
 
   group('versions', () {
     test('semantic versions are compared by number, a pre-release before its release', () {
@@ -211,7 +223,8 @@ void main() {
     test('the release file for each system and CPU', () {
       expect(appAsset('linux', 'x64'), 'RunMyAI-linux-x64.AppImage');
       expect(appAsset('linux', 'arm64'), 'RunMyAI-linux-arm64.AppImage');
-      expect(appAsset('windows', 'x64'), isNull);
+      expect(appAsset('windows', 'x64'), 'RunMyAI-windows-x64.exe');
+      expect(appAsset('macos', 'arm64'), isNull);
     });
 
     test('only newer releases, newest first', () {
@@ -318,9 +331,10 @@ void main() {
           chimeProvider.overrideWith(_Chime.new),
           foldersProvider.overrideWith(() => _Folders(main)),
           gitHubApiProvider.overrideWithValue(hub.uri),
+          websiteReleasesProvider.overrideWithValue(null),
           downloadServerProvider.overrideWithValue(hub.uri),
           updatesEnabledProvider.overrideWithValue(true),
-          appImageProvider.overrideWithValue(fromAppImage ? appImage : null),
+          appFileProvider.overrideWithValue(fromAppImage ? appImage : null),
           relaunchProvider.overrideWithValue(() async => relaunched++),
           ...extra,
         ],
@@ -347,11 +361,13 @@ void main() {
       hub.files['SHA256SUMS'] = utf8.encode(
         '${_sha(hub.files['RunMyAI-linux-x64.AppImage']!)}  RunMyAI-linux-x64.AppImage\n',
       );
+      hub.files['SHA256SUMS.sig'] = utf8.encode(testSign(hub.files['SHA256SUMS']!));
+      const appFiles = ['RunMyAI-linux-x64.AppImage', 'SHA256SUMS', 'SHA256SUMS.sig'];
       hub.appReleases.addAll([
-        hub.release('v$appVersion', 'this one', ['RunMyAI-linux-x64.AppImage', 'SHA256SUMS']),
-        hub.release('v9.1.0', '**first** new', ['RunMyAI-linux-x64.AppImage', 'SHA256SUMS']),
-        hub.release('v9.3.0', 'unfinished', ['RunMyAI-linux-x64.AppImage', 'SHA256SUMS'], draft: true),
-        hub.release('v9.2.0', 'second new', ['RunMyAI-linux-x64.AppImage', 'SHA256SUMS']),
+        hub.release('v$appVersion', 'this one', appFiles),
+        hub.release('v9.1.0', '**first** new', appFiles),
+        hub.release('v9.3.0', 'unfinished', appFiles, draft: true),
+        hub.release('v9.2.0', 'second new', appFiles),
       ]);
 
       // the engine: v0.1.0 installed, v0.2.0 out
@@ -359,8 +375,11 @@ void main() {
       final asset = engineAsset(thisOs, thisArch, 'cuda13');
       hub.files[asset] = tar;
       hub.files['ENGINE-SUMS'] = utf8.encode('${_sha(tar)}  $asset\n');
-      final engineRelease = hub.release('v0.2.0', 'faster engine', [asset, 'ENGINE-SUMS']);
-      (engineRelease['assets']! as List).last['name'] = 'SHA256SUMS';
+      hub.files['ENGINE-SUMS.sig'] = utf8.encode(testSign(hub.files['ENGINE-SUMS']!));
+      final engineRelease = hub.release('v0.2.0', 'faster engine', [asset, 'ENGINE-SUMS', 'ENGINE-SUMS.sig']);
+      final engineFiles = engineRelease['assets']! as List;
+      engineFiles[1]['name'] = 'SHA256SUMS';
+      engineFiles[2]['name'] = 'SHA256SUMS.sig';
       hub.engineReleases.addAll([
         hub.release('v0.1.0', 'first engine', [asset]),
         engineRelease,
@@ -462,6 +481,36 @@ void main() {
         expect(again.read(updatesProvider).engine, isNull);
       },
     );
+
+    test('a data file the newest version adds is downloaded beside the model; an unsigned list offers nothing', () async {
+      final corr = utf8.encode('correction data');
+      hub.repo['m.correction'] = corr;
+      final list = jsonDecode(hub.modelList!) as Map;
+      final versions = list['versions'] as List;
+      versions.add({
+        'version': '3',
+        'notes': 'the data as its own file',
+        'files': {
+          ...versions.last['files'] as Map,
+          'm.gguf': {'sha256': _sha(oldWeights), 'size': oldWeights.length},
+          'm.correction': {'sha256': _sha(corr), 'size': corr.length},
+        },
+      });
+      hub.modelList = jsonEncode(list);
+      final c = make();
+      await c.read(updatesProvider.notifier).check();
+      expect(c.read(updatesProvider).models.single.files.keys, ['m.correction']);
+      await c.read(updatesProvider.notifier).update();
+      expect(File('$main/models/m.correction').readAsBytesSync(), corr);
+      expect(File('$main/models/m.gguf').readAsBytesSync(), oldWeights, reason: 'the weights did not change');
+
+      // a list whose signature does not verify is not read at all
+      checkKey = base64.encode(List.filled(32, 9));
+      addTearDown(useTestKey);
+      File('$main/models/m.correction').deleteSync();
+      await c.read(updatesProvider.notifier).check();
+      expect(c.read(updatesProvider).models, isEmpty);
+    });
 
     test('a failed check says nothing', () async {
       final c = make();
@@ -571,6 +620,7 @@ void main() {
       // and an AppImage that does not match SHA256SUMS
       hub.modelList = null;
       hub.files['SHA256SUMS'] = utf8.encode('${_sha(utf8.encode('other'))}  RunMyAI-linux-x64.AppImage\n');
+      hub.files['SHA256SUMS.sig'] = utf8.encode(testSign(hub.files['SHA256SUMS']!));
       final again = make();
       await again.read(updatesProvider.notifier).check();
       await again.read(updatesProvider.notifier).update();
