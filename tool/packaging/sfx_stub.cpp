@@ -238,6 +238,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int show_cmd) {
     std::vector<wchar_t> cmd_buf(full_cmd.begin(), full_cmd.end());
     cmd_buf.push_back(L'\0');
 
+    // the app replaces this launcher with a new version and starts it again (lib/system/relaunch.dart)
+    std::vector<wchar_t> self(32768);
+    DWORD self_len = GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size()));
+    if (self_len > 0 && self_len < self.size()) SetEnvironmentVariableW(L"RUNMYAI_LAUNCHER", self.data());
+
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;

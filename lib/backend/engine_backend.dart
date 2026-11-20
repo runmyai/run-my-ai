@@ -1034,10 +1034,13 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           program,
           '-m',
           _modelPath(local),
-          ...withTuning([
-            // the model's data files are next to it
-            for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
-          ], tuned),
+          ...withTuning(
+            withModelData([
+              // the model's data files are next to it
+              for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
+            ], _modelPath(local)),
+            tuned,
+          ),
           '--cache-disk',
           states,
           '--cache-disk-gb',

@@ -17,5 +17,15 @@ void main() {
     expect(withoutRamFree('--moe-stream-ram-free=1GiB -c 4096'), '-c 4096');
   });
 
+  test('a data file next to the model replaces the copy inside it; without the file the flag stays', () {
+    const args = ['--moe-stream', 'model', '--moe-stream-correction', 'model', '--moe-stream-vram-experts-file', 'model', '-c', '4096'];
+    expect(withModelData(args, '/m/a.gguf', exists: (p) => p == '/m/a.gguf.vram-experts.json'), [
+      '--moe-stream', 'model', '--moe-stream-correction', 'model', '--moe-stream-vram-experts-file', '/m/a.gguf.vram-experts.json',
+      '-c', '4096',
+    ]);
+    expect(withModelData(args, '/m/a.gguf', exists: (_) => true)[3], '/m/a.gguf.correction');
+    expect(withModelData(args, '/m/a.gguf', exists: (_) => false), args);
+  });
+
   test('the offered types are the engine\'s names', () => expect(kvTypes, ['q4_0', 'q8_0', 'f16']));
 }

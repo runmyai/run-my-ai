@@ -241,7 +241,12 @@ class ModelDownload {
     this.onProgress,
     this.onVerified,
     this.retryDelay = const Duration(seconds: 1),
+    this.known,
   }) : server = server ?? huggingFace;
+
+  /// The files' sizes and checksums when the caller knows them already (from a signed list): Hugging Face's own list
+  /// of the repo's files is not read then.
+  final List<RemoteFile>? known;
 
   final ModelFile file;
   final String folder;
@@ -291,7 +296,7 @@ class ModelDownload {
       Directory(folder).createSync(recursive: true);
       final List<RemoteFile> files;
       try {
-        files = await remoteFiles(client, server, file.repo!, file.parts);
+        files = known ?? await remoteFiles(client, server, file.repo!, file.parts);
       } on IOException {
         if (_stopped) return false;
         throw const DownloadFailure('Could not reach Hugging Face. Check the internet connection, then press Resume.');
