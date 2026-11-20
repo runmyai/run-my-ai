@@ -47,15 +47,17 @@ void main() {
   });
   tearDown(() => dir.deleteSync(recursive: true));
 
-  testWidgets('a remembered model whose files are gone, and one found in the folder, update the window cleanly', (
-    tester,
-  ) async {
+  for (final (what, start) in const [
+    ('a remembered model whose files are gone, and one found in the folder', LibraryData(downloaded: {'gone/q'}, picked: 'gone/q')),
+    ('nothing downloaded by the app, a model found in the folder', LibraryData()),
+  ]) {
+    testWidgets('$what: the window updates cleanly and the found model is the one in use', (tester) async {
     tester.view.physicalSize = const Size(1600, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final storage = Storage(dir);
     storage.writeFirstRun(const {});
-    storage.writeLibrary(const LibraryData(downloaded: {'gone/q'}, picked: 'gone/q'));
+    storage.writeLibrary(start);
     FolderSet(main: dir.path, models: '${dir.path}/models', chats: '${dir.path}/chats', cache: '${dir.path}/cache')
         .save(dir);
     File('${dir.path}/models/here.gguf')
@@ -84,5 +86,6 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(container.read(libraryProvider).downloaded, {'here/q'});
     expect(container.read(pickedModelProvider)?.file.id, 'here/q');
-  });
+    });
+  }
 }
