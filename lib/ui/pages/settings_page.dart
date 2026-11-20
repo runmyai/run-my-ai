@@ -331,7 +331,7 @@ class _VramHeadroom extends ConsumerWidget {
       valueListenable: tune.tuning,
       builder: (context, _, _) {
         final cards = tune.cards;
-        return cards.isEmpty ? const SizedBox.shrink() : _section(context.colors, cards);
+        return cards.isEmpty || tune.sharesRam ? const SizedBox.shrink() : _section(context.colors, cards);
       },
     );
   }
@@ -341,7 +341,7 @@ class _VramHeadroom extends ConsumerWidget {
     return '${gb.endsWith('.0') ? gb.substring(0, gb.length - 2) : gb} GB';
   }
 
-  Widget _section(AppColors c, List<({String key, String name, int mib})> cards) => Padding(
+  Widget _section(AppColors c, List<({String key, String name, String desc, int mib})> cards) => Padding(
     padding: const EdgeInsets.only(top: 20),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -358,7 +358,11 @@ class _VramHeadroom extends ConsumerWidget {
         for (final card in cards) ...[
           const SizedBox(height: 12),
           Text(
-            card.name.isEmpty ? 'Graphics card, ${_gb(card.mib)}' : '${card.name}, ${_gb(card.mib)}',
+            [
+              if (card.desc.isNotEmpty) card.desc else if (card.name.isEmpty) 'Graphics card',
+              if (card.name.isNotEmpty) card.name,
+              _gb(card.mib),
+            ].join(', '),
             key: Key('vram-card-${card.key}'),
             style: TextStyle(fontSize: 13, color: c.text),
           ),

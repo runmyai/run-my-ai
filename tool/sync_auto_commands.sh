@@ -4,9 +4,9 @@
 #   tool/sync_auto_commands.sh [--check] [FILE]
 #
 # For each model and each kind of machine (the presets' cases: 1 a large GPU, 2 a small GPU, 3 CPU-only) and every size in
-# its PRESET_SIZES it takes the command `preset_command <size>` prints and keeps what the app stores: the environment settings first, then the engine's flags. The app supplies the rest itself
-# when it starts the engine: the memory-cap wrapper (systemd-run, the same words as _memoryCap in
-# lib/backend/engine_backend.dart), the program, the model file (-m), the address and the port. A data file kept next to
+# its PRESET_SIZES it takes the command `preset_command <size>` prints and keeps what the app stores: the environment settings first, then the engine's flags. The presets'
+# memory-cap wrapper (systemd-run, for our own runs) is left out: the app runs the engine without a cap. The app supplies the
+# rest itself when it starts the engine: the program, the model file (-m), the address and the port. A data file kept next to
 # a model (Qwen's correction file and VRAM list) is written as {models}/<file>: the app puts its models folder there.
 #
 # --check writes nothing: it exits 1 and shows the difference when FILE (default: lib/engine/auto_commands.dart) is not
@@ -63,7 +63,7 @@ app_command () {   # preset file, size, case
         i=$((i + 1))
         local wrapper="${words[*]:0:i}"
         [[ $wrapper == "systemd-run --user --scope -q -p MemoryMax="*"K -p MemorySwapMax=0 --" ]] ||
-            die "$file $size: the memory-cap wrapper is not the one the app uses ($wrapper); change _memoryCap in engine_backend.dart too"
+            die "$file $size: the memory-cap wrapper is not the one this script knows ($wrapper)"
     fi
     [ "${words[i]:-}" = env ] && i=$((i + 1))
     local -a settings=() flags=()

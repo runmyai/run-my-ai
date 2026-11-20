@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math';
 
 import 'engine_flags.dart';
@@ -39,8 +40,17 @@ List<int> contextOptions(int maxContext) {
 String withContextLength(String command, int length) =>
     command.replaceFirstMapped(RegExp(r'(^|\s)(-c|--ctx-size)([ =])\d+'), (m) => '${m[1]}${m[2]}${m[3]}$length');
 
-/// The RAM left free for the system and other apps when the user has not set it.
-const defaultHeadroomGiB = 1.5;
+/// The RAM the engine leaves free for the system and other apps when the user has not set Memory headroom: the engine's own
+/// default (no --moe-stream-ram-free is passed then), 1.25 GiB on Linux, 2 GiB on a Linux PC without swap, 1.5 GiB elsewhere.
+final double defaultHeadroomGiB = () {
+  if (!Platform.isLinux) return 1.5;
+  try {
+    final swap = RegExp(r'SwapTotal:\s+(\d+) kB').firstMatch(File('/proc/meminfo').readAsStringSync());
+    return swap != null && swap[1] == '0' ? 2.0 : 1.25;
+  } on IOException {
+    return 1.25;
+  }
+}();
 
 /// The graphics card memory (VRAM) left free for the desktop and other apps when the user has not set it, and the least
 /// they may set.
@@ -76,8 +86,10 @@ String withKvType(String command, String type) {
 }
 
 /// [command] with its --moe-stream-ram-free set to [gib].
-String withRamFree(String command, double gib) {
-  final str = gib == gib.roundToDouble() ? '${gib.round()}GiB' : '${gib}GiB';
+String withRamFree(String command, double gib) =>
+    _withRamFreeText(command, gib == gib.roundToDouble() ? '${gib.round()}GiB' : '${gib}GiB');
+
+String _withRamFreeText(String command, String str) {
   final pattern = RegExp(r'(^|\s)--moe-stream-ram-free([ =])\S+');
   if (pattern.hasMatch(command)) {
     return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-ram-free${m[2]}$str');
@@ -90,6 +102,19 @@ String withRamFree(String command, double gib) {
 String withVramFree(String command, String value) {
   final pattern = RegExp(r'(^|\s)--moe-stream-vram-free([ =])\S+');
   return command.replaceFirstMapped(pattern, (m) => '${m[1]}--moe-stream-vram-free${m[2]}$value');
+}
+
+/// [command] without --moe-stream-ram-free: the engine then leaves its own default free ([defaultHeadroomGiB]).
+String withoutRamFree(String command) =>
+    command.replaceAll(RegExp(r'(^|\s)--moe-stream-ram-free([ =])\S+'), '').trim();
+
+/// [row] (an Auto command as the table gives it now) with what the user chose in [chosen] (the command the Settings made):
+/// Memory headroom (--moe-stream-ram-free, or none) and the context cache type.
+String withUserChoices(String row, String chosen) {
+  final free = RegExp(r'(^|\s)--moe-stream-ram-free[ =](\S+)').firstMatch(chosen);
+  row = free == null ? withoutRamFree(row) : _withRamFreeText(row, free[2]!);
+  final kv = RegExp(r'(^|\s)-ctk[ =](\S+)').firstMatch(chosen);
+  return kv == null ? row : withKvType(row, kv[2]!);
 }
 
 /// The smallest context length a command may use.

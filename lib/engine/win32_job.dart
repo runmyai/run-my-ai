@@ -60,11 +60,10 @@ class Win32Job {
   int _handle;
 
   static const _jobObjectExtendedLimitInformation = 9;
-  static const _limitJobMemory = 0x00000200;
   static const _limitKillOnJobClose = 0x00002000;
   static const _processSetQuotaAndTerminate = 0x0101;
 
-  static Win32Job? attach(int pid, {int? memoryCapBytes}) {
+  static Win32Job? attach(int pid) {
     if (!Platform.isWindows) return null;
     try {
       final k32 = DynamicLibrary.open('kernel32.dll');
@@ -91,12 +90,7 @@ class Win32Job {
 
       final info = calloc<_JobExtendedLimitInfo>();
       try {
-        var flags = _limitKillOnJobClose;
-        if (memoryCapBytes != null && memoryCapBytes > 0) {
-          flags |= _limitJobMemory;
-          info.ref.jobMemoryLimit = memoryCapBytes;
-        }
-        info.ref.basic.limitFlags = flags;
+        info.ref.basic.limitFlags = _limitKillOnJobClose;
         if (setInfo(job, _jobObjectExtendedLimitInformation, info.cast(), sizeOf<_JobExtendedLimitInfo>()) == 0) {
           closeHandle(job);
           return null;

@@ -17,7 +17,7 @@ const _file = ModelFile(id: 'm/f', quantization: 'q', sizeBytes: 1);
 
 class _Backend implements Backend {
   @override
-  Map<int, String> autoCommands(ModelFile file) => const {65536: 'A=1 -c 65536 --x', 4096: '-c 4096'};
+  Map<int, String> autoCommands(ModelFile file) => const {65536: 'A=1 -c 65536 --x', 4096: '-c 4096 --moe-stream model --moe-stream-ram-free 0.5GiB'};
   @override
   int maxContext(ModelFile file) => 262144;
   @override
@@ -184,6 +184,12 @@ void main() {
       profiles().setMemoryCap(_file, null);
       expect(profiles().active(_file).memoryCapGiB, isNull);
       expect(profiles().runFor(_file, 65536).memoryCapGiB, isNull);
+    });
+
+    test('Memory headroom reaches Auto\'s streaming command only when set; unset, the engine keeps its own default', () {
+      expect(profiles().runFor(_file, 4096).flags, '-c 4096 --moe-stream model');
+      profiles().setMemoryCap(_file, 2.0);
+      expect(profiles().runFor(_file, 4096).flags, '-c 4096 --moe-stream model --moe-stream-ram-free 2GiB');
     });
 
     test('setting memory cap updates all models presets', () {
