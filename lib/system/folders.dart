@@ -185,6 +185,38 @@ String _blockName(String device, FileSource sys) {
   return name;
 }
 
+/// What a folder's drive is, for how fast models run from it: only an SSD is fast; a hard disk or a USB drive is very
+/// slow for a model that is read while it answers.
+enum DriveKind { ssd, hardDisk, usb, unknown }
+
+/// The kind of the whole disk [disk] (a name in /sys/block): USB and removable drives first, then spinning or not.
+DriveKind _diskKind(String disk, FileSource sys) {
+  if (sys.read('/sys/block/$disk/removable')?.trim() == '1') return DriveKind.usb;
+  final number = sys.read('/sys/block/$disk/dev')?.trim();
+  if (number != null && (sys.read('/run/udev/data/b$number') ?? '').contains('E:ID_BUS=usb')) return DriveKind.usb;
+  return switch (sys.read('/sys/block/$disk/queue/rotational')?.trim()) {
+    '0' => DriveKind.ssd,
+    '1' => DriveKind.hardDisk,
+    _ => DriveKind.unknown,
+  };
+}
+
+/// Not drives: loop, RAM, zram, disc and floppy devices.
+final _notDrives = RegExp(r'^/dev/(loop|zram|ram|sr|fd)');
+
+/// The mount that holds [path]: the one with the longest mount point.
+Mount? _mountHolding(List<Mount> mounts, String path) => mounts
+    .where((m) => m.path == '/' || path == m.path || path.startsWith('${m.path}/'))
+    .fold<Mount?>(null, (best, m) => best == null || m.path.length > best.path.length ? m : best);
+
+/// The kind of the drive that holds [path] on Linux, from [mounts] (/proc/mounts) and [sys] (/sys and udev's
+/// records); unknown for a network or memory filesystem, or when /sys does not say.
+DriveKind driveKindLinux({required String mounts, required String path, required FileSource sys}) {
+  final m = _mountHolding(parseMounts(mounts), path);
+  if (m == null || !m.device.startsWith('/dev/') || _notDrives.hasMatch(m.device)) return DriveKind.unknown;
+  return _diskKind(_disk(_blockName(m.device, sys), sys), sys);
+}
+
 /// Where the main folder goes on Linux: on the internal drive with the most free space, SSDs before spinning disks.
 /// Left out: FAT, network, pseudo and read-only filesystems, removable and USB drives, and drives the user cannot
 /// write to. On the drive that holds [home] the folder is in [home] (a user cannot write that drive's top); on
@@ -198,19 +230,14 @@ String chooseMainFolderLinux({
   required bool Function(String folder) writable,
 }) {
   final all = parseMounts(mounts);
-  bool holds(String mount, String path) => mount == '/' || path == mount || path.startsWith('$mount/');
-  final homeMount = all
-      .where((m) => holds(m.path, home))
-      .fold<Mount?>(null, (best, m) => best == null || m.path.length > best.path.length ? m : best);
+  final homeMount = _mountHolding(all, home);
   final drives = <String, ({String folder, int free, bool ssd})>{};
   for (final m in all) {
     if (!m.device.startsWith('/dev/') || m.readOnly || _skippedTypes.contains(m.type)) continue;
-    if (RegExp(r'^/dev/(loop|zram|ram|sr|fd)').hasMatch(m.device)) continue;
-    final disk = _disk(_blockName(m.device, sys), sys);
-    if (sys.read('/sys/block/$disk/removable')?.trim() == '1') continue;
-    final number = sys.read('/sys/block/$disk/dev')?.trim();
-    if (number != null && (sys.read('/run/udev/data/b$number') ?? '').contains('E:ID_BUS=usb')) continue;
-    final ssd = sys.read('/sys/block/$disk/queue/rotational')?.trim() == '0';
+    if (_notDrives.hasMatch(m.device)) continue;
+    final kind = _diskKind(_disk(_blockName(m.device, sys), sys), sys);
+    if (kind == DriveKind.usb) continue;
+    final ssd = kind == DriveKind.ssd;
     final onHome = m.device == homeMount?.device;
     if (drives.containsKey(m.device) && !onHome) continue;
     if (onHome) {
@@ -226,14 +253,37 @@ String chooseMainFolderLinux({
   return best?.folder ?? _join(home, mainFolderName);
 }
 
-/// One Windows drive: its letter ("D:"), filesystem and free bytes.
-typedef WindowsDrive = ({String letter, String fileSystem, int free});
+/// One Windows drive: its letter ("D:"), filesystem, free bytes and kind.
+typedef WindowsDrive = ({String letter, String fileSystem, int free, DriveKind kind});
 
-/// Where the main folder goes on Windows: `<drive>:\Run My AI` on the fixed NTFS drive with the most free space.
-/// shortcut: SSDs are not preferred on Windows yet; that needs the physical disk behind each drive letter.
+/// The kind of a Windows disk from what PowerShell's Get-PhysicalDisk says, `MediaType/BusType` (for example
+/// `SSD/NVMe` or `HDD/SATA`); unknown when it says neither.
+DriveKind parseWindowsKind(String text) {
+  final parts = text.trim().split('/');
+  if (parts.length != 2) return DriveKind.unknown;
+  final (media, bus) = (parts[0].toLowerCase(), parts[1].toLowerCase());
+  if (bus == 'usb') return DriveKind.usb;
+  if (media == 'ssd' || bus == 'nvme') return DriveKind.ssd;
+  return media == 'hdd' ? DriveKind.hardDisk : DriveKind.unknown;
+}
+
+/// PowerShell: the physical disk behind the drive letter in `$l`, as `MediaType/BusType`; empty when it fails.
+const _psKindOfLetter =
+    r"try { $d = Get-Partition -DriveLetter $l -ErrorAction Stop | Get-Disk | Get-PhysicalDisk; $d.MediaType + '/' + $d.BusType } catch { '' }";
+
+/// Where the main folder goes on Windows: `<drive>:\Run My AI` on the fixed NTFS drive with the most free space,
+/// SSDs before hard disks; USB drives are left out.
 String chooseMainFolderWindows(List<WindowsDrive> drives) {
-  final ntfs = drives.where((d) => d.fileSystem.toUpperCase() == 'NTFS');
-  final best = ntfs.fold<WindowsDrive?>(null, (best, d) => best == null || d.free > best.free ? d : best);
+  final ntfs = drives.where((d) => d.fileSystem.toUpperCase() == 'NTFS' && d.kind != DriveKind.usb);
+  final best = ntfs.fold<WindowsDrive?>(
+    null,
+    (best, d) =>
+        best == null ||
+            (d.kind == DriveKind.ssd && best.kind != DriveKind.ssd) ||
+            ((d.kind == DriveKind.ssd) == (best.kind == DriveKind.ssd) && d.free > best.free)
+        ? d
+        : best,
+  );
   return '${best?.letter ?? 'C:'}\\$mainFolderName';
 }
 
@@ -262,19 +312,52 @@ String defaultMainFolder() {
   }
 }
 
-/// The fixed drives (Windows' type 3) with their filesystem and free bytes.
-/// shortcut: a USB disk that Windows reports as fixed counts as internal.
+/// The fixed drives (Windows' type 3) with their filesystem, free bytes and kind.
 List<WindowsDrive> _windowsDrives() {
   final r = Process.runSync('powershell', [
     '-NoProfile',
     '-Command',
-    r"Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { $_.DeviceID + '|' + $_.FileSystem + '|' + $_.FreeSpace }",
+    [
+      r"Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { $l = $_.DeviceID.Substring(0,1); ",
+      r"$_.DeviceID + '|' + $_.FileSystem + '|' + $_.FreeSpace + '|' + $( ",
+      _psKindOfLetter,
+      r" ) }",
+    ].join(),
   ]);
   return [
     for (final line in const LineSplitter().convert(r.stdout as String))
-      if (line.trim().split('|') case [final letter, final fs, final free] when int.tryParse(free) != null)
-        (letter: letter, fileSystem: fs, free: int.parse(free)),
+      if (line.trim().split('|') case [final letter, final fs, final free, final kind] when int.tryParse(free) != null)
+        (letter: letter, fileSystem: fs, free: int.parse(free), kind: parseWindowsKind(kind)),
   ];
+}
+
+/// The kind of the drive that holds [path] (which may not exist yet); unknown when the system cannot say. On Windows
+/// it asks PowerShell for the physical disk behind the drive letter, for at most 8 seconds.
+Future<DriveKind> driveKindOf(String path) async {
+  try {
+    if (Platform.isWindows) {
+      final letter = RegExp(r'^([A-Za-z]):').firstMatch(path)?[1];
+      if (letter == null) return DriveKind.unknown;
+      final r = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        "\$l = '$letter'; $_psKindOfLetter",
+      ]).timeout(const Duration(seconds: 8));
+      return parseWindowsKind(r.stdout as String);
+    }
+    if (!Platform.isLinux) return DriveKind.unknown;
+    var dir = Directory(path);
+    while (!dir.existsSync() && dir.parent.path != dir.path) {
+      dir = dir.parent;
+    }
+    return driveKindLinux(
+      mounts: File('/proc/mounts').readAsStringSync(),
+      path: dir.resolveSymbolicLinksSync(),
+      sys: const DiskFiles(),
+    );
+  } on Exception {
+    return DriveKind.unknown;
+  }
 }
 
 /// Free bytes on the drive that holds [path] (or its nearest folder that exists); null when it cannot be read.
