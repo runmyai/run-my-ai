@@ -1,6 +1,8 @@
 // Self-extracting Windows launcher for Run My AI.
 // Unpacks LZMS-compressed RCDATA resource 102 keyed by RCDATA 101 version tag
-// into %LOCALAPPDATA%\RunMyAI\app\<tag> and launches runmyai.exe.
+// into %LOCALAPPDATA%\RunMyAI\app\<tag> and launches runmyai.exe. Older
+// versions' folders there are removed (a folder still in use stays until a
+// later start).
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -142,6 +144,34 @@ static bool file_exists(const std::wstring & p) {
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+// Removes every folder in base_dir except keep: older versions and leftovers
+// of an interrupted unpack. A folder whose files are in use (an older app still
+// closing) fails to delete and is tried again at the next start.
+static void remove_old_versions(const std::wstring & base_dir, const std::wstring & keep) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((base_dir + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        std::wstring name = fd.cFileName;
+        if (name == L"." || name == L".." || name == keep) continue;
+        // a version still running holds its program open: leave that folder whole
+        HANDLE exe = CreateFileW((base_dir + L"\\" + name + L"\\runmyai.exe").c_str(), GENERIC_READ, 0, nullptr,
+                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (exe == INVALID_HANDLE_VALUE && GetLastError() == ERROR_SHARING_VIOLATION) continue;
+        if (exe != INVALID_HANDLE_VALUE) CloseHandle(exe);
+        // a double-null-terminated path, as SHFileOperation wants
+        std::wstring from = base_dir + L"\\" + name;
+        from.push_back(L'\0');
+        SHFILEOPSTRUCTW op{};
+        op.wFunc = FO_DELETE;
+        op.pFrom = from.c_str();
+        op.fFlags = FOF_NO_UI;
+        SHFileOperationW(&op);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+
 static std::wstring args_after_exe(const wchar_t * cmd) {
     if (!cmd) return L"";
     const wchar_t * p = cmd;
@@ -219,5 +249,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int show_cmd) {
     }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
+    remove_old_versions(base_dir, ver_tag);
     return 0;
 }
