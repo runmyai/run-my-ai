@@ -323,9 +323,17 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// The cards the engine can use: the autotuner's list ([cardsFrom]: separate cards of any size and make, a built-in GPU
   /// with 24 GiB or more); before its first run the one-time reading.
   @override
-  List<({String key, String name, int mib})> get cards {
+  List<({String key, String name, String desc, int mib})> get cards {
     final list = _cards, keys = cardKeys(list);
-    return [for (var i = 0; i < list.length; i++) (key: keys[i], name: list[i].name, mib: list[i].mib)];
+    final tune = _savedTune;
+    // the full names the autotuner reports next to the device names (none from an older engine)
+    final descs = <String, String>{
+      for (final g in [...?(tune?['gpus'] as List?), ...?(tune?['igpus'] as List?)])
+        if (g is Map && g['name'] is String && g['desc'] is String) g['name'] as String: g['desc'] as String,
+    };
+    return [
+      for (var i = 0; i < list.length; i++) (key: keys[i], name: list[i].name, desc: descs[list[i].name] ?? '', mib: list[i].mib),
+    ];
   }
 
   @override

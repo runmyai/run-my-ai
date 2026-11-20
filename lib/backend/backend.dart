@@ -255,8 +255,8 @@ abstract class TuneControl {
 
   /// The graphics cards the engine can use, fastest first: separate cards of any size and make, or a built-in GPU the app
   /// uses as its card (empty: none). [key]: what the card's settings are saved under; [name]: as the engine lists it (empty
-  /// before the autotuner's first run).
-  List<({String key, String name, int mib})> get cards;
+  /// before the autotuner's first run); [desc]: its full name (e.g. "NVIDIA GeForce RTX 4070"), empty when unknown.
+  List<({String key, String name, String desc, int mib})> get cards;
 
   /// Whether the card in use is a built-in GPU that shares the RAM (no separate card): its memory is the RAM, so the
   /// engine runs with fixed memory (no elastic RAM) and Memory headroom is the only memory setting.

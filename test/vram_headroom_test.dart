@@ -50,7 +50,7 @@ class _Backend implements Backend {
 /// A backend with the cards it is told of, and a tune that can end.
 class _GpuBackend extends _Backend implements TuneControl {
   @override
-  List<({String key, String name, int mib})> cards = const [(key: 'CUDA0', name: 'CUDA0', mib: 12288)];
+  List<({String key, String name, String desc, int mib})> cards = const [(key: 'CUDA0', name: 'CUDA0', desc: '', mib: 12288)];
   @override
   bool sharesRam = false;
   final tuned = ValueNotifier<String?>(null);
@@ -245,15 +245,18 @@ void main() {
     testWidgets('a row for each card, with its name and memory; none without a card; the saved values stay', (tester) async {
       Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA1': 2}));
       final backend = _GpuBackend()
-        ..cards = const [(key: 'CUDA1', name: 'CUDA1', mib: 12288), (key: 'CUDA0', name: 'CUDA0', mib: 8192)];
+        ..cards = const [
+          (key: 'CUDA1', name: 'CUDA1', desc: 'NVIDIA GeForce RTX 4070', mib: 12288),
+          (key: 'CUDA0', name: 'CUDA0', desc: '', mib: 8192),
+        ];
       final container = await show(tester, backend);
       expect(find.text('VRAM headroom'), findsOneWidget, reason: 'one explanation above the rows');
-      expect(find.text('CUDA1, 12 GB'), findsOneWidget);
+      expect(find.text('NVIDIA GeForce RTX 4070, CUDA1, 12 GB'), findsOneWidget, reason: 'the full name first when known');
       expect(find.text('CUDA0, 8 GB'), findsOneWidget);
       expect(tester.widget<TextField>(find.byKey(const Key('vram-headroom-CUDA1'))).controller!.text, '2');
       expect(tester.widget<TextField>(find.byKey(const Key('vram-headroom-CUDA0'))).controller!.text, '0.5');
       // one card, not yet named (before the autotuner's first run)
-      backend.cards = const [(key: 'gpu', name: '', mib: 12288)];
+      backend.cards = const [(key: 'gpu', name: '', desc: '', mib: 12288)];
       backend.tuned.value = 'm';
       await tester.pump();
       backend.tuned.value = null;
@@ -288,14 +291,17 @@ void main() {
       return EngineBackend(Storage(dir));
     }
 
-    Map<String, Object?> card(String name, int mib, int gbps) => {'name': name, 'mib': mib, 'gbps': gbps};
+    Map<String, Object?> card(String name, int mib, int gbps, [String? desc]) =>
+        {'name': name, 'mib': mib, 'gbps': gbps, 'desc': ?desc};
 
     test('the cards: separate ones of any size or make, a built-in GPU only with 24 GiB or more; same names get their place', () async {
-      expect((await withCards([card('CUDA0', 12 * 1024, 20)])).cards, [(key: 'CUDA0', name: 'CUDA0', mib: 12288)]);
+      expect((await withCards([card('CUDA0', 12 * 1024, 20)])).cards, [(key: 'CUDA0', name: 'CUDA0', desc: '', mib: 12288)]);
       expect((await withCards([card('Vulkan0', 2 * 1024, 5)])).cards, hasLength(1), reason: 'under 4 GB too, any make');
       expect((await withCards([])).cards, isEmpty);
       expect((await withCards([], built: [8 * 1024])).cards, isEmpty, reason: 'a small built-in GPU is not used');
       expect((await withCards([], built: [32 * 1024])).cards, hasLength(1), reason: 'a built-in GPU the app uses as its card');
+      expect((await withCards([card('CUDA0', 12 * 1024, 20, 'NVIDIA GeForce RTX 4070')])).cards.single.desc, 'NVIDIA GeForce RTX 4070',
+          reason: 'the autotuner\'s full name');
       final same = (await withCards([card('Vulkan0', 8192, 20), card('Vulkan0', 8192, 10)])).cards;
       expect([for (final c in same) c.key], ['Vulkan0#0', 'Vulkan0#1']);
     });
