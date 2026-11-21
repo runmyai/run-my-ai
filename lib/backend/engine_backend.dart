@@ -35,6 +35,10 @@ class _LocalModel {
     required this.smallFlags,
     required this.cpuFlags,
     this.thinkingSwitch = false,
+    this.isByom = false,
+    this.isMoE = true,
+    this.defaultMaxContext = 131072,
+    this.needsQuantPlugin = false,
   });
 
   final CatalogModel model;
@@ -45,10 +49,14 @@ class _LocalModel {
   /// One command per context length, for a large GPU, a small one, and none.
   final Map<int, String> flags, smallFlags, cpuFlags;
 
-  /// Its layer count, its first MoE layer, and one layer's experts in GiB (for the two-card layout).
-
   /// Its thinking can be turned off.
   final bool thinkingSwitch;
+
+  /// True for user-supplied `.gguf` files discovered in the models folders rather than curated Store presets.
+  final bool isByom;
+  final bool isMoE;
+  final int defaultMaxContext;
+  final bool needsQuantPlugin;
 }
 
 /// The real engine: TokenWing's llama-server, started directly by the app. One model is loaded at a time: the first
@@ -242,7 +250,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   @override
   Map<String, dynamic>? savedTune(ModelFile file) {
-    final local = _models.where((m) => m.model.files.contains(file)).firstOrNull;
+    final local = _findLocal(file);
     final key = local == null ? null : _tuneKey(local);
     if (key == null) return null;
     final kept = (_savedTune?['models'] as Map<String, dynamic>?)?[key];
@@ -348,12 +356,39 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return cards.isEmpty ? vramSize(headroom.of('')) : vramFreeValue(cards, [for (final k in keys) headroom.of(k)]);
   }
 
-  /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
-  /// largest card. With several cards all of them share the model, filled fastest first (cardFlags).
-  /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
+  /// The model's commands for this machine: curated Store presets use their precomputed tables; user-supplied BYOM `.gguf`
+  /// files synthesize their commands from `autotuner`'s `recommended_flags` / `recommended_env` (or the universal profile).
   Map<int, String> _flagsFor(_LocalModel m, VramHeadroom vramHeadroom) {
     final cards = _cards;
     final gib = _largestCardGiB;
+    if (m.isByom) {
+      final file = m.model.files.first;
+      final base = commandsFromAutotuner(
+        savedTune(file),
+        maxContext: maxContext(file),
+        isMoE: m.isMoE,
+        largestGpuGiB: gib,
+      );
+      if (gib < 4) return base;
+      final flags = sharesRam
+          ? {for (final e in base.entries) e.key: e.value.replaceAll(' --moe-stream-elastic 1', '')}
+          : base;
+      final extra = [
+        if (Platform.isWindows) '--moe-stream-async-h2d 0',
+        if (cards.length > 1 && cards.every((c) => c.name.isNotEmpty))
+          ...cardFlags(cards)
+        else if (cards.length == 1 && cards[0].name.isNotEmpty)
+          '--device ${cards[0].name}',
+      ].join(' ');
+      final free = _vramFree(vramHeadroom);
+      return {
+        for (final e in flags.entries)
+          e.key: withVramFree(
+            extra.isEmpty || e.value.contains('--device ') ? e.value : '${e.value} $extra',
+            free,
+          ),
+      };
+    }
     final table = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
     if (identical(table, m.cpuFlags)) return table;
     // elastic RAM only beside a separate card: a built-in GPU's memory is the RAM, so it runs with fixed memory
@@ -371,7 +406,49 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return {for (final e in flags.entries) e.key: withVramFree(extra.isEmpty ? e.value : '${e.value} $extra', free)};
   }
 
-  static _LocalModel _local(ModelFile file) => _models.firstWhere((m) => m.model.files.contains(file));
+  final _byomModels = <String, _LocalModel>{};
+
+  static final Set<String> _knownStoreParts = {
+    for (final m in _models) ...m.model.files.first.parts,
+  };
+
+  List<_LocalModel> _refreshByom() {
+    final folders = _folders;
+    final discovered = discoverByomModels([folders.models, ...folders.readFrom], knownParts: _knownStoreParts);
+    _byomModels
+      ..clear()
+      ..addEntries([
+        for (final d in discovered)
+          MapEntry(
+            d.model.files.first.id,
+            _LocalModel(
+              model: d.model,
+              flags: const {},
+              smallFlags: const {},
+              cpuFlags: const {},
+              thinkingSwitch: true,
+              isByom: true,
+              isMoE: d.info.isMoE,
+              defaultMaxContext: d.info.contextLength ?? 32768,
+              needsQuantPlugin: d.info.needsQuantPlugin,
+            ),
+          ),
+      ]);
+    return _byomModels.values.toList();
+  }
+
+  _LocalModel? _findLocal(ModelFile file) {
+    for (final m in _models) {
+      if (m.model.files.any((f) => f.id == file.id)) return m;
+    }
+    return _byomModels[file.id] ?? () {
+      _refreshByom();
+      return _byomModels[file.id];
+    }();
+  }
+
+  _LocalModel _local(ModelFile file) =>
+      _findLocal(file) ?? (throw StateError('Unknown model file: ${file.id}'));
 
   EngineProcess? _engine;
 
@@ -401,7 +478,10 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   final _readAheads = <String, (_Turn, Future<void>)>{};
 
   @override
-  Future<List<CatalogModel>> loadCatalog() async => [for (final m in _models) m.model];
+  Future<List<CatalogModel>> loadCatalog() async => [
+    for (final m in _models) m.model,
+    for (final m in _refreshByom()) m.model,
+  ];
 
   /// Whether the model is on this computer (in the models folder or a folder models are read from): the Store
   /// downloads Hugging Face models itself (lib/system/downloads.dart).
@@ -427,7 +507,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final read = modelContextLength(_modelPath(local));
     // (Not kept until the file is there: a model downloaded later is read then.)
     if (read != null) _maxContexts[file.id] = read;
-    return read ?? local.flags.keys.reduce(max);
+    return read ?? (local.flags.isEmpty ? local.defaultMaxContext : local.flags.keys.reduce(max));
   }
 
   /// The longest context each model file says it can run with, once read.
@@ -1027,6 +1107,29 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     );
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
+    final tunedArgs = withTuning(
+      withModelData([
+        // the model's data files are next to it
+        for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
+      ], _modelPath(local)),
+      tuned,
+    );
+    if (local.needsQuantPlugin && !tunedArgs.contains('--quant-plugin')) {
+      final ext = Platform.isWindows ? '.dll' : (Platform.isMacOS ? '.dylib' : '.so');
+      for (final dirPath in [_modelFolder(local), folder]) {
+        final dir = Directory(dirPath);
+        if (!dir.existsSync()) continue;
+        final plugin = dir
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.toLowerCase().endsWith(ext) && f.uri.pathSegments.last.toLowerCase().contains('plugin'))
+            .firstOrNull;
+        if (plugin != null) {
+          tunedArgs.addAll(['--quant-plugin', plugin.path]);
+          break;
+        }
+      }
+    }
     final EngineProcess engine;
     try {
       engine = await EngineProcess.start(
@@ -1034,13 +1137,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           program,
           '-m',
           _modelPath(local),
-          ...withTuning(
-            withModelData([
-              // the model's data files are next to it
-              for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
-            ], _modelPath(local)),
-            tuned,
-          ),
+          ...tunedArgs,
           '--cache-disk',
           states,
           '--cache-disk-gb',

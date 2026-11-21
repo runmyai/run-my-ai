@@ -105,13 +105,13 @@ class LibraryNotifier extends Notifier<LibraryState> {
     for (final m in ref.read(catalogProvider).value ?? const <CatalogModel>[]) ...m.files,
   ];
 
-  /// Which Hugging Face models are on this computer, and the unfinished downloads in the models folder (paused).
+  /// Which Hugging Face or local BYOM models are on this computer, and the unfinished downloads in the models folder (paused).
   void _scan() {
     if (!ref.mounted) return;
     final folders = ref.read(foldersProvider);
     final files = [
       for (final f in _catalogFiles)
-        if (f.repo != null) f,
+        if (f.parts.isNotEmpty) f,
     ];
     final found = {
       for (final f in files)
@@ -119,7 +119,7 @@ class LibraryNotifier extends Notifier<LibraryState> {
     };
     final downloads = {...state.downloads};
     for (final f in files) {
-      if (found.contains(f.id) || downloads.containsKey(f.id)) continue;
+      if (f.repo == null || found.contains(f.id) || downloads.containsKey(f.id)) continue;
       final bytes = downloadedBytes(folders.models, f);
       if (bytes != null) downloads[f.id] = DownloadStatus(DownloadPhase.paused, done: bytes, total: f.sizeBytes);
     }
