@@ -10,6 +10,7 @@ import '../system/chime.dart';
 import '../system/downloads.dart';
 import '../system/folders.dart';
 import 'chats.dart';
+import 'download_events.dart';
 import 'profiles.dart';
 import 'providers.dart';
 import 'tuning_runs.dart';
@@ -125,8 +126,11 @@ class LibraryNotifier extends Notifier<LibraryState> {
     final ids = {for (final f in files) f.id};
     final downloaded = {...state.downloaded.difference(ids), ...found};
     downloads.removeWhere((id, _) => found.contains(id));
-    // A picked model whose files are gone: the first one there instead (as after a delete).
-    final picked = ids.contains(state.picked) && !found.contains(state.picked) ? downloaded.firstOrNull : state.picked;
+    // A picked model whose files are gone: the first one there instead (as after a delete); none picked yet (models found in
+    // a folder, not downloaded by the app): the first one there, as a finished download does
+    final picked =
+        (ids.contains(state.picked) && !found.contains(state.picked) ? downloaded.firstOrNull : state.picked) ??
+        downloaded.firstOrNull;
     // Nothing changed: no new state, so nothing watching the library builds again.
     if (setEquals(downloaded, state.downloaded) && mapEquals(downloads, state.downloads) && picked == state.picked) return;
     _update(downloaded: downloaded, downloads: downloads, picked: picked);
@@ -265,6 +269,7 @@ class LibraryNotifier extends Notifier<LibraryState> {
     );
     // The notification sound, when the bell is on (as for a finished reply).
     ref.read(chimeProvider).replyDone();
+    unawaited(ref.read(downloadEventsProvider).model(file.id));
     // The PC is measured for it right away, so its first load does not wait for that.
     ref.read(tuningRunsProvider.notifier).afterDownload(file);
   }

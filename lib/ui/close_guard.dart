@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -67,7 +68,15 @@ class _CloseGuardState extends ConsumerState<CloseGuard> with WindowListener {
     if (ref.exists(libraryProvider)) {
       await ref.read(libraryProvider.notifier).pauseAll().timeout(const Duration(seconds: 3), onTimeout: () {});
     }
-    await windowManager.destroy();
+    if (Platform.isWindows) {
+      // On Windows destroy() only posts a quit message: the window is then torn down after the message loop has ended,
+      // while the engine goes, and Flutter crashes in that teardown (Windows Error Reporting then holds the closing window
+      // on screen for about 15 seconds). Closing it lets the window go the normal way, with the engine still running.
+      await windowManager.setPreventClose(false);
+      await windowManager.close();
+    } else {
+      await windowManager.destroy();
+    }
   }
 
   @override

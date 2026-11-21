@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../dev/dev_build.dart';
 import '../../state/motion.dart';
+import '../../backend/backend.dart';
 import '../../state/prefs.dart';
 import '../../state/library.dart';
+import '../../state/providers.dart';
 import '../../system/chime.dart';
 import '../../theme.dart';
 import '../buttons.dart';
@@ -182,6 +184,7 @@ class _SettingsList extends ConsumerWidget {
         const _StateLimit(),
         const SizedBox(height: 20),
         const _Headroom(),
+        const _VramHeadroom(),
         const SizedBox(height: 28),
         const FoldersSection(),
         const SizedBox(height: 28),
@@ -311,6 +314,64 @@ class _Headroom extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs: one row per card the
+/// engine can use (the same for every model).
+class _VramHeadroom extends ConsumerWidget {
+  const _VramHeadroom();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final backend = ref.watch(backendProvider);
+    if (backend is! TuneControl) return const SizedBox.shrink();
+    final tune = backend as TuneControl;
+    // (The cards are read again when a tune ends.)
+    return ValueListenableBuilder<String?>(
+      valueListenable: tune.tuning,
+      builder: (context, _, _) {
+        final cards = tune.cards;
+        return cards.isEmpty || tune.sharesRam ? const SizedBox.shrink() : _section(context.colors, cards);
+      },
+    );
+  }
+
+  static String _gb(int mib) {
+    final gb = (mib / 1024).toStringAsFixed(1);
+    return '${gb.endsWith('.0') ? gb.substring(0, gb.length - 2) : gb} GB';
+  }
+
+  Widget _section(AppColors c, List<({String key, String name, String desc, int mib})> cards) => Padding(
+    padding: const EdgeInsets.only(top: 20),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'VRAM headroom',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        for (final card in cards) ...[
+          const SizedBox(height: 12),
+          Text(
+            [
+              if (card.desc.isNotEmpty) card.desc else if (card.name.isEmpty) 'Graphics card',
+              if (card.name.isNotEmpty) card.name,
+              _gb(card.mib),
+            ].join(', '),
+            key: Key('vram-card-${card.key}'),
+            style: TextStyle(fontSize: 13, color: c.text),
+          ),
+          const SizedBox(height: 6),
+          VramHeadroomInput(card: card.key),
+        ],
+      ],
+    ),
+  );
 }
 
 /// The context length new chats load the shown model with, and each length's cache type.

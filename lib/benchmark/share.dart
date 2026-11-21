@@ -134,6 +134,7 @@ Map<String, Object?> benchmarkDocument({
       'contextLength': result.contextLength,
       'kvCache': kvCache,
       'memoryHeadroomGiB': result.memoryCapGiB,
+      if (result.vramHeadroom.isNotEmpty) 'vramHeadroomGiB': result.vramHeadroom,
       'profile': result.profileName,
       'replyLength': result.replyLength,
       'thinking': result.thinking,

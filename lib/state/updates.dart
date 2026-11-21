@@ -12,10 +12,12 @@ import '../system/downloads.dart';
 import '../system/folders.dart';
 import '../system/github.dart';
 import '../system/relaunch.dart';
+import '../system/signature.dart';
 import '../system/updater.dart';
 import 'about.dart';
 import 'benchmark.dart';
 import 'chats.dart';
+import 'download_events.dart';
 import 'library.dart';
 import 'prefs.dart';
 import 'providers.dart';
@@ -119,11 +121,21 @@ class UpdatesState {
 /// GitHub's API (tests use their own server).
 final gitHubApiProvider = Provider<Uri>((ref) => gitHubApi());
 
+/// Where the app asks for new versions first: the website answers with GitHub's list of releases and counts one check a
+/// day (the app's version and system, nothing that tells one PC from another). GitHub's API is asked when it does not
+/// answer. None when GitHub's address is replaced (a release tested from a local server).
+final websiteReleasesProvider = Provider<Uri?>(
+  (ref) => Platform.environment.containsKey('RUNMYAI_GITHUB_API') ? null : Uri.parse('$websiteUrl/api/releases'),
+);
+
 /// Whether updates are looked for: with the real engine (tests that look for them say so).
 final updatesEnabledProvider = Provider<bool>((ref) => ref.read(backendProvider) is EngineBackend);
 
-/// The AppImage the app was started from; null when it was not (a build run from its folder).
-final appImageProvider = Provider<String?>((ref) => Platform.environment['APPIMAGE']);
+/// The app's own file an update replaces: the AppImage it was started from (Linux) or the launcher that started it
+/// (Windows); null when there is none (a build run from its folder).
+final appFileProvider = Provider<String?>(
+  (ref) => Platform.environment[Platform.isWindows ? launcherVariable : 'APPIMAGE'],
+);
 
 /// Starts the new app and ends this one (tests only note it).
 final relaunchProvider = Provider<Future<void> Function()>((ref) => relaunchApp);
@@ -154,6 +166,7 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
     }
 
     try {
+      _count = _firstCheckToday();
       final app = await quietly(() => _checkApp(client));
       final engine = await quietly(() => _checkEngine(client));
       final models = await quietly(() => _checkModels(client)) ?? const <ModelUpdate>[];
@@ -164,22 +177,53 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
     }
   }
 
+  /// Whether this check is the first of the day (only that one is counted by the website).
+  var _count = false;
+
+  bool _firstCheckToday() {
+    final file = File('${ref.read(storageProvider).dir.path}${Platform.pathSeparator}last_update_check');
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    try {
+      if (file.existsSync() && file.readAsStringSync().trim() == today) return false;
+      file.writeAsStringSync(today);
+    } on FileSystemException {
+      return false;
+    }
+    return true;
+  }
+
+  /// The releases of [repo] (`run-my-ai` or `tokenwing`): from the website, else from GitHub at [path].
+  Future<List<GitHubRelease>> _releases(HttpClient client, String repo, String path) async {
+    if (ref.read(websiteReleasesProvider) case final site?) {
+      final count = _count;
+      _count = false;
+      try {
+        return await gitHubReleases(
+          client,
+          site.replace(queryParameters: {'repo': repo, if (count) ...{'v': appVersion, 'os': '$thisOs-$thisArch'}}),
+        );
+      } on Object {
+        // the website is down or changed: GitHub itself
+      }
+    }
+    return gitHubReleases(client, ref.read(gitHubApiProvider).resolve(path));
+  }
+
   Future<AppUpdate?> _checkApp(HttpClient client) async {
-    final api = ref.read(gitHubApiProvider).resolve(appReleasesPath);
-    final releases = newerReleases(await gitHubReleases(client, api), appVersion);
+    final releases = newerReleases(await _releases(client, 'run-my-ai', appReleasesPath), appVersion);
     if (releases.isEmpty) return null;
     final asset = appAsset(thisOs, thisArch);
     if (asset == null) {
       return AppUpdate(releases, manual: 'Download the new version from the website.');
     }
     if (!releases.first.assets.containsKey(asset)) return null;
-    if (ref.read(appImageProvider) == null) {
+    if (ref.read(appFileProvider) == null) {
       return AppUpdate(
         releases,
         asset: asset,
         manual:
-            'This copy of Run My AI was not started from its AppImage, so it is not replaced. Download the new '
-            'version from the website.',
+            'This copy of Run My AI was not started from its ${Platform.isWindows ? 'download' : 'AppImage'}, so it is '
+            'not replaced. Download the new version from the website.',
       );
     }
     return AppUpdate(releases, asset: asset);
@@ -190,8 +234,7 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
     if (ref.read(prefsProvider).engineFolder != null) return null;
     final installed = installedEngine(ref.read(foldersProvider).engine);
     if (installed == null) return null;
-    final api = ref.read(gitHubApiProvider).resolve(engineReleasesPath);
-    final releases = newerReleases(await gitHubReleases(client, api), installed.version);
+    final releases = newerReleases(await _releases(client, 'tokenwing', engineReleasesPath), installed.version);
     final asset = engineAsset(thisOs, thisArch, installed.build);
     if (releases.isEmpty || !releases.first.assets.containsKey(asset)) return null;
     return EngineUpdate(releases, installed.build, asset);
@@ -212,14 +255,14 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
         if (!lists.containsKey(repo)) lists[repo] = await _modelList(client, server, repo);
         final versions = lists[repo];
         if (versions == null) continue;
-        final listed = {for (final v in versions) ...v.files.keys};
+        // every file of the newest version (a data file not here yet is downloaded too), and the model's own
+        final names = {...versions.last.files.keys, ...file.parts.where((p) => versions.any((v) => v.files.containsKey(p)))};
         final local = <String, LocalFile>{
-          for (final name in file.parts)
-            if (listed.contains(name))
-              name: (
-                sha256: hashes.known('$folder${Platform.pathSeparator}$name'),
-                size: File('$folder${Platform.pathSeparator}$name').lengthSync(),
-              ),
+          for (final name in names)
+            name: switch (File('$folder${Platform.pathSeparator}$name')) {
+              final f when f.existsSync() => (sha256: hashes.known(f.path), size: f.lengthSync()),
+              _ => (sha256: null, size: -1),
+            },
         };
         final update = modelUpdate(versions, local);
         if (update != null) {
@@ -232,11 +275,13 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
     return found;
   }
 
-  /// The versions in [repo]'s list file; null when it has none (no model updates).
+  /// The versions in [repo]'s list file; null when it has none, or when its signature does not verify (no model
+  /// updates then).
   Future<List<ModelVersion>?> _modelList(HttpClient client, Uri server, String repo) async {
-    final response = await (await client.getUrl(server.resolve('/$repo/resolve/main/runmyai.json'))).close();
-    final body = await response.transform(utf8.decoder).join();
-    return response.statusCode == 200 ? parseModelVersions(body) : null;
+    final list = await fetchBytes(client, server.resolve('/$repo/resolve/main/runmyai.json'), 'The model list');
+    final sig = await fetchBytes(client, server.resolve('/$repo/resolve/main/runmyai.json.sig'), 'The model list signature');
+    if (!signedByUs(list, utf8.decode(sig, allowMalformed: true))) return null;
+    return parseModelVersions(utf8.decode(list));
   }
 
   /// Why the engine cannot be stopped for an update now; null when it can.
@@ -280,6 +325,7 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
           onProgress: _show,
         ).run();
         if (!done) throw const DownloadFailure('The engine update stopped. Nothing was changed.');
+        unawaited(ref.read(downloadEventsProvider).engine(engine.asset, engine.newest.tag));
         state = state.copyWith(engine: () => null);
       }
       for (final model in state.models) {
@@ -299,10 +345,10 @@ class UpdatesNotifier extends Notifier<UpdatesState> {
           ],
         );
       }
-      final app = state.app, appImage = ref.read(appImageProvider);
-      if (app != null && app.manual == null && appImage != null) {
+      final app = state.app, appFile = ref.read(appFileProvider);
+      if (app != null && app.manual == null && appFile != null) {
         _step('Updating Run My AI to ${app.newest.tag}...');
-        await replaceAppImage(release: app.newest, asset: app.asset!, appImage: appImage, onProgress: _show);
+        await replaceAppFile(release: app.newest, asset: app.asset!, appFile: appFile, onProgress: _show);
         state = state.copyWith(app: () => null);
         await ref.read(relaunchProvider)();
         return;

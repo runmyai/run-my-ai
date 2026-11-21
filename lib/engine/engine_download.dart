@@ -7,9 +7,11 @@ import 'dart:isolate';
 import 'package:archive/archive_io.dart';
 
 import '../benchmark/hardware.dart';
+import '../data/models.dart';
 import '../system/downloads.dart';
 import '../system/folders.dart';
 import '../system/github.dart';
+import '../system/signature.dart';
 import 'tuning.dart';
 
 /// Where the engine's releases are listed: the latest release of TokenWing on GitHub.
@@ -171,12 +173,6 @@ class EngineRelease {
   final Map<String, ({Uri url, int size})> assets;
 }
 
-/// The checksums in a SHA256SUMS file (`sha256  name` per line; a `*` before the name marks binary mode), by name.
-Map<String, String> parseSha256Sums(String text) => {
-  for (final line in const LineSplitter().convert(text))
-    if (RegExp(r'^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$').firstMatch(line) case final m?) m[2]!: m[1]!.toLowerCase(),
-};
-
 /// The latest release from GitHub's API at [api]; null when there is none to be seen (no release yet, or the repo is not
 /// public). Throws [DownloadFailure] when GitHub cannot be reached or refuses.
 Future<EngineRelease?> latestEngineRelease(HttpClient client, Uri api) async {
@@ -267,6 +263,7 @@ class EngineDownload {
   void stop() {
     _stopped = true;
     _client?.close(force: true);
+    _files?.stop();
   }
 
   /// Stops and deletes what was downloaded.
@@ -283,25 +280,23 @@ class EngineDownload {
   /// [DownloadFailure].
   Future<bool> run() async {
     final file = release.assets[asset];
-    final sumsFile = release.assets['SHA256SUMS'];
     if (file == null) throw DownloadFailure('This release has no $asset.');
-    if (sumsFile == null) throw const DownloadFailure('This release has no checksums, so it was not installed.');
     final client = _client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
     Timer? ticks;
     try {
       Directory(_parent).createSync(recursive: true);
-      final String sums;
+      final Map<String, String> sums;
       try {
-        final response = await (await client.getUrl(sumsFile.url)).close();
-        sums = await response.transform(utf8.decoder).join();
-        if (response.statusCode != 200) {
-          throw DownloadFailure('GitHub answered with an error (${response.statusCode}).');
-        }
+        sums = await signedSums(client, release.assets);
       } on IOException {
         if (_stopped) return false;
         throw const DownloadFailure('Could not reach GitHub. Check the internet connection, then press Resume.');
       }
-      final sha = parseSha256Sums(sums)[asset];
+      // a release with a file list: only the files this PC does not have yet are downloaded
+      if (release.assets[engineFilesName] case final list? when sums.containsKey(engineFilesName)) {
+        return await _runFiles(client, list.url, sums[engineFilesName]!);
+      }
+      final sha = sums[asset];
       if (sha == null) throw DownloadFailure('The release has no checksum for $asset, so it was not installed.');
 
       var have = part.existsSync() ? part.lengthSync() : 0;
@@ -354,14 +349,15 @@ class EngineDownload {
           if (!append) done = 0;
           final out = part.openWrite(mode: append ? FileMode.append : FileMode.write);
           try {
-            await for (final data in response) {
+            await for (final data in response.timeout(downloadIdleTimeout)) {
               out.add(data);
               done += data.length;
             }
           } finally {
             await out.close();
           }
-        } on IOException {
+        } on Exception catch (e) {
+          if (e is! IOException && e is! TimeoutException) rethrow;
           if (_stopped) return false;
           throw const DownloadFailure('The download broke off. Check the internet connection, then press Resume.');
         }
@@ -391,7 +387,6 @@ class EngineDownload {
   /// Unpacks [archive] into a new folder beside the engine folder and swaps it in for the old engine, then deletes the
   /// archive. A failed unpack leaves the old engine as it was.
   Future<void> install(String archive) async {
-    final sep = Platform.pathSeparator;
     final fresh = Directory('$engineFolder.new'), old = Directory('$engineFolder.old');
     for (final d in [fresh, old]) {
       if (d.existsSync()) d.deleteSync(recursive: true);
@@ -405,6 +400,14 @@ class EngineDownload {
     // the archive holds one top folder with the engine in it
     final inside = fresh.listSync();
     final top = inside.length == 1 && inside.single is Directory ? inside.single.path : fresh.path;
+    _swapIn(top);
+  }
+
+  /// Puts the complete engine in [top] (inside the folder `<engine>.new`) in place of the old engine, then deletes what is
+  /// left of the download. A failure leaves the old engine as it was.
+  void _swapIn(String top) {
+    final sep = Platform.pathSeparator;
+    final fresh = Directory('$engineFolder.new'), old = Directory('$engineFolder.old');
     if (!File('$top$sep$engineProgram').existsSync()) {
       fresh.deleteSync(recursive: true);
       throw const DownloadFailure('The download did not hold the engine. Nothing was changed.');
@@ -423,12 +426,130 @@ class EngineDownload {
     for (final d in [old, fresh]) {
       if (d.existsSync()) d.deleteSync(recursive: true);
     }
-    // this download and any other build's paused one
+    // this download and any other build's paused one, and the files of a file-by-file download
     for (final f in Directory(_parent).listSync()) {
-      final name = f.uri.pathSegments.last;
+      final name = f.path.split(Platform.pathSeparator).last;
       if (f is File && name.startsWith('tokenwing-') && name.endsWith('.part')) f.deleteSync();
+      if (f is Directory && name.startsWith('.engine-files-')) f.deleteSync(recursive: true);
     }
   }
+
+  /// The file-by-file install: the release's file list (checked against its signed [sha]) names every file of the
+  /// build with its checksum; a file the engine here already has is copied from it, the others are downloaded from
+  /// the list's store (continued after a pause, each checked), and the new engine is put together beside the old one
+  /// and swapped in. True when installed; false when [stop] was called.
+  Future<bool> _runFiles(HttpClient client, Uri listUrl, String sha) async {
+    final sep = Platform.pathSeparator;
+    final listBytes = await fetchBytes(client, listUrl, 'The engine file list');
+    if (sha256Hex(listBytes) != sha) {
+      throw const DownloadFailure('The engine file list does not match its checksum, so nothing was installed.', broken: true);
+    }
+    final list = parseEngineFiles(utf8.decode(listBytes), engineBuildName(asset));
+    if (list == null) throw DownloadFailure('The release lists no files for $asset.');
+    final staging = '$_parent$sep.engine-files-${release.tag}';
+    Directory(staging).createSync(recursive: true);
+    // what the engine here already has, by checksum
+    final have = <String, String>{};
+    if (Directory(engineFolder).existsSync()) {
+      for (final e in Directory(engineFolder).listSync(recursive: true, followLinks: false)) {
+        if (e is File) have.putIfAbsent(await sha256OfFile(e.path), () => e.path);
+      }
+    }
+    if (_stopped) return false;
+    final needed = <String, int>{};
+    for (final f in list.files) {
+      if (f.sha256 case final s? when !have.containsKey(s)) needed[s] = f.size!;
+    }
+    final room = await free(_parent);
+    final total = list.files.fold<int>(0, (sum, f) => sum + (f.size ?? 0));
+    final want = needed.values.fold<int>(0, (a, b) => a + b) + total + spareBytes;
+    if (room != null && room < want) {
+      throw DownloadFailure(
+        'Not enough free space. Free ${((want - room) / 1e9).toStringAsFixed(1)} GB on the drive of $_parent, then try again.',
+      );
+    }
+    if (needed.isNotEmpty) {
+      final download = _files = ModelDownload(
+        ModelFile(id: list.repo, quantization: '', sizeBytes: needed.values.fold(0, (a, b) => a + b), repo: list.repo,
+            parts: needed.keys.toList()),
+        staging,
+        server: list.server,
+        known: [for (final MapEntry(:key, :value) in needed.entries) RemoteFile(key, value, sha256: key)],
+        onProgress: onProgress,
+        free: free,
+      );
+      if (_stopped || !await download.run()) return false;
+    }
+    await beforeInstall?.call();
+    final fresh = Directory('$engineFolder.new');
+    if (fresh.existsSync()) fresh.deleteSync(recursive: true);
+    final top = '${fresh.path}${sep}tokenwing';
+    try {
+      for (final f in list.files) {
+        final path = '$top$sep${f.path.replaceAll('/', sep)}';
+        File(path).parent.createSync(recursive: true);
+        if (f.link case final target?) {
+          if (!Platform.isWindows) Link(path).createSync(target);
+          continue;
+        }
+        final staged = File('$staging$sep${f.sha256}');
+        // a file used twice in the build is copied the first time it is placed
+        if (staged.existsSync() && list.files.where((g) => g.sha256 == f.sha256).length == 1) {
+          staged.renameSync(path);
+        } else {
+          File(staged.existsSync() ? staged.path : have[f.sha256]!).copySync(path);
+        }
+        if (f.program && !Platform.isWindows) await Process.run('chmod', ['755', path]);
+      }
+    } on FileSystemException catch (e) {
+      if (fresh.existsSync()) fresh.deleteSync(recursive: true);
+      throw DownloadFailure('The new engine could not be put together (${e.message}). Nothing was changed.');
+    }
+    _swapIn(top);
+    return true;
+  }
+
+  ModelDownload? _files;
+}
+
+/// The release's list of every file of every build (see the engine's tokenwing-tools/release/engine_files.py).
+const engineFilesName = 'engine-files.json';
+
+/// The build's name in the file list: the asset without `tokenwing-` and its extension (`linux-x64-cuda13`).
+String engineBuildName(String asset) =>
+    asset.replaceFirst('tokenwing-', '').replaceFirst(RegExp(r'\.(tar\.gz|zip)$'), '');
+
+/// One entry of a build in the file list: a file (size, checksum, whether it is a program) or a link.
+typedef EngineFileEntry = ({String path, int? size, String? sha256, bool program, String? link});
+
+/// The files of [build] in an engine file list, and where they are stored (a Hugging Face server and repo); null when
+/// the list is not one this app reads or has no such build.
+({Uri server, String repo, List<EngineFileEntry> files})? parseEngineFiles(String text, String build) {
+  try {
+    final json = jsonDecode(text);
+    if (json case {'format': 1, 'store': final String store, 'builds': final Map builds}
+        when builds[build] is List) {
+      final entries = builds[build] as List;
+      final m = RegExp(r'^(https?://[^/]+)/(.+)/resolve/main/?$').firstMatch(store);
+      if (m == null) return null;
+      final files = <EngineFileEntry>[];
+      for (final e in entries) {
+        switch (e) {
+          case {'path': final String path, 'link': final String link}:
+            files.add((path: path, size: null, sha256: null, program: false, link: link));
+          case {'path': final String path, 'size': final int size, 'sha256': final String sha}
+              when RegExp(r'^[0-9a-f]{64}$').hasMatch(sha) && !path.contains('..'):
+            files.add((path: path, size: size, sha256: sha, program: e['program'] == true, link: null));
+          default:
+            return null;
+        }
+      }
+      return (server: Uri.parse(m[1]!), repo: m[2]!, files: files);
+    }
+  } on FormatException {
+    // Not readable.
+  }
+  return null;
 }
 
 /// Unpacks a .tar.gz or .zip into [folder], keeping the programs' permissions and links (in its own isolate: it takes

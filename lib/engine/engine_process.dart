@@ -57,7 +57,6 @@ class EngineProcess {
     String startedWith = '',
     Map<String, String> environment = const {},
     String? workingDirectory,
-    int? memoryCapBytes,
     void Function()? onOutput,
   }) async {
     if (Platform.isWindows) {
@@ -67,7 +66,7 @@ class EngineProcess {
         environment: environment,
         workingDirectory: workingDirectory,
       );
-      final job = Win32Job.attach(process.pid, memoryCapBytes: memoryCapBytes);
+      final job = Win32Job.attach(process.pid);
       return EngineProcess._(
         process,
         modelId: modelId,

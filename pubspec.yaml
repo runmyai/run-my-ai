@@ -1,7 +1,7 @@
 name: runmyai
 description: "Run My AI - run AI models on your own computer"
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ^3.13.7
@@ -20,6 +20,7 @@ dependencies:
   archive: ^4.7.1
   flutter_math_fork: ^0.7.4
   re_highlight: ^0.0.3
+  ed25519_edwards: ^0.3.2
 dev_dependencies:
   flutter_test:
     sdk: flutter

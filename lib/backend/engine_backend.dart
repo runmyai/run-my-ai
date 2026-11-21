@@ -6,9 +6,9 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../benchmark/amd_gpu.dart';
+import '../benchmark/share.dart' show installIdIn;
 import '../benchmark/hardware.dart';
 import '../benchmark/nvml.dart';
-import '../benchmark/win32_metrics.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
 import '../engine/auto_commands.dart';
@@ -34,9 +34,6 @@ class _LocalModel {
     required this.flags,
     required this.smallFlags,
     required this.cpuFlags,
-    required this.layers,
-    required this.firstMoe,
-    required this.layerGiB,
     this.thinkingSwitch = false,
   });
 
@@ -49,8 +46,6 @@ class _LocalModel {
   final Map<int, String> flags, smallFlags, cpuFlags;
 
   /// Its layer count, its first MoE layer, and one layer's experts in GiB (for the two-card layout).
-  final int layers, firstMoe;
-  final double layerGiB;
 
   /// Its thinking can be turned off.
   final bool thinkingSwitch;
@@ -160,9 +155,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_lingFile],
       ),
-      layers: 42,
-      firstMoe: 2,
-      layerGiB: 1.494,
       flags: lingAuto,
       smallFlags: lingAutoSmall,
       cpuFlags: lingAutoCpu,
@@ -179,9 +171,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.always,
         files: [_flintFile],
       ),
-      layers: 49,
-      firstMoe: 2,
-      layerGiB: 0.49,
       flags: flintAuto,
       smallFlags: flintAutoSmall,
       cpuFlags: flintAutoCpu,
@@ -197,9 +186,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_qwenFile],
       ),
-      layers: 48,
-      firstMoe: 0,
-      layerGiB: 1.1,
       flags: qwenAuto,
       smallFlags: qwenAutoSmall,
       cpuFlags: qwenAutoCpu,
@@ -329,24 +315,60 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return savedTune(file) ?? await tune(file);
   }
 
+  double get _largestCardGiB {
+    final cards = _cards;
+    return cards.isEmpty ? 0.0 : cards.map((c) => c.mib).reduce(max) / 1024;
+  }
+
+  /// The cards the engine can use: the autotuner's list ([cardsFrom]: separate cards of any size and make, a built-in GPU
+  /// with 24 GiB or more); before its first run the one-time reading.
+  @override
+  List<({String key, String name, String desc, int mib})> get cards {
+    final list = _cards, keys = cardKeys(list);
+    final tune = _savedTune;
+    // the full names the autotuner reports next to the device names (none from an older engine)
+    final descs = <String, String>{
+      for (final g in [...?(tune?['gpus'] as List?), ...?(tune?['igpus'] as List?)])
+        if (g is Map && g['name'] is String && g['desc'] is String) g['name'] as String: g['desc'] as String,
+    };
+    return [
+      for (var i = 0; i < list.length; i++) (key: keys[i], name: list[i].name, desc: descs[list[i].name] ?? '', mib: list[i].mib),
+    ];
+  }
+
+  @override
+  bool get sharesRam {
+    final tune = _savedTune;
+    return tune != null && ((tune['gpus'] as List?) ?? const []).isEmpty && _cards.isNotEmpty;
+  }
+
+  /// The value of `--moe-stream-vram-free`: each card's own headroom, the pool's card's too (see [vramFreeValue]).
+  String _vramFree(VramHeadroom headroom) {
+    final cards = _cards, keys = cardKeys(cards);
+    return cards.isEmpty ? vramSize(headroom.of('')) : vramFreeValue(cards, [for (final k in keys) headroom.of(k)]);
+  }
+
   /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
   /// largest card. With several cards all of them share the model, filled fastest first (cardFlags).
   /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
-  Map<int, String> _flagsFor(_LocalModel m) {
+  Map<int, String> _flagsFor(_LocalModel m, VramHeadroom vramHeadroom) {
     final cards = _cards;
-    final gib = cards.isEmpty ? 0.0 : cards.map((c) => c.mib).reduce(max) / 1024;
-    final flags = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
-    if (identical(flags, m.cpuFlags)) return flags;
+    final gib = _largestCardGiB;
+    final table = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
+    if (identical(table, m.cpuFlags)) return table;
+    // elastic RAM only beside a separate card: a built-in GPU's memory is the RAM, so it runs with fixed memory
+    final flags = sharesRam ? {for (final e in table.entries) e.key: e.value.replaceAll(' --moe-stream-elastic 1', '')} : table;
     // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)
     final extra = [
       if (Platform.isWindows) '--moe-stream-async-h2d 0',
       if (cards.length > 1 && cards.every((c) => c.name.isNotEmpty))
-        ...cardFlags(cards, m.layers, m.firstMoe, m.layerGiB)
+        ...cardFlags(cards)
       // one card: named, so a built-in GPU chosen for lack of a separate card is the one used
       else if (cards.length == 1 && cards[0].name.isNotEmpty)
         '--device ${cards[0].name}',
     ].join(' ');
-    return extra.isEmpty ? flags : {for (final e in flags.entries) e.key: '${e.value} $extra'};
+    final free = _vramFree(vramHeadroom);
+    return {for (final e in flags.entries) e.key: withVramFree(extra.isEmpty ? e.value : '${e.value} $extra', free)};
   }
 
   static _LocalModel _local(ModelFile file) => _models.firstWhere((m) => m.model.files.contains(file));
@@ -388,8 +410,15 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       ? Stream.value(1)
       : Stream.error(EngineFailure('The model file is not on this computer: ${_modelPath(_local(file))}'));
 
+  /// The graphics card headroom saved in the settings.
+  VramHeadroom _vramHeadroom() {
+    final prefs = _storage.readPrefs();
+    return VramHeadroom(byCard: prefs.vramHeadroom, others: prefs.vramHeadroomGiB ?? defaultVramHeadroomGiB);
+  }
+
   @override
-  Map<int, String> autoCommands(ModelFile file) => _flagsFor(_local(file));
+  Map<int, String> autoCommands(ModelFile file) =>
+      _flagsFor(_local(file), _vramHeadroom());
 
   @override
   int maxContext(ModelFile file) {
@@ -888,9 +917,9 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   }
 
   /// How [run] starts an engine: an engine already running is the one asked for only if it was started with the
-  /// same flags and memory cap.
+  /// same flags, memory cap and graphics card headroom.
   @visibleForTesting
-  static String startedWith(EngineRun run) => '${run.memoryCapGiB}\n${run.flags}';
+  static String startedWith(EngineRun run) => '${run.memoryCapGiB}\n${run.vramHeadroom.key}\n${run.flags}';
 
   /// Whether [engine] is the one asked for: running the model [modelId] at the length [run] says, started with its
   /// flags and memory cap. One started another way (a benchmark's test flags left running) is started again.
@@ -990,22 +1019,28 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final tuned = await _tuned(local);
-    // the table's row as the autotuner's card list now picks it (the first start may have shown another)
-    final flags = EngineFlags.parse(_flagsFor(local)[run.contextLength] ?? run.flags);
+    // the table's row as the autotuner's card list now picks it (the first start may have shown another), with the
+    // user's Memory headroom and context cache type from the Settings
+    final row = _flagsFor(local, run.vramHeadroom)[run.contextLength];
+    final flags = EngineFlags.parse(
+      withVramFree(row == null ? run.flags : withUserChoices(row, run.flags), _vramFree(run.vramHeadroom)),
+    );
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
     final EngineProcess engine;
     try {
       engine = await EngineProcess.start(
         command: [
-          ..._memoryCap(run.memoryCapGiB),
           program,
           '-m',
           _modelPath(local),
-          ...withTuning([
-            // the model's data files are next to it
-            for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
-          ], tuned),
+          ...withTuning(
+            withModelData([
+              // the model's data files are next to it
+              for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
+            ], _modelPath(local)),
+            tuned,
+          ),
           '--cache-disk',
           states,
           '--cache-disk-gb',
@@ -1023,9 +1058,11 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         port: port,
         // (Never the engine a chat would reuse: it answers only to its key.)
         startedWith: serve == null ? startedWith(run) : 'serve\n${startedWith(run)}',
-        environment: hosting?.environment ?? flags.environment,
+        environment: {
+          ...(hosting?.environment ?? flags.environment),
+          ...launcherEnvironment(installIdIn(_storage.dir), prefs.shareBenchmarks),
+        },
         workingDirectory: folder,
-        memoryCapBytes: _windowsJobCap(run.memoryCapGiB, tuned),
         onOutput: _logChanged.changed,
       );
       _lastEngine = engine;
@@ -1042,6 +1079,14 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return engine;
   }
 
+  /// What tells the engine which program started it: the app, this install's random name (for the engine's own daily
+  /// record) and, when the user does not share, that it must send nothing.
+  static Map<String, String> launcherEnvironment(String installId, bool share) => {
+    'TOKENWING_LAUNCHER': 'run-my-ai',
+    'TOKENWING_INSTALL_ID': installId,
+    if (!share) 'TOKENWING_NO_STATS': '1',
+  };
+
   /// What hosting adds to the engine's start: the model name other programs use, the counters the hosting screen reads
   /// (GET /metrics), and the key in the engine's environment (LLAMA_API_KEY), not on its command line, so other
   /// programs on this computer cannot read it from the process list.
@@ -1050,44 +1095,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     required String apiKey,
     Map<String, String> environment = const {},
   }) => (arguments: ['--alias', alias, '--metrics'], environment: {...environment, 'LLAMA_API_KEY': apiKey});
-
-  /// Keeps the engine within headroom of RAM (default: all the RAM but 1 GB), so running out of memory ends only the
-  /// engine.
-  static List<String> _memoryCap(double? headroomGiB) {
-    if (!Directory('/run/systemd/system').existsSync()) return const [];
-    final total = RegExp(r'MemTotal:\s+(\d+) kB').firstMatch(File('/proc/meminfo').readAsStringSync());
-    if (total == null) return const [];
-    final totalKiB = int.parse(total[1]!);
-    final headroomKiB = ((headroomGiB ?? defaultHeadroomGiB) * 1048576).round();
-    final capKiB = (totalKiB - headroomKiB).clamp(4 * 1048576, totalKiB - 524288);
-    return ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=${capKiB}K', '-p', 'MemorySwapMax=0', '--'];
-  }
-
-  /// The Windows job's memory limit that leaves [headroomGiB] of RAM free (default [defaultHeadroomGiB]), as [_memoryCap] does on Linux:
-  /// all the RAM but the headroom, at least 4 GiB and at most all but 0.5 GiB. Windows counts what a program puts in the
-  /// graphics card's memory against the job's limit too, and the engine fills the card, so the job also gets the cards'
-  /// video memory: the headroom then stays free in RAM. The cards are the autotuner's (every discrete card, any make;
-  /// built-in GPUs share the RAM and are listed apart), else NVIDIA's read through NVML.
-  static int? _windowsJobCap(double? headroomGiB, Map<String, dynamic>? tuned) {
-    if (!Platform.isWindows) return null;
-    final totalGiB = Win32Metrics().memory()?.totalGiB;
-    if (totalGiB == null) return null;
-    var bytes = ((totalGiB - (headroomGiB ?? defaultHeadroomGiB)).clamp(4.0, totalGiB - 0.5) * 1073741824).round();
-    if (tuned?['gpus'] case final List cards when cards.isNotEmpty) {
-      return bytes + cards.fold<int>(0, (sum, g) => sum + ((g as Map)['mib'] as int)) * 1048576;
-    }
-    final gpus = NvmlReader.open();
-    if (gpus == null) return bytes;
-    try {
-      for (final reading in gpus.read().entries) {
-        final gib = reading.value;
-        if (reading.key.endsWith('.vramTotal') && gib != null) bytes += (gib * 1073741824).round();
-      }
-    } finally {
-      gpus.close();
-    }
-    return bytes;
-  }
 }
 
 class _Changed extends ChangeNotifier {

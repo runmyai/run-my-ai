@@ -226,6 +226,10 @@ Future<bool> _gitSha1Matches(String path, RemoteFile f) => Isolate.run(() async 
 /// hashed again from its start, in the background while the rest comes.
 final _hashers = <String, FileHasher>{};
 
+/// How long a download's connection may send nothing before it is given up (a server can stop sending without closing the
+/// connection, and the system would only give up on it after minutes).
+const downloadIdleTimeout = Duration(seconds: 30);
+
 /// One model's download into [folder]: its files one after another, each fetched in parts over [connections]
 /// connections at once, written next to where it goes as `<name>.part` with its [PartRecord] (saved twice a second
 /// and when it stops, so a part cut off continues from its last byte written); a finished file is checked against
@@ -241,7 +245,13 @@ class ModelDownload {
     this.onProgress,
     this.onVerified,
     this.retryDelay = const Duration(seconds: 1),
+    this.idleTimeout = downloadIdleTimeout,
+    this.known,
   }) : server = server ?? huggingFace;
+
+  /// The files' sizes and checksums when the caller knows them already (from a signed list): Hugging Face's own list
+  /// of the repo's files is not read then.
+  final List<RemoteFile>? known;
 
   final ModelFile file;
   final String folder;
@@ -261,6 +271,9 @@ class ModelDownload {
 
   /// The wait before the first retry of a part; each retry waits twice as long.
   final Duration retryDelay;
+
+  /// How long a part's connection may send nothing before it is dropped and the part continues on a new one.
+  final Duration idleTimeout;
 
   HttpClient? _client;
   var _stopped = false;
@@ -291,7 +304,7 @@ class ModelDownload {
       Directory(folder).createSync(recursive: true);
       final List<RemoteFile> files;
       try {
-        files = await remoteFiles(client, server, file.repo!, file.parts);
+        files = known ?? await remoteFiles(client, server, file.repo!, file.parts);
       } on IOException {
         if (_stopped) return false;
         throw const DownloadFailure('Could not reach Hugging Face. Check the internet connection, then press Resume.');
@@ -494,7 +507,7 @@ class ModelDownload {
           await response.drain<void>();
           throw _Status(response.statusCode);
         }
-        await for (final data in response) {
+        await for (final data in response.timeout(idleTimeout)) {
           buffer.add(data);
           pending += data.length;
           _flowing += data.length;

@@ -6,3 +6,7 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+  errors:
+    # shortcut: Flutter 3.50 deprecates package:flutter/material.dart (its new home is package:material_ui) - the import still works;
+    # move the app's imports to material_ui as its own change, then remove this line
+    deprecated_member_use: ignore

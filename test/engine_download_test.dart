@@ -20,8 +20,11 @@ import 'package:runmyai/engine/tuning.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/system/downloads.dart';
 import 'package:runmyai/system/folders.dart';
+import 'package:runmyai/system/signature.dart';
 import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/engine_setup.dart';
+
+import 'signing.dart';
 
 /// The app's folders in a test's own folder (never the real "Run My AI").
 class _Folders extends FoldersNotifier {
@@ -103,6 +106,15 @@ class _GitHub {
       } else if (path.startsWith('/redirect/')) {
         response.redirect(Uri.parse('/dl/${path.substring(10)}'));
         return;
+      } else if (path.startsWith('/runmyai/tokenwing-files/resolve/main/') && store.containsKey(path.split('/').last)) {
+        // the engine files on "Hugging Face", by checksum, answered in byte ranges
+        final bytes = store[path.split('/').last]!;
+        storeAsked.add(path.split('/').last);
+        final range = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(request.headers.value(HttpHeaders.rangeHeader) ?? '');
+        final first = range == null ? 0 : int.parse(range[1]!), last = range == null ? bytes.length - 1 : int.parse(range[2]!);
+        response.statusCode = range == null ? 200 : 206;
+        response.headers.set(HttpHeaders.contentRangeHeader, 'bytes $first-$last/${bytes.length}');
+        response.add(bytes.sublist(first, last + 1));
       } else if (path.startsWith('/dl/') && files.containsKey(path.substring(4))) {
         final bytes = files[path.substring(4)]!;
         final range = request.headers.value(HttpHeaders.rangeHeader);
@@ -134,10 +146,40 @@ class _GitHub {
 
   final _sums = <String, String>{};
 
+  /// The engine files by checksum, and which of them were asked for.
+  final store = <String, List<int>>{};
+  final storeAsked = <String>{};
+
+  /// A release with a file list: [build] holds [files] (path to bytes, or to a link target with `link:`).
+  void putFileList(String build, Map<String, Object> files) {
+    final entries = <Map<String, Object>>[];
+    for (final MapEntry(:key, :value) in files.entries) {
+      if (value is String && value.startsWith('link:')) {
+        entries.add({'path': key, 'link': value.substring(5)});
+      } else {
+        final bytes = value as List<int>, sha = '${sha256.convert(bytes)}';
+        store[sha] = bytes;
+        entries.add({'path': key, 'size': bytes.length, 'sha256': sha, if (key == 'llama-server') 'program': true});
+      }
+    }
+    put(
+      'engine-files.json',
+      utf8.encode(
+        jsonEncode({
+          'format': 1,
+          'version': 'v0.1.0',
+          'store': 'http://127.0.0.1:${server.port}/runmyai/tokenwing-files/resolve/main/',
+          'builds': {build: entries},
+        }),
+      ),
+    );
+  }
+
   void put(String name, List<int> archive, {String? sum}) {
     files[name] = archive;
     _sums[name] = sum ?? '${sha256.convert(archive)}';
     files['SHA256SUMS'] = utf8.encode([for (final e in _sums.entries) '${e.value}  ${e.key}\n'].join());
+    files['SHA256SUMS.sig'] = utf8.encode(testSign(files['SHA256SUMS']!));
   }
 
   Future<EngineRelease> latest() async {
@@ -152,7 +194,10 @@ class _GitHub {
 
 void main() {
   // the widget tests' binding answers every HTTP request with 400; these tests talk to their own local server
-  setUpAll(() => HttpOverrides.global = null);
+  setUpAll(() {
+    HttpOverrides.global = null;
+    useTestKey();
+  });
 
   group('the build picked for a PC', () {
     test('NVIDIA: CUDA 13, or CUDA 12 for old cards or drivers', () {
@@ -298,6 +343,47 @@ void main() {
       expect(File('$engine/old-file').existsSync(), isFalse);
       expect(installedEngine(engine), (build: 'cpu', version: 'v0.1.0'));
       expect(main.listSync().map((e) => e.uri.pathSegments.where((s) => s.isNotEmpty).last), ['engine']);
+    });
+
+    test('a release with a file list: only the files this engine lacks are downloaded; the rest is copied, links kept', () async {
+      final shared = List<int>.generate(300000, (i) => i % 251), program = utf8.encode('#!/bin/sh\necho new engine\n');
+      github.put(asset, _engineTar());
+      github.putFileList('linux-x64-cpu', {
+        'llama-server': program,
+        'libggml.so.1': shared,
+        'libggml.so': 'link:libggml.so.1',
+      });
+      Directory(engine).createSync();
+      File('$engine/libggml.so.1').writeAsBytesSync(shared);
+      File('$engine/llama-server').writeAsStringSync('old engine');
+      expect(await download(await github.latest()).run(), isTrue);
+      expect(github.storeAsked, {'${sha256.convert(program)}'}, reason: 'the file this engine already had is not downloaded');
+      expect(github.ranges, isEmpty, reason: 'the whole package is not downloaded');
+      expect(File('$engine/llama-server').readAsBytesSync(), program);
+      expect(File('$engine/llama-server').statSync().modeString(), startsWith('rwx'));
+      expect(File('$engine/libggml.so.1').readAsBytesSync(), shared);
+      expect(Link('$engine/libggml.so').targetSync(), 'libggml.so.1');
+      expect(installedEngine(engine), (build: 'cpu', version: 'v0.1.0'));
+      expect(main.listSync().map((e) => e.uri.pathSegments.where((s) => s.isNotEmpty).last), ['engine']);
+    });
+
+    test('a file list whose checksum is not the signed one installs nothing', () async {
+      github.put(asset, _engineTar());
+      github.putFileList('linux-x64-cpu', {'llama-server': utf8.encode('x')});
+      github.files['engine-files.json'] = utf8.encode('{"format":1}');
+      Directory(engine).createSync();
+      File('$engine/llama-server').writeAsStringSync('old engine');
+      await expectLater(download(await github.latest()).run(), throwsA(isA<DownloadFailure>()));
+      expect(File('$engine/llama-server').readAsStringSync(), 'old engine');
+    });
+
+    test('an unsigned release, or one whose signature does not match, installs nothing', () async {
+      github.put(asset, _engineTar());
+      github.files['SHA256SUMS.sig'] = utf8.encode(testSign(utf8.encode('something else')));
+      await expectLater(download(await github.latest()).run(), throwsA(isA<DownloadFailure>()));
+      github.files.remove('SHA256SUMS.sig');
+      await expectLater(download(await github.latest()).run(), throwsA(isA<DownloadFailure>()));
+      expect(Directory(engine).existsSync(), isFalse);
     });
 
     test('a pause keeps what was written; Resume asks for the rest only', () async {

@@ -1,0 +1,61 @@
+name: Setup Flutter SDK
+description: Installs OS build dependencies and caches the pinned Flutter SDK across x64 and ARM64 runners.
+
+inputs:
+  flutter-version:
+    description: Git tag or branch of flutter/flutter to install.
+    required: false
+    default: '3.50.0'
+
+runs:
+  using: composite
+  steps:
+    - name: Install Linux desktop build and packaging dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          ca-certificates clang cmake curl file git libfuse2 libgtk-3-dev \
+          liblzma-dev libsecret-1-dev libsqlite3-dev libstdc++-12-dev \
+          ninja-build pkg-config squashfs-tools xvfb xz-utils
+
+    - name: Cache Flutter SDK and engine artifacts
+      id: flutter-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/flutter-sdk
+        key: flutter-sdk-${{ runner.os }}-${{ runner.arch }}-${{ inputs.flutter-version }}-v1
+
+    - name: Setup Flutter SDK (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        SDK="${{ runner.temp }}/flutter-sdk"
+        if [ "${{ steps.flutter-cache.outputs.cache-hit }}" != "true" ]; then
+          rm -rf "$SDK"
+          git clone --depth 1 --branch "${{ inputs.flutter-version }}" https://github.com/flutter/flutter.git "$SDK"
+        fi
+        echo "$SDK/bin" >> "$GITHUB_PATH"
+        echo "FLUTTER_ROOT=$SDK" >> "$GITHUB_ENV"
+        export PATH="$SDK/bin:$PATH"
+        flutter config --no-analytics
+        flutter precache --linux
+        flutter --version
+
+    - name: Setup Flutter SDK (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $sdk = Join-Path $env:RUNNER_TEMP "flutter-sdk"
+        if ("${{ steps.flutter-cache.outputs.cache-hit }}" -ne "true") {
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --depth 1 --branch "${{ inputs.flutter-version }}" https://github.com/flutter/flutter.git $sdk
+        }
+        $bin = Join-Path $sdk "bin"
+        Add-Content -Path $env:GITHUB_PATH -Value $bin
+        Add-Content -Path $env:GITHUB_ENV -Value "FLUTTER_ROOT=$sdk"
+        $env:PATH = "$bin;$env:PATH"
+        & "$bin\flutter.bat" config --no-analytics
+        & "$bin\flutter.bat" precache --windows
+        & "$bin\flutter.bat" --version

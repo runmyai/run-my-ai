@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../backend/backend.dart';
 import '../data/models.dart';
 import '../engine/commands.dart';
+import 'prefs.dart';
 import 'providers.dart';
 
 /// The profile that comes with each model. It cannot be changed; its commands can be copied.
@@ -16,7 +17,7 @@ class EngineProfile {
   final String name;
   final List<String> commands;
 
-  /// The memory cap; null: all the RAM but [defaultHeadroomGiB].
+  /// Memory headroom, the RAM the engine leaves free; null: the engine's own default ([defaultHeadroomGiB]).
   final double? memoryCapGiB;
 
   bool get isAuto => id == autoProfileId;
@@ -119,12 +120,14 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
     final profile = active(file);
     final length = closestContext(profile.lengths, contextLength);
     var command = profile.commands.firstWhere((c) => contextOf(c) == length);
-    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB ?? defaultHeadroomGiB;
-    if (command.contains('--moe-stream')) {
-      command = withRamFree(command, headroom);
-    }
+    command = _withHeadroom(command, profile, file);
     if (state[file.id]?.kv[length] case final type?) command = withKvType(command, type);
-    return EngineRun(flags: command, contextLength: length, memoryCapGiB: profile.memoryCapGiB);
+    return EngineRun(
+      flags: command,
+      contextLength: length,
+      memoryCapGiB: profile.memoryCapGiB,
+      vramHeadroom: ref.read(prefsProvider).vramHeadroomSetting,
+    );
   }
 
   /// How to run [file] at [contextLength] with the profile [id].
@@ -132,16 +135,23 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
     final profile = all(file).where((p) => p.id == id).firstOrNull ?? auto(file);
     final length = closestContext(profile.lengths, contextLength);
     var command = profile.commands.firstWhere((c) => contextOf(c) == length);
-    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB ?? defaultHeadroomGiB;
-    if (command.contains('--moe-stream')) {
-      command = withRamFree(command, headroom);
-    }
+    command = _withHeadroom(command, profile, file);
     if (state[file.id]?.kv[length] case final type?) command = withKvType(command, type);
     return EngineRun(
       flags: command,
       contextLength: length,
       memoryCapGiB: profile.memoryCapGiB,
+      vramHeadroom: ref.read(prefsProvider).vramHeadroomSetting,
     );
+  }
+
+  /// [command] with the user's Memory headroom; when none is set, Auto's commands leave the engine its own default (a custom
+  /// profile keeps what its command says).
+  String _withHeadroom(String command, EngineProfile profile, ModelFile file) {
+    if (!command.contains('--moe-stream')) return command;
+    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB;
+    if (headroom != null) return withRamFree(command, headroom);
+    return profile.isAuto ? withoutRamFree(command) : command;
   }
 
   void setActive(ModelFile file, String id) => _put(file, active: id);

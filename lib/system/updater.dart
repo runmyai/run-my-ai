@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -8,6 +9,7 @@ import '../data/models.dart';
 import '../engine/engine_download.dart';
 import 'downloads.dart';
 import 'folders.dart';
+import 'signature.dart';
 
 /// Where new versions of the app and the engine are listed.
 const appReleasesPath = '/repos/runmyai/run-my-ai/releases';
@@ -92,8 +94,13 @@ List<GitHubRelease> newerReleases(List<GitHubRelease> releases, String current) 
     if (compareVersions(r.tag, current) > 0) r,
 ]..sort((a, b) => compareVersions(b.tag, a.tag));
 
-/// The app's release file for a system and CPU; null where the app does not replace itself (Windows for now).
-String? appAsset(String os, String arch) => os == 'linux' ? 'RunMyAI-linux-$arch.AppImage' : null;
+/// The app's release file for a system and CPU: the AppImage on Linux, the self-unpacking launcher on Windows; null
+/// elsewhere (the app does not replace itself there).
+String? appAsset(String os, String arch) => switch (os) {
+  'linux' => 'RunMyAI-linux-$arch.AppImage',
+  'windows' => 'RunMyAI-windows-$arch.exe',
+  _ => null,
+};
 
 // ---- Model updates ------------------------------------------------------------------------------------------------
 
@@ -128,7 +135,8 @@ List<ModelVersion>? parseModelVersions(String text) {
   return null;
 }
 
-/// A model file on this PC: its size, and its checksum when one was kept from its download.
+/// A model file on this PC: its size, and its checksum when one was kept from its download; size -1 for a file of the
+/// list that is not here yet.
 typedef LocalFile = ({String? sha256, int size});
 
 /// What a model's update would change, given its list file's [versions] (oldest first) and its files on this PC
@@ -143,7 +151,8 @@ typedef LocalFile = ({String? sha256, int size});
   final files = <String, FileSum>{};
   var since = versions.length;
   for (final MapEntry(key: name, value: here) in local.entries) {
-    bool same(FileSum sum) => here.sha256 != null ? sum.sha256 == here.sha256 : sum.size == here.size;
+    bool same(FileSum sum) =>
+        here.size >= 0 && (here.sha256 != null ? sum.sha256 == here.sha256 : sum.size == here.size);
     final listing = [
       for (var i = 0; i < versions.length; i++)
         if (versions[i].files.containsKey(name)) i,
@@ -288,27 +297,25 @@ Future<void> updateModelFiles({
 
 // ---- The app ------------------------------------------------------------------------------------------------------
 
-/// Downloads [asset] of [release] next to the running AppImage at [appImage], checks it against the release's
-/// SHA256SUMS and only then puts it in place of the running one (Linux lets a running program's file be replaced).
+/// Downloads [asset] of [release] next to the app's own file [appFile] (the AppImage it runs from on Linux, the launcher
+/// it was started by on Windows), checks it against the release's signed SHA256SUMS and only then puts it in place of
+/// [appFile] (Linux lets a running program's file be replaced; the Windows launcher has ended once it started the app).
 /// A failure leaves the app as it was. Throws [DownloadFailure].
-Future<void> replaceAppImage({
+Future<void> replaceAppFile({
   required GitHubRelease release,
   required String asset,
-  required String appImage,
+  required String appFile,
   void Function(DownloadProgress progress)? onProgress,
   Future<int?> Function(String path) free = freeBytes,
 }) async {
-  final file = release.assets[asset], sumsFile = release.assets['SHA256SUMS'];
+  final file = release.assets[asset];
   if (file == null) throw DownloadFailure('The new version has no $asset.');
-  if (sumsFile == null) throw const DownloadFailure('The new version has no checksums, so it was not installed.');
+  final appImage = appFile;
   final dir = File(appImage).parent.path;
   final part = File(_join(dir, '.$asset.${release.tag}.part'));
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
   try {
-    final response = await (await client.getUrl(sumsFile.url)).close();
-    final sums = await response.transform(utf8.decoder).join();
-    if (response.statusCode != 200) throw DownloadFailure('GitHub answered with an error (${response.statusCode}).');
-    final sha = parseSha256Sums(sums)[asset];
+    final sha = (await signedSums(client, release.assets))[asset];
     if (sha == null) throw DownloadFailure('The new version has no checksum for $asset, so it was not installed.');
     final room = await free(dir);
     if (room != null && room < file.size + spareBytes) {
@@ -325,7 +332,7 @@ Future<void> replaceAppImage({
     var done = 0;
     final out = part.openWrite();
     try {
-      await for (final data in download) {
+      await for (final data in download.timeout(downloadIdleTimeout)) {
         out.add(data);
         done += data.length;
         onProgress?.call(DownloadProgress(done: done, total: file.size));
@@ -338,9 +345,13 @@ Future<void> replaceAppImage({
     if (!await checksumMatches(part.path, RemoteFile(asset, file.size, sha256: sha))) {
       throw const DownloadFailure('The new version was damaged in the download. Try again.', broken: true);
     }
-    final mode = await Process.run('chmod', ['755', part.path]);
-    if (mode.exitCode != 0) throw const DownloadFailure('The new version could not be made runnable.');
+    if (!Platform.isWindows) {
+      final mode = await Process.run('chmod', ['755', part.path]);
+      if (mode.exitCode != 0) throw const DownloadFailure('The new version could not be made runnable.');
+    }
     part.renameSync(appImage);
+  } on TimeoutException {
+    throw const DownloadFailure('The download broke off. Try again.');
   } on IOException catch (e) {
     throw DownloadFailure(
       e is FileSystemException ? 'Could not write next to the app in $dir.' : 'The download broke off. Try again.',
