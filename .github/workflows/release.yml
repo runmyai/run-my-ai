@@ -65,6 +65,11 @@ jobs:
 
           version = raw.lstrip("v")
           tag = raw if raw.startswith("v") else f"v{raw}"
+          # the app compares release tags with its own appVersion: a build whose appVersion is not the tag's version
+          # would offer itself as an update forever (or never), so it stops here
+          app = re.search(r"^const appVersion = '([^']+)';", pathlib.Path("lib/state/about.dart").read_text(encoding="utf-8"), re.M)
+          if not app or app.group(1) != version:
+              raise SystemExit(f"lib/state/about.dart appVersion is {app.group(1) if app else 'missing'}, the release is {version}")
           is_pre = (os.environ.get("INPUT_PRE", "false").lower() == "true") or ("-" in tag)
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
@@ -222,7 +227,8 @@ jobs:
           PRE: ${{ needs.meta.outputs.prerelease }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            flags=(--target "${{ github.sha }}" --title "$TAG" --generate-notes)
+            # a draft: users and the app's update check see it only once it is published by hand, with its notes
+            flags=(--target "${{ github.sha }}" --title "$TAG" --generate-notes --draft)
             if [ "$PRE" = "true" ]; then
               flags+=(--prerelease)
             fi
