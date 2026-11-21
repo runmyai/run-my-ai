@@ -349,14 +349,15 @@ class EngineDownload {
           if (!append) done = 0;
           final out = part.openWrite(mode: append ? FileMode.append : FileMode.write);
           try {
-            await for (final data in response) {
+            await for (final data in response.timeout(downloadIdleTimeout)) {
               out.add(data);
               done += data.length;
             }
           } finally {
             await out.close();
           }
-        } on IOException {
+        } on Exception catch (e) {
+          if (e is! IOException && e is! TimeoutException) rethrow;
           if (_stopped) return false;
           throw const DownloadFailure('The download broke off. Check the internet connection, then press Resume.');
         }

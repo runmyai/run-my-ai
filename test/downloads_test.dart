@@ -165,6 +165,7 @@ void main() {
     void Function(DownloadProgress)? onProgress,
     int connections = 4,
     int partBytes = 1000,
+    Duration idleTimeout = const Duration(seconds: 30),
   }) => ModelDownload(
     _model,
     '${dir.path}/models',
@@ -174,6 +175,7 @@ void main() {
     free: free ?? (_) async => 1 << 40,
     onProgress: onProgress,
     retryDelay: Duration.zero,
+    idleTimeout: idleTimeout,
   );
 
   test('a part record splits the file into ranges and remembers the parts written', () {
@@ -341,6 +343,18 @@ void main() {
         .map((a) => a.split(' ').last.split('-').map(int.parse).toList())
         .fold(0, (n, r) => n + r[1] - r[0] + 1);
     expect(bytes, _weights.length + 3 * 500);
+  });
+
+  test('a connection that stops sending without closing is dropped after the idle time, and the part continues', () async {
+    hub.hangHalfWay = 2;
+    expect(await download(idleTimeout: const Duration(milliseconds: 200)).run(), isTrue);
+    expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
+    // the two hung answers sent half their part; each retry asked only for the other half
+    final asked = hub.asked.where((a) => a.startsWith('m.gguf'));
+    final bytes = asked
+        .map((a) => a.split(' ').last.split('-').map(int.parse).toList())
+        .fold(0, (n, r) => n + r[1] - r[0] + 1);
+    expect(bytes, _weights.length + 2 * 500);
   });
 
   test('a file that does not match its checksum is deleted and reported as damaged', () async {
