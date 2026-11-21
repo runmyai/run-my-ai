@@ -35,6 +35,74 @@ const guessKinds = <(String, String, List<String>)>[
   ('gIssued', 'Issued', ['reply.guesses.issued', 'guesses.issued', 'guess.issued', 'guesses_issued']),
 ];
 
+/// The 2x2 Guesser Census (Right vs. Wrong x In-Memory [harmless] vs. On-SSD [harmful]) and Guess-Gate actions.
+const guesserCensusKinds = <(String, String, List<String>)>[
+  ('gMemRight', 'In-RAM right', ['reply.guesses.mem_right', 'guesses.mem_right', 'decode.guesser.mem_right', 'mem_right']),
+  ('gMemWrong', 'In-RAM wrong', ['reply.guesses.mem_wrong', 'guesses.mem_wrong', 'decode.guesser.mem_wrong', 'mem_wrong']),
+  ('gSsdRight', 'On-SSD right', ['reply.guesses.ssd_right', 'guesses.ssd_right', 'decode.guesser.ssd_right', 'ssd_right']),
+  ('gSsdWrong', 'On-SSD wrong', ['reply.guesses.ssd_wrong', 'guesses.ssd_wrong', 'decode.guesser.ssd_wrong', 'ssd_wrong']),
+  ('gSkipFloor', 'Skipped (low p)', ['reply.guesses.skip_floor', 'guesses.skip_floor', 'decode.guesser.skip_floor', 'skip_floor']),
+  ('gSkipVic', 'Skipped (warm slot)', ['reply.guesses.skip_vic', 'guesses.skip_vic', 'decode.guesser.skip_vic', 'skip_vic']),
+  ('gDeferQ', 'Deferred (queue)', ['reply.guesses.defer_q', 'guesses.defer_q', 'decode.guesser.defer_q', 'defer_q']),
+  ('gPnSkip', 'Unpinned (low p)', ['reply.guesses.pn_skip', 'guesses.pn_skip', 'decode.guesser.pn_skip', 'pn_skip']),
+];
+
+/// Structured 2x2 Guesser Census and Guess-Gate breakdown read from `/moe-stream/stats` or `timings.moe_stream`.
+class GuesserCensus {
+  const GuesserCensus({
+    required this.tokens,
+    required this.memRight,
+    required this.memWrong,
+    required this.ssdRight,
+    required this.ssdWrong,
+    this.skipFloor = 0,
+    this.skipVic = 0,
+    this.deferQ = 0,
+    this.pnSkip = 0,
+  });
+
+  final double tokens;
+  final double memRight;
+  final double memWrong;
+  final double ssdRight;
+  final double ssdWrong;
+  final double skipFloor;
+  final double skipVic;
+  final double deferQ;
+  final double pnSkip;
+
+  double get inMemTotal => memRight + memWrong;
+  double get onSsdTotal => ssdRight + ssdWrong;
+  double get totalGuesses => inMemTotal + onSsdTotal;
+
+  double? get inMemPrecisionPercent => inMemTotal > 0 ? 100 * memRight / inMemTotal : null;
+  double? get onSsdPrecisionPercent => onSsdTotal > 0 ? 100 * ssdRight / onSsdTotal : null;
+  double? get ssdWrongPerToken => tokens > 0 ? ssdWrong / tokens : null;
+  double? get ssdRightPerToken => tokens > 0 ? ssdRight / tokens : null;
+
+  static GuesserCensus? parse(Object? json) {
+    if (json is! Map) return null;
+    final doc = json.cast<String, Object?>();
+    final scope = doc['total'] is Map ? (doc['total']! as Map).cast<String, Object?>() : doc;
+    final mr = pickNumber(scope, guesserCensusKinds[0].$3);
+    final mw = pickNumber(scope, guesserCensusKinds[1].$3);
+    final sr = pickNumber(scope, guesserCensusKinds[2].$3);
+    final sw = pickNumber(scope, guesserCensusKinds[3].$3);
+    if (mr == null && mw == null && sr == null && sw == null) return null;
+    return GuesserCensus(
+      tokens: pickNumber(scope, _tokens) ?? 0,
+      memRight: mr ?? 0,
+      memWrong: mw ?? 0,
+      ssdRight: sr ?? 0,
+      ssdWrong: sw ?? 0,
+      skipFloor: pickNumber(scope, guesserCensusKinds[4].$3) ?? 0,
+      skipVic: pickNumber(scope, guesserCensusKinds[5].$3) ?? 0,
+      deferQ: pickNumber(scope, guesserCensusKinds[6].$3) ?? 0,
+      pnSkip: pickNumber(scope, guesserCensusKinds[7].$3) ?? 0,
+    );
+  }
+}
+
 /// The parts a token's time is cut into, as the engine times them (milliseconds per token): they add up to the token's
 /// time; the graphics card's kernels run beside the CPU's work and are not part of that sum. The hand-off between the
 /// CPU and the GPU is mostly the CPU waiting for the GPU to finish; where the engine also gives the copies' own time
@@ -109,6 +177,9 @@ class EngineSnapshot {
       'reply.handoff_copies_ms',
     ]);
     for (final (id, _, names) in guessKinds) {
+      count(id, names);
+    }
+    for (final (id, _, names) in guesserCensusKinds) {
       count(id, names);
     }
     // The engine gives the uses and the shares; the counts are worked out from them.
@@ -201,6 +272,15 @@ class EngineStatsTracker {
       for (final (id, _, _) in guessKinds) {
         if (now.counters.containsKey(id)) out['eng.$id'] = 100 * delta(id) / guesses;
       }
+    }
+    if (tokens > 0) {
+      for (final (id, _, _) in guesserCensusKinds) {
+        if (now.counters.containsKey(id)) out['eng.$id'] = delta(id) / tokens;
+      }
+    }
+    final ssdTot = delta('gSsdRight') + delta('gSsdWrong');
+    if (ssdTot > 0 && now.counters.containsKey('gSsdRight')) {
+      out['eng.gSsdPrecision'] = 100 * delta('gSsdRight') / ssdTot;
     }
     return out;
   }

@@ -1,4 +1,8 @@
 import 'dart:convert';
+import 'dart:math';
+
+import 'commands.dart';
+import 'engine_flags.dart';
 
 /// The autotuner's result: the last JSON line it printed (a driver may print its own lines before it), or null.
 Map<String, dynamic>? parseAutotunerJson(String stdout) {
@@ -15,6 +19,15 @@ Map<String, dynamic>? parseAutotunerJson(String stdout) {
   return null;
 }
 
+void _setOrAddFlag(List<String> out, String flag, String value) {
+  final idx = out.indexOf(flag);
+  if (idx >= 0 && idx + 1 < out.length) {
+    out[idx + 1] = value;
+  } else {
+    out.addAll([flag, value]);
+  }
+}
+
 /// The table's command with the measured settings put in: -t (replies), -tb (prompts), the fast cores, the SSD readers.
 List<String> withTuning(List<String> args, Map<String, dynamic>? t) {
   if (t == null) return args;
@@ -24,19 +37,107 @@ List<String> withTuning(List<String> args, Map<String, dynamic>? t) {
   // thread per fast core as a mask, and as a range too when they are numbered in one run from 0
   final mask = t['fast_mask'] as String? ?? '', fast = t['fast_cpus'] as String? ?? '';
   if (mask.isNotEmpty) {
-    out.addAll(['--cpu-mask', mask]);
+    _setOrAddFlag(out, '--cpu-mask', mask);
   } else if (fast.isNotEmpty) {
-    out.addAll(['--cpu-range', fast]);
+    _setOrAddFlag(out, '--cpu-range', fast);
   }
   // prompts are compute-bound and take every core: without this their threads would be kept on the fast cores too
   if (t['logical_cores'] case final int n when n > 1 && (mask.isNotEmpty || fast.isNotEmpty)) {
-    out.addAll(['--cpu-range-batch', '0-${n - 1}']);
+    _setOrAddFlag(out, '--cpu-range-batch', '0-${n - 1}');
   }
   final i = out.indexOf('-t');
   if (i >= 0 && i + 1 < out.length) out[i + 1] = '$threads';
-  if (t['threads_batch'] case final int tb when tb > threads) out.addAll(['-tb', '$tb']);
-  if (t['io_threads'] case final int io) out.addAll(['--moe-stream-io-threads', '$io']);
+  if (t['threads_batch'] case final int tb when tb > threads) _setOrAddFlag(out, '-tb', '$tb');
+  if (t['io_threads'] case final int io) _setOrAddFlag(out, '--moe-stream-io-threads', '$io');
   return out;
+}
+
+const _appSuppliedFlags = {
+  '-m', '--model', '-mu', '--model-url', '-hf', '-hfr', '--hf-repo',
+  '--host', '--port', '--cache-disk', '--cache-disk-gb', '--cache-disk-checkpoints',
+};
+final _blockedEnv = RegExp(r'^(LD_|DYLD_|PATH$)');
+
+String _shellWord(String s) =>
+    s.isEmpty || s.contains(' ') || s.contains('"') || s.contains("'") ? '"${s.replaceAll('"', r'\"')}"' : s;
+
+/// Synthesizes one Auto command per context length for a Bring-Your-Own-Model GGUF from [tune] (`recommended_flags` and
+/// `recommended_env` emitted by `autotuner --file`), falling back to a universal model-agnostic profile before tuning runs.
+Map<int, String> commandsFromAutotuner(
+  Map<String, dynamic>? tune, {
+  int maxContext = 131072,
+  bool isMoE = true,
+  double largestGpuGiB = 0,
+}) {
+  final contexts = contextOptions(max(4096, maxContext));
+  final recFlags = tune?['recommended_flags'];
+  if (recFlags is String && recFlags.trim().isNotEmpty) {
+    final parsed = EngineFlags.parse(recFlags);
+    final envMap = <String, String>{
+      ...parsed.environment,
+      if (tune?['recommended_env'] case final Map rawEnv)
+        for (final e in rawEnv.entries)
+          if (e.key is String && e.value != null && !_blockedEnv.hasMatch(e.key as String))
+            e.key as String: '${e.value}',
+    };
+    envMap.removeWhere((k, _) => _blockedEnv.hasMatch(k));
+    final cleanArgs = <String>[];
+    var hasCtx = false;
+    for (var i = 0; i < parsed.arguments.length; i++) {
+      final a = parsed.arguments[i];
+      if (_appSuppliedFlags.contains(a)) {
+        if (i + 1 < parsed.arguments.length && !parsed.arguments[i + 1].startsWith('-')) i++;
+        continue;
+      }
+      if (_appSuppliedFlags.any((f) => a.startsWith('$f='))) continue;
+      if (a == '-c' || a == '--ctx-size') {
+        hasCtx = true;
+        cleanArgs.addAll(['-c', i + 1 < parsed.arguments.length ? parsed.arguments[++i] : '8192']);
+        continue;
+      }
+      if (a.startsWith('-c=') || a.startsWith('--ctx-size=')) {
+        hasCtx = true;
+        cleanArgs.addAll(['-c', a.split('=').last]);
+        continue;
+      }
+      cleanArgs.add(a);
+    }
+    if (!hasCtx) cleanArgs.insertAll(0, ['-c', '8192']);
+    final envPrefix = [for (final e in envMap.entries) '${e.key}=${_shellWord(e.value)}'].join(' ');
+    final baseBody = [for (final a in cleanArgs) _shellWord(a)].join(' ');
+    final baseCmd = envPrefix.isEmpty ? baseBody : '$envPrefix $baseBody';
+    return {for (final c in contexts) c: withContextLength(baseCmd, c)};
+  }
+
+  if (!isMoE) {
+    final ngl = largestGpuGiB >= 4 ? '-ngl 99' : '-ngl 0';
+    return {
+      for (final c in contexts)
+        c: '-c $c -fa on -ctk q8_0 -ctv q8_0 $ngl -np 1 -t 8 -b 2048 -ub 2048',
+    };
+  }
+
+  final hasGpu = largestGpuGiB >= 4;
+  final envPrefix = hasGpu
+      ? 'GGML_CUDA_COPY_KERNEL=65536 GGML_CUDA_POOL1D_ROW=1 GGML_CUDA_FUSE_AMAX=1 GGML_CUDA_MOE_MARK_IDS=1 '
+      : '';
+  final gpuPart = largestGpuGiB >= 10
+      ? '-ngl 99 -fit off --moe-stream-vram-free 512MiB --moe-stream-vram-experts auto '
+        '--moe-stream-vram-follow 1 --moe-stream-vram-parallel 1 --moe-stream-vram-copyback 1 '
+        '--moe-stream-async-h2d 1 --moe-stream-elastic 1'
+      : hasGpu
+      ? '-ngl 99 -fit off --moe-stream-vram-free 512MiB --moe-stream-gpu-layers 0 --moe-stream-vram-experts 0 '
+        '--moe-stream-elastic 1'
+      : '-ngl 0 --moe-stream-gpu-layers 0 --moe-stream-vram-experts 0';
+  return {
+    for (final c in contexts)
+      c: '$envPrefix-c $c -fa on -ctk q8_0 -ctv q8_0 -np 1 -t 8 -b 2048 -ub 2048 '
+          '--moe-stream model $gpuPart --moe-stream-overlap 1 --moe-stream-io-wake chunk '
+          '--moe-stream-promote 1 --moe-stream-guess-cap 2 --moe-stream-policy decay '
+          '--moe-stream-plan 1 --moe-stream-drop-stale 1 --moe-stream-needed-early 1 '
+          '--moe-stream-lookahead 2 --moe-stream-guess-combined 1 --moe-stream-proj-ready 1 '
+          '--moe-stream-protect-named 1 --moe-stream-guess-inflight 4 --moe-stream-guess-gate 1',
+  };
 }
 
 /// Several cards share the model, filled fastest first (the autotuner's measured read speed): the slowest card runs the first
