@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -331,7 +332,7 @@ Future<void> replaceAppFile({
     var done = 0;
     final out = part.openWrite();
     try {
-      await for (final data in download) {
+      await for (final data in download.timeout(downloadIdleTimeout)) {
         out.add(data);
         done += data.length;
         onProgress?.call(DownloadProgress(done: done, total: file.size));
@@ -349,6 +350,8 @@ Future<void> replaceAppFile({
       if (mode.exitCode != 0) throw const DownloadFailure('The new version could not be made runnable.');
     }
     part.renameSync(appImage);
+  } on TimeoutException {
+    throw const DownloadFailure('The download broke off. Try again.');
   } on IOException catch (e) {
     throw DownloadFailure(
       e is FileSystemException ? 'Could not write next to the app in $dir.' : 'The download broke off. Try again.',
