@@ -223,6 +223,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
+          # this job has no checkout, so gh is told the repository
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.meta.outputs.tag }}
           PRE: ${{ needs.meta.outputs.prerelease }}
         run: |
