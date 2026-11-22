@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data/models.dart';
 import '../engine/commands.dart';
 import '../state/chats.dart';
 import '../state/library.dart';
@@ -130,102 +129,6 @@ class ContextSettings extends ConsumerWidget {
             ],
           ),
         ),
-      ],
-    );
-  }
-}
-
-/// The RAM left free for the system and other apps (the same for every model), with Save and Reset.
-class HeadroomInput extends ConsumerStatefulWidget {
-  const HeadroomInput({super.key, required this.file});
-
-  final ModelFile file;
-
-  @override
-  ConsumerState<HeadroomInput> createState() => _HeadroomInputState();
-}
-
-class _HeadroomInputState extends ConsumerState<HeadroomInput> {
-  static String _show(double? gib) {
-    final v = gib ?? defaultHeadroomGiB;
-    return v == v.roundToDouble() ? '${v.round()}' : '$v';
-  }
-
-  late final _text = TextEditingController(
-    text: _show(ref.read(profilesProvider.notifier).active(widget.file).memoryCapGiB),
-  );
-  String? _problem;
-
-  @override
-  void didUpdateWidget(HeadroomInput oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.file.id != widget.file.id) {
-      _text.text = _show(ref.read(profilesProvider.notifier).active(widget.file).memoryCapGiB);
-      _problem = null;
-    }
-  }
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final text = _text.text.trim();
-    final gib = double.tryParse(text);
-    if (text.isEmpty || gib == null || gib <= 0) {
-      setState(() => _problem = 'Enter a number of GB (e.g. 1.5 or 2).');
-      return;
-    }
-    setState(() => _problem = null);
-    ref.read(profilesProvider.notifier).setMemoryCap(widget.file, gib == defaultHeadroomGiB ? null : gib);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    ref.watch(profilesProvider);
-    final currentCap = ref.watch(profilesProvider.notifier).active(widget.file).memoryCapGiB;
-    final dirty = _text.text.trim() != _show(currentCap);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            SizedBox(
-              width: 160,
-              child: TextField(
-                key: const Key('memory-cap'),
-                controller: _text,
-                onChanged: (_) => setState(() => _problem = null),
-                style: TextStyle(fontSize: 13, color: c.text),
-                cursorColor: c.text,
-                decoration: _boxDecoration(c, hint: '$defaultHeadroomGiB'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
-            if (dirty) ...[
-              const SizedBox(width: 12),
-              MainButton(key: const Key('memory-cap-save'), label: 'Save', onTap: _save),
-              const SizedBox(width: 6),
-              AppButton(
-                label: 'Reset',
-                onTap: () => setState(() {
-                  _text.text = _show(currentCap);
-                  _problem = null;
-                }),
-              ),
-            ],
-          ],
-        ),
-        if (_problem != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(_problem!, style: TextStyle(fontSize: 13, color: c.danger)),
-          ),
       ],
     );
   }

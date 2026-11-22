@@ -85,10 +85,6 @@ String withKvType(String command, String type) {
   return command;
 }
 
-/// [command] with its --moe-stream-ram-free set to [gib].
-String withRamFree(String command, double gib) =>
-    _withRamFreeText(command, gib == gib.roundToDouble() ? '${gib.round()}GiB' : '${gib}GiB');
-
 String _withRamFreeText(String command, String str) {
   final pattern = RegExp(r'(^|\s)--moe-stream-ram-free([ =])\S+');
   if (pattern.hasMatch(command)) {

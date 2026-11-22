@@ -1020,7 +1020,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final tuned = await _tuned(local);
     // the table's row as the autotuner's card list now picks it (the first start may have shown another), with the
-    // user's Memory headroom and context cache type from the Settings
+    // user's context cache type from the Settings
     final row = _flagsFor(local, run.vramHeadroom)[run.contextLength];
     final flags = EngineFlags.parse(
       withVramFree(row == null ? run.flags : withUserChoices(row, run.flags), _vramFree(run.vramHeadroom)),

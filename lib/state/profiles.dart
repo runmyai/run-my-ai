@@ -120,14 +120,9 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
     final profile = active(file);
     final length = closestContext(profile.lengths, contextLength);
     var command = profile.commands.firstWhere((c) => contextOf(c) == length);
-    command = _withHeadroom(command, profile, file);
+    command = _withHeadroom(command, profile);
     if (state[file.id]?.kv[length] case final type?) command = withKvType(command, type);
-    return EngineRun(
-      flags: command,
-      contextLength: length,
-      memoryCapGiB: profile.memoryCapGiB,
-      vramHeadroom: ref.read(prefsProvider).vramHeadroomSetting,
-    );
+    return EngineRun(flags: command, contextLength: length, vramHeadroom: ref.read(prefsProvider).vramHeadroomSetting);
   }
 
   /// How to run [file] at [contextLength] with the profile [id].
@@ -135,24 +130,14 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
     final profile = all(file).where((p) => p.id == id).firstOrNull ?? auto(file);
     final length = closestContext(profile.lengths, contextLength);
     var command = profile.commands.firstWhere((c) => contextOf(c) == length);
-    command = _withHeadroom(command, profile, file);
+    command = _withHeadroom(command, profile);
     if (state[file.id]?.kv[length] case final type?) command = withKvType(command, type);
-    return EngineRun(
-      flags: command,
-      contextLength: length,
-      memoryCapGiB: profile.memoryCapGiB,
-      vramHeadroom: ref.read(prefsProvider).vramHeadroomSetting,
-    );
+    return EngineRun(flags: command, contextLength: length, vramHeadroom: ref.read(prefsProvider).vramHeadroomSetting);
   }
 
-  /// [command] with the user's Memory headroom; when none is set, Auto's commands leave the engine its own default (a custom
-  /// profile keeps what its command says).
-  String _withHeadroom(String command, EngineProfile profile, ModelFile file) {
-    if (!command.contains('--moe-stream')) return command;
-    final headroom = profile.memoryCapGiB ?? state[file.id]?.memoryCapGiB;
-    if (headroom != null) return withRamFree(command, headroom);
-    return profile.isAuto ? withoutRamFree(command) : command;
-  }
+  /// Auto's commands leave the engine its own RAM headroom (no --moe-stream-ram-free; a custom profile keeps what its
+  /// command says): elastic RAM fills only empty RAM and gives it back when other apps need it.
+  String _withHeadroom(String command, EngineProfile profile) => profile.isAuto ? withoutRamFree(command) : command;
 
   void setActive(ModelFile file, String id) => _put(file, active: id);
 
@@ -186,23 +171,6 @@ class ProfilesNotifier extends Notifier<Map<String, ModelProfiles>> {
       active: models.active == id ? autoProfileId : models.active,
       custom: [for (final p in models.custom) if (p.id != id) p],
     );
-  }
-
-  void setMemoryCap(ModelFile file, double? gib) {
-    final activeProf = active(file);
-    if (!activeProf.isAuto) {
-      update(file, activeProf.copyWith(memoryCapGiB: () => gib));
-    }
-    // Update all models so the headroom setting is shared across all presets
-    final updated = <String, ModelProfiles>{};
-    for (final entry in state.entries) {
-      updated[entry.key] = entry.value.copyWith(memoryCapGiB: () => gib);
-    }
-    if (!updated.containsKey(file.id)) {
-      updated[file.id] = ModelProfiles(memoryCapGiB: gib);
-    }
-    state = updated;
-    _write();
   }
 
   void update(ModelFile file, EngineProfile profile) {
