@@ -668,10 +668,10 @@ void _tab() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [storageProvider.overrideWithValue(Storage(dir)), backendProvider.overrideWithValue(_Backend())],
-        child: MaterialApp(theme: buildTheme(Brightness.dark), home: const Scaffold(body: HeadroomInput(file: _file))),
+        child: MaterialApp(theme: buildTheme(Brightness.dark), home: const Scaffold(body: VramHeadroomInput(card: 'CUDA0'))),
       ),
     );
-    expect(tester.getSize(find.byKey(const Key('memory-cap'))).height, closeTo(SelectBox.height, 0.5));
+    expect(tester.getSize(find.byKey(const Key('vram-headroom-CUDA0'))).height, closeTo(SelectBox.height, 0.5));
   });
 
   testWidgets('the setup\'s rows, list and footer do not overflow in a narrow window', (tester) async {

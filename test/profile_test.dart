@@ -148,12 +148,12 @@ void main() {
       expect(profiles().active(_file).name, 'Profile 2');
     });
 
-    test('its commands and memory cap are used; the longest length below when one is missing', () {
+    test('its commands are used; the longest length below when one is missing', () {
       profiles().create(_file);
       final mine = profiles().active(_file);
-      profiles().update(_file, mine.copyWith(commands: ['-c 8192 --mine'], memoryCapGiB: () => 12));
+      profiles().update(_file, mine.copyWith(commands: ['-c 8192 --mine']));
       final run = profiles().runFor(_file, 65536);
-      expect((run.flags, run.contextLength, run.memoryCapGiB), ('-c 8192 --mine', 8192, 12.0));
+      expect((run.flags, run.contextLength), ('-c 8192 --mine', 8192));
     });
 
     test('saved, and still in use after a restart', () {
@@ -171,35 +171,9 @@ void main() {
       expect(profiles().all(_file), hasLength(1));
     });
 
-    test('setting memory cap on Auto updates run and persists across restart', () {
-      expect(profiles().active(_file).memoryCapGiB, isNull);
-      profiles().setMemoryCap(_file, 24.5);
-      expect(profiles().active(_file).memoryCapGiB, 24.5);
-      expect(profiles().runFor(_file, 65536).memoryCapGiB, 24.5);
-
-      final restarted = open();
-      addTearDown(restarted.dispose);
-      expect(restarted.read(profilesProvider.notifier).active(_file).memoryCapGiB, 24.5);
-
-      profiles().setMemoryCap(_file, null);
-      expect(profiles().active(_file).memoryCapGiB, isNull);
-      expect(profiles().runFor(_file, 65536).memoryCapGiB, isNull);
-    });
-
-    test('Memory headroom reaches Auto\'s streaming command only when set; unset, the engine keeps its own default', () {
+    test('Auto\'s streaming command leaves the engine its own RAM headroom', () {
       expect(profiles().runFor(_file, 4096).flags, '-c 4096 --moe-stream model');
-      profiles().setMemoryCap(_file, 2.0);
-      expect(profiles().runFor(_file, 4096).flags, '-c 4096 --moe-stream model --moe-stream-ram-free 2GiB');
-    });
-
-    test('setting memory cap updates all models presets', () {
-      const otherFile = ModelFile(id: 'other/model', quantization: 'q', sizeBytes: 1000);
-      expect(profiles().active(_file).memoryCapGiB, isNull);
-      expect(profiles().active(otherFile).memoryCapGiB, isNull);
-
-      profiles().setMemoryCap(_file, 2.0);
-      expect(profiles().active(_file).memoryCapGiB, 2.0);
-      expect(profiles().active(otherFile).memoryCapGiB, 2.0);
+      expect(profiles().runFor(_file, 4096).memoryCapGiB, isNull);
     });
   });
 }

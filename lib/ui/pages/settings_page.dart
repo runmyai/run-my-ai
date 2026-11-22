@@ -183,7 +183,6 @@ class _SettingsList extends ConsumerWidget {
         const SizedBox(height: 28),
         const _StateLimit(),
         const SizedBox(height: 20),
-        const _Headroom(),
         const _VramHeadroom(),
         const SizedBox(height: 28),
         const FoldersSection(),
@@ -281,36 +280,6 @@ class _StateLimitState extends ConsumerState<_StateLimit> {
             Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
           ],
         ),
-      ],
-    );
-  }
-}
-
-/// The RAM left free for the system and other apps while a model runs (shared by all models).
-class _Headroom extends ConsumerWidget {
-  const _Headroom();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final c = context.colors;
-    final entry = ref.watch(shownModelProvider);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Memory headroom',
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'Free memory left for your operating system and other apps, so your computer stays responsive.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
-        ),
-        const SizedBox(height: 12),
-        if (entry == null)
-          Text('Download a model from the Store first.', style: TextStyle(fontSize: 13, color: c.textMuted))
-        else
-          HeadroomInput(file: entry.file),
       ],
     );
   }
