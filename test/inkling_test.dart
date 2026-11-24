@@ -11,6 +11,7 @@ import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
 import 'package:runmyai/engine/auto_commands.dart';
 import 'package:runmyai/engine/commands.dart';
+import 'package:runmyai/engine/engine_process.dart';
 import 'package:runmyai/engine/gguf.dart';
 import 'package:runmyai/system/folders.dart';
 
