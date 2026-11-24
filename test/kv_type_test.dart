@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:runmyai/engine/commands.dart';
 
@@ -25,6 +27,46 @@ void main() {
     ]);
     expect(withModelData(args, '/m/a.gguf', exists: (_) => true)[3], '/m/a.gguf.correction');
     expect(withModelData(args, '/m/a.gguf', exists: (_) => false), args);
+  });
+
+  test('a named vram-experts file falls back to model when missing, and a missing mmproj is left out', () {
+    const args = [
+      '--mmproj', '/m/mmproj.gguf', '--no-mmproj-offload',
+      '--moe-stream-vram-experts-file', '/m/ink.vram-experts.json',
+      '-c', '4096',
+    ];
+    expect(withModelData(args, '/m/ink.gguf', exists: (_) => true), args);
+    expect(withModelData(args, '/m/ink.gguf', exists: (_) => false), [
+      '--moe-stream-vram-experts-file', 'model', '-c', '4096',
+    ]);
+  });
+
+  test('quant plugin resolution prefers the engine folder and falls back to the model folder', () {
+    final file = quantPluginFile('wv_inkling_plugin');
+    final sep = Platform.pathSeparator;
+    expect(
+      resolveQuantPlugin(
+        'wv_inkling_plugin',
+        engineFolder: '/eng',
+        modelFolder: '/mod',
+        exists: (p) => p == '/eng$sep$file' || p == '/mod$sep$file',
+      ),
+      '/eng$sep$file',
+    );
+    expect(
+      resolveQuantPlugin(
+        'wv_inkling_plugin',
+        engineFolder: '/eng',
+        modelFolder: '/mod',
+        exists: (p) => p == '/mod$sep$file',
+      ),
+      '/mod$sep$file',
+    );
+    expect(resolveQuantPlugin('wv_inkling_plugin', engineFolder: '/eng', modelFolder: '/mod', exists: (_) => false), isNull);
+    expect(resolveQuantPlugin(null, engineFolder: '/eng', modelFolder: '/mod'), isNull);
+    expect(hasQuantPluginFlag(['-c', '4096']), isFalse);
+    expect(hasQuantPluginFlag(['--quant-plugin', '/eng/p.so', '-c', '4096']), isTrue);
+    expect(hasQuantPluginFlag(['--quant-plugin=/eng/p.so']), isTrue);
   });
 
   test('the offered types are the engine\'s names', () => expect(kvTypes, ['q4_0', 'q8_0', 'f16']));

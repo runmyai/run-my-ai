@@ -63,8 +63,17 @@ class _GpuBackend extends _Backend implements TuneControl {
 }
 
 void main() {
-  const gpuTables = [lingAuto, lingAutoSmall, flintAuto, flintAutoSmall, qwenAuto, qwenAutoSmall];
-  const cpuTables = [lingAutoCpu, flintAutoCpu, qwenAutoCpu];
+  const gpuTables = [
+    lingAuto,
+    lingAutoSmall,
+    flintAuto,
+    flintAutoSmall,
+    qwenAuto,
+    qwenAutoSmall,
+    inklingAuto,
+    inklingAutoSmall,
+  ];
+  const cpuTables = [lingAutoCpu, flintAutoCpu, qwenAutoCpu, inklingAutoCpu];
 
   group('the command', () {
     test('the default reaches every GPU recipe command; the rest of the command stays', () {

@@ -76,7 +76,7 @@ void main() {
     });
 
     test('the commands the models start with leave out what the app supplies', () {
-      for (final auto in [lingAuto, flintAuto]) {
+      for (final auto in [lingAuto, flintAuto, qwenAuto, inklingAuto]) {
         expect(auto.keys, [4096, 8192, 16384, 32768, 65536, 131072, 262144]);
         for (final MapEntry(key: length, value: command) in auto.entries) {
           final flags = EngineFlags.parse(command);

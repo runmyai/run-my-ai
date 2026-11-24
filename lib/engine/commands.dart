@@ -113,19 +113,60 @@ String withUserChoices(String row, String chosen) {
   return kv == null ? row : withKvType(row, kv[2]!);
 }
 
+/// The file name of the quant plugin [name] on this system (for example `wv_inkling_plugin` ->
+/// `libwv_inkling_plugin.so` on Linux, `wv_inkling_plugin.dll` on Windows).
+String quantPluginFile(String name) => Platform.isWindows
+    ? '$name.dll'
+    : Platform.isMacOS
+    ? 'lib$name.dylib'
+    : 'lib$name.so';
+
+/// Where the quant plugin [name] is found: first in [engineFolder] (shipped next to `llama-server`), else in
+/// [modelFolder]; null when [name] is null or neither folder has it. [exists] is for tests.
+String? resolveQuantPlugin(
+  String? name, {
+  required String engineFolder,
+  required String modelFolder,
+  bool Function(String path)? exists,
+}) {
+  if (name == null || name.isEmpty) return null;
+  final there = exists ?? (String p) => File(p).existsSync();
+  final file = quantPluginFile(name);
+  for (final dir in [engineFolder, modelFolder]) {
+    final path = '$dir${Platform.pathSeparator}$file';
+    if (there(path)) return path;
+  }
+  return null;
+}
+
+/// Whether [args] already names a `--quant-plugin`.
+bool hasQuantPluginFlag(List<String> args) =>
+    args.any((a) => a == '--quant-plugin' || a.startsWith('--quant-plugin='));
+
 /// [args] with the model's data taken from separate files next to the model file at [modelPath] where they exist
 /// (`<model>.correction`, `<model>.vram-experts.json`), instead of the copy inside the model file (`model`): an update of
-/// that data then downloads a few MB, not the model. [exists] is for tests.
+/// that data then downloads a few MB, not the model. If a named `--moe-stream-vram-experts-file` is missing, falls back
+/// to `model` (the copy inside the `.tokenwing.gguf`); if a named `--mmproj` is missing, leaves it out so the model
+/// still starts in text mode. [exists] is for tests.
 List<String> withModelData(List<String> args, String modelPath, {bool Function(String path)? exists}) {
   final there = exists ?? (String p) => File(p).existsSync();
   const files = {'--moe-stream-correction': '.correction', '--moe-stream-vram-experts-file': '.vram-experts.json'};
-  return [
-    for (var i = 0; i < args.length; i++)
-      if (i > 0 && args[i] == 'model' && files[args[i - 1]] != null && there('$modelPath${files[args[i - 1]]}'))
-        '$modelPath${files[args[i - 1]]}'
-      else
-        args[i],
-  ];
+  final out = <String>[];
+  for (var i = 0; i < args.length; i++) {
+    if (args[i] == '--mmproj' && i + 1 < args.length && !there(args[i + 1])) {
+      i++;
+      if (i + 1 < args.length && args[i + 1] == '--no-mmproj-offload') i++;
+      continue;
+    }
+    if (i > 0 && args[i] == 'model' && files[args[i - 1]] != null && there('$modelPath${files[args[i - 1]]}')) {
+      out.add('$modelPath${files[args[i - 1]]}');
+    } else if (i > 0 && args[i - 1] == '--moe-stream-vram-experts-file' && args[i] != 'model' && !there(args[i])) {
+      out.add('model');
+    } else {
+      out.add(args[i]);
+    }
+  }
+  return out;
 }
 
 /// The smallest context length a command may use.

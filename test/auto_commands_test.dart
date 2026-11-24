@@ -11,7 +11,10 @@ const _commands = 'lib/engine/auto_commands.dart';
 String? _cannotRun() {
   if (Platform.isWindows) return 'needs bash';
   if (!File(_script).existsSync()) return 'the test is not run from the app folder';
-  if (!File('../presets/ling.sh').existsSync() || !File('../presets/flint.sh').existsSync()) {
+  if (!File('../presets/ling.sh').existsSync() ||
+      !File('../presets/flint.sh').existsSync() ||
+      !File('../presets/qwen38.sh').existsSync() ||
+      !File('../presets/inkling2.sh').existsSync()) {
     return 'the presets are not here';
   }
   return null;
