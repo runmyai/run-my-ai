@@ -35,7 +35,7 @@ const _contextTrackNodes = [
 
 /// Calculates the exact KV cache memory size based on model architecture and quantization format.
 String _calculateKvCacheSize({required String modelName, required int tokens, required String quant}) {
-  final isFlint = modelName.toLowerCase().contains('flint');
+  final lower = modelName.toLowerCase();
   final double bpe = switch (quant.toLowerCase()) {
     'fp16' => 2.0,
     'q4_0' => 18.0 / 32.0, // 0.5625 bytes per element
@@ -43,7 +43,7 @@ String _calculateKvCacheSize({required String modelName, required int tokens, re
   };
 
   final double totalBytes;
-  if (isFlint) {
+  if (lower.contains('flint')) {
     // Flint-40B: 49 layers total (14 full-attention, 35 sliding window attention).
     // Full-attention layers: 14 layers x 2 (K+V) x 4 heads x 128 dim = 14,336 elements/token.
     // Sliding-window layers: 35 layers x 2 (K+V) x 4 heads x 128 dim = 35,840 elements/cell.
@@ -52,6 +52,15 @@ String _calculateKvCacheSize({required String modelName, required int tokens, re
     const swaFixedCells = 2816; // GGML_PAD(513 + 2048, 256)
     const swaElemPerCell = 35 * 2 * 4 * 128; // 35,840 elem/cell
     totalBytes = (tokens * fullElemPerTok + swaFixedCells * swaElemPerCell) * bpe;
+  } else if (lower.contains('inkling')) {
+    // Inkling-2-Mini: 48 looped visits total (8 full-attention Global visits, 40 SWA-1024 visits).
+    // Global visits: 8 visits x 2 (K+V) x 2 KV heads x 128 dim = 4,096 elements/token.
+    // SWA-1024 visits: 40 visits x 2 (K+V) x 2 KV heads x 128 dim = 20,480 elements/cell (GGML_PAD(1024 + 2048, 256) = 3,072 cells).
+    const fullElemPerTok = 8 * 2 * 2 * 128; // 4,096 elem/tok
+    const swaFixedCells = 3072; // GGML_PAD(1024 + 2048, 256)
+    const swaElemPerCell = 40 * 2 * 2 * 128; // 20,480 elem/cell
+    const sconvFixedBytes = 3.3 * 1024 * 1024;
+    totalBytes = (tokens * fullElemPerTok + swaFixedCells * swaElemPerCell) * bpe + sconvFixedBytes;
   } else {
     // Ling-3.0-flash: 8 MLA layers (K-only latent + decoupled rope, V absorbed) x 576 dim = 4,608 elem/tok.
     // Recurrent state for 35 linear layers is fixed at ~11 MB independent of context tokens.

@@ -31,6 +31,7 @@ Download the file for your system from [Releases](https://github.com/runmyai/run
 | Flint 40B | Coding model by Recursive. 40B total, about 2.5B active per token. | Q4_K_XL, about 25 GB |
 | Ling 3.0 Flash | 124B total, 5.1B active per token, 262k context, by Ant Group | MXFP4, about 70 GB |
 | [Qwen 3.8 Flash Next](https://huggingface.co/runmyai/Qwen3.8-Flash-Next-TokenWing) | 180B total, 6B active per token, 262k context, by Alibaba. | 3.5 bpw by Grawnch, about 84 GB with its n-gram table |
+| [Inkling 2 Mini](https://huggingface.co/Grawnch/Inkling-2-Mini-WV-v6.3-TokenWing) | Multimodal vision, reasoning, math and code by Thinking Machines. 27B total, 4.8B active across 48 looped visits, 262k context. | WV-v6.3 by Grawnch, about 10 GB with vision |
 
 ## What you need
 

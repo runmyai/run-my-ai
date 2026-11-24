@@ -35,6 +35,7 @@ class _LocalModel {
     required this.smallFlags,
     required this.cpuFlags,
     this.thinkingSwitch = false,
+    this.quantPlugin,
   });
 
   final CatalogModel model;
@@ -49,6 +50,9 @@ class _LocalModel {
 
   /// Its thinking can be turned off.
   final bool thinkingSwitch;
+
+  /// The quant plugin library name (`wv_inkling_plugin`) when the model uses custom ABI v2 quant types; null otherwise.
+  final String? quantPlugin;
 }
 
 /// The real engine: TokenWing's llama-server, started directly by the app. One model is loaded at a time: the first
@@ -142,6 +146,20 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       'Qwen3.8-Flash-Next-WV-v5-3.5bpw.tokenwing-00001-of-00002.gguf.usage-seed.json',
     ],
   );
+  // the model, its vision projector, and its loop-aware streaming manifests
+  static const _inklingFile = ModelFile(
+    id: 'inkling-2-mini/WV-v6.3',
+    quantization: 'WV-v6.3',
+    sizeBytes: 9547559193 + 637251584 + 35847 + 281 + 14617,
+    repo: 'Grawnch/Inkling-2-Mini-WV-v6.3-TokenWing',
+    parts: [
+      'Inkling-2-Mini-WV-v6.3.tokenwing.gguf',
+      'Inkling-2-Mini-mmproj-bf16.gguf',
+      'Inkling-2-Mini-WV-v6.3.vram-experts.json',
+      'Inkling-2-Mini-WV-v6.3.tokenwing.gguf.layer-order.json',
+      'Inkling-2-Mini-WV-v6.3.tokenwing.gguf.usage-seed.json',
+    ],
+  );
 
   static const _models = [
     _LocalModel(
@@ -190,6 +208,23 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       smallFlags: qwenAutoSmall,
       cpuFlags: qwenAutoCpu,
       thinkingSwitch: true,
+    ),
+    _LocalModel(
+      model: CatalogModel(
+        id: 'inkling-2-mini',
+        name: 'Inkling 2 Mini',
+        lab: 'Thinking Machines',
+        description: 'Multimodal vision, reasoning, math and code. (Placeholder text.)',
+        parameters: '27B',
+        activeParameters: '4.8B',
+        thinking: ModelThinking.optional,
+        files: [_inklingFile],
+      ),
+      flags: inklingAuto,
+      smallFlags: inklingAutoSmall,
+      cpuFlags: inklingAutoCpu,
+      thinkingSwitch: true,
+      quantPlugin: 'wv_inkling_plugin',
     ),
   ];
 
@@ -1025,6 +1060,17 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final flags = EngineFlags.parse(
       withVramFree(row == null ? run.flags : withUserChoices(row, run.flags), _vramFree(run.vramHeadroom)),
     );
+    final modelArgs = withModelData([
+      // the model's data files are next to it
+      for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
+    ], _modelPath(local));
+    String? pluginPath;
+    if (local.quantPlugin != null && !hasQuantPluginFlag(modelArgs)) {
+      pluginPath = resolveQuantPlugin(local.quantPlugin, engineFolder: folder, modelFolder: _modelFolder(local));
+      if (pluginPath == null) {
+        throw EngineFailure('The quant plugin ${quantPluginFile(local.quantPlugin!)} is not in this folder: $folder');
+      }
+    }
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);
     final EngineProcess engine;
@@ -1034,13 +1080,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
           program,
           '-m',
           _modelPath(local),
-          ...withTuning(
-            withModelData([
-              // the model's data files are next to it
-              for (final a in flags.arguments) a.replaceAll('{models}', _modelFolder(local)),
-            ], _modelPath(local)),
-            tuned,
-          ),
+          if (pluginPath != null) ...['--quant-plugin', pluginPath],
+          ...withTuning(modelArgs, tuned),
           '--cache-disk',
           states,
           '--cache-disk-gb',
