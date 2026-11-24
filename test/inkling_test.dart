@@ -133,12 +133,13 @@ void main() {
       cache: '${dir.path}${sep}cache',
     ).save(dir);
 
+    final argsFile = '${engineDir.path}${sep}args.txt';
     if (Platform.isWindows) {
       File('${Platform.environment['SystemRoot']}\\System32\\cmd.exe')
           .copySync('${engineDir.path}${sep}llama-server.exe');
     } else {
       final server = File('${engineDir.path}${sep}llama-server')
-        ..writeAsStringSync('#!/bin/sh\nprintf \'%s\\n\' "\$@"\nexit 1\n');
+        ..writeAsStringSync('#!/bin/sh\nprintf \'%s\\n\' "\$@" > "$argsFile"\nexit 1\n');
       await Process.run('chmod', ['+x', server.path]);
     }
 
@@ -165,20 +166,15 @@ void main() {
     File(pluginPath).writeAsStringSync('stub');
 
     if (!Platform.isWindows) {
-      await expectLater(
-        backend.startEngine(file, run),
-        throwsA(
-          isA<EngineFailure>().having(
-            (e) => e.log,
-            'log',
-            containsAll([
-              '--quant-plugin',
-              pluginPath,
-              '--mmproj',
-              '${modelsDir.path}${sep}Inkling-2-Mini-mmproj-bf16.gguf',
-            ]),
-          ),
-        ),
+      await expectLater(backend.startEngine(file, run), throwsA(isA<EngineFailure>()));
+      expect(
+        File(argsFile).readAsLinesSync(),
+        containsAll([
+          '--quant-plugin',
+          pluginPath,
+          '--mmproj',
+          '${modelsDir.path}${sep}Inkling-2-Mini-mmproj-bf16.gguf',
+        ]),
       );
     }
   });
