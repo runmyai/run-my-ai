@@ -1,4 +1,3 @@
-import 'engine_stats.dart';
 import 'hardware.dart';
 import 'series.dart';
 
@@ -7,7 +6,17 @@ import 'series.dart';
 
 /// One line of a row: a series, and what it is measured against.
 class MetricLine {
-  const MetricLine(this.id, this.label, this.unit, {this.limit, this.fixedMax, this.digits = 0, this.bitmask = false, this.showLimit = true});
+  const MetricLine(
+    this.id,
+    this.label,
+    this.unit, {
+    this.limit,
+    this.fixedMax,
+    this.digits = 0,
+    this.bitmask = false,
+    this.showLimit = true,
+    this.second,
+  });
 
   /// The series.
   final String id;
@@ -25,6 +34,10 @@ class MetricLine {
 
   /// Whether to show "of [limit]" in the formatted text string when a limit is present.
   final bool showLimit;
+
+  /// A second series drawn after this one in the same bar, against the same limit (the RAM's file cache after what the
+  /// programs use).
+  final String? second;
 
   /// [v] as it is shown, with its limit at tick [index] if the line has one and [showLimit] is true.
   String text(RunSeries series, int index) {
@@ -106,62 +119,44 @@ String formatNumber(double v, int digits) {
   return '$grouped${text.substring(dot)}';
 }
 
-/// The rows to show for [series]: speed, one row per graphics card found, CPU, RAM, SSD and the engine's own numbers.
-List<MetricRow> metricRows(RunSeries series, {List<String> gpuNames = const []}) {
+/// The rows to show for [series]: speed, one row per graphics card found, CPU, RAM and SSD. A line has a limit only
+/// where the PC reports one. [speed] is the speed line to show (`speed.prompt` while a prompt is read, `speed.tokens`
+/// while a reply is written); none during the warm-ups.
+List<MetricRow> metricRows(RunSeries series, {List<String> gpuNames = const [], String? speed}) {
   final cards = {
     for (final id in series.ids)
       if (RegExp(r'^gpu\.(\d+)\.').firstMatch(id) case final m?) int.parse(m[1]!),
   }.toList()..sort();
   return [
-    const MetricRow('speed', 'Speed', [
-      MetricLine('speed.tokens', 'Generation', 'tokens/s', digits: 1),
-      MetricLine('speed.prompt', 'Prompt processing', 'tokens/s'),
-      MetricLine('speed.ttft', 'TTFT', 's', digits: 2),
+    MetricRow('speed', 'Speed', [
+      if (speed == 'speed.prompt') const MetricLine('speed.prompt', 'Prompt processing', 'tokens/s'),
+      if (speed == 'speed.tokens') const MetricLine('speed.tokens', 'Generation', 'tokens/s', digits: 1),
     ]),
     for (final n in cards)
       MetricRow('gpu.$n', cards.length > 1 ? 'GPU ${n + 1}' : 'GPU', subtitle: n < gpuNames.length ? gpuNames[n] : null, [
         MetricLine('gpu.$n.load', 'Load', '%', fixedMax: 100),
-        MetricLine('gpu.$n.power', 'Power', 'W', limit: 'gpu.$n.powerLimit'),
-        MetricLine('gpu.$n.clock', 'Clock', 'MHz', limit: 'gpu.$n.clockMax', showLimit: false),
+        // (The top is the highest power limit the card has been given on this PC, not the limit of the mode it is in.)
+        MetricLine('gpu.$n.power', 'Power', 'W', limit: 'gpu.$n.powerTop'),
+        MetricLine('gpu.$n.clock', 'Clock', 'MHz'),
         MetricLine('gpu.$n.temp', 'Temperature', '°C', limit: 'gpu.$n.tempMax'),
         MetricLine('gpu.$n.vram', 'Video memory', 'GB', limit: 'gpu.$n.vramTotal', digits: 1),
-        MetricLine('gpu.$n.pcieTx', 'PCIe sent', 'MB/s', limit: 'gpu.$n.pcieMax', showLimit: false),
-        MetricLine('gpu.$n.pcieRx', 'PCIe inbound', 'MB/s', limit: 'gpu.$n.pcieMax', showLimit: false),
       ]),
-    if (cards.isEmpty)
-      const MetricRow('gpu.none', 'GPU', [MetricLine('gpu.none.load', 'Load', '%', fixedMax: 100)],
-          note: 'Not available: no graphics card could be read on this computer.'),
     const MetricRow('cpu', 'CPU', [
       MetricLine('cpu.load', 'Load', '%', fixedMax: 100),
-      MetricLine('cpu.other', 'Other programs', '%', fixedMax: 100),
-      MetricLine('cpu.mhz', 'Clock (average)', 'MHz', limit: 'cpu.mhzMax', showLimit: false),
-      MetricLine('cpu.power', 'Package power', 'W', limit: 'cpu.powerLimit', digits: 1),
-      MetricLine('cpu.temp', 'Package temperature', '°C', limit: 'cpu.tempMax'),
+      MetricLine('cpu.mhz', 'Clock (average)', 'MHz'),
+      MetricLine('cpu.power', 'Power', 'W', limit: 'cpu.powerLimit', digits: 1),
+      MetricLine('cpu.temp', 'Temperature', '°C', limit: 'cpu.tempMax'),
     ]),
     const MetricRow('ram', 'RAM', [
-      MetricLine('ram.used', 'Used', 'GB', limit: 'ram.total', digits: 1),
-      MetricLine('ram.engine', 'Engine', 'GB', limit: 'ram.total', digits: 1),
-      MetricLine('ram.other', 'Other programs', 'GB', limit: 'ram.total', digits: 1),
-      MetricLine('ram.cache', 'File cache', 'GB', limit: 'ram.total', digits: 1),
+      MetricLine('ram.used', 'In use / file cache', 'GB', limit: 'ram.total', digits: 1, second: 'ram.cache'),
       MetricLine('ram.swap', 'Swap', 'GB', limit: 'ram.swapTotal', digits: 1),
-      MetricLine('ram.swapActivity', 'Swap activity', 'MB/s', digits: 1),
     ]),
     const MetricRow('ssd', 'SSD', [
-      MetricLine('ssd.read', 'Read speed', 'GB/s', limit: 'ssd.readMax', digits: 2, showLimit: false),
+      MetricLine('ssd.read', 'Read speed', 'GB/s', digits: 2),
       MetricLine('ssd.busy', 'Busy', '%', fixedMax: 100),
       MetricLine('ssd.iops', 'Reads', 'per second'),
       MetricLine('ssd.queue', 'Queue', 'requests', digits: 1),
       MetricLine('ssd.temp', 'Temperature', '°C', limit: 'ssd.tempMax'),
     ]),
-    MetricRow('engine', 'Engine', [
-      const MetricLine('eng.stall', 'SSD wait', 'ms/token', digits: 1),
-      const MetricLine('eng.ramHit', 'RAM hits', '%', fixedMax: 100),
-      const MetricLine('eng.vramHit', 'VRAM hits', '%', fixedMax: 100),
-      const MetricLine('eng.expRam', 'Experts in RAM', '', limit: 'eng.expRamMax'),
-      const MetricLine('eng.expVram', 'Experts in VRAM', ''),
-      const MetricLine('eng.reads', 'Reads', 'per token', digits: 1),
-      for (final (id, label, _) in guessKinds) MetricLine('eng.$id', 'Guesses ${label.toLowerCase()}', '%', fixedMax: 100),
-      const MetricLine('eng.swaps', 'VRAM swaps', 'per token', digits: 2),
-    ], note: 'Not available: this engine does not report its counters while it runs.'),
   ];
 }

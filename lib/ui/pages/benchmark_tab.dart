@@ -504,24 +504,13 @@ class _LivePanelState extends State<_LivePanel> {
     final series = state.live;
     final result = state.result;
     final turns = state.turns.isNotEmpty ? state.turns : (result?.turns ?? const <TurnRecord>[]);
-    final total = state.setup.warmups.length + 1;
-    final liveIndex = state.running ? turns.length.clamp(0, total - 1) : -1;
     final measuredTurn = turns.isNotEmpty ? turns.lastWhere((t) => !t.warmup, orElse: () => turns.last) : null;
     final whole = !state.running && measuredTurn != null ? WholeRun([measuredTurn]) : (!state.running && turns.isNotEmpty ? WholeRun(turns) : null);
     final tokens = measuredTurn != null && measuredTurn.tokens.isNotEmpty
         ? measuredTurn.tokens
         : (result?.tokens ?? const <double>[]);
 
-    final String turnTitle = liveIndex == 0
-        ? 'Warm-up 1'
-        : liveIndex == 1
-        ? 'Warm-up 2'
-        : 'Benchmark Run';
-
     final bool isOverall = !state.running && _overall;
-    final activeTokenMillis = !isOverall && _pickedToken != null && _pickedToken! < tokens.length
-        ? tokens[_pickedToken!]
-        : null;
 
     final hint = state.note ?? (!state.running && result == null ? 'Press Start. The graphs fill in while the run goes on.' : null);
 
@@ -533,23 +522,36 @@ class _LivePanelState extends State<_LivePanel> {
           const SizedBox(height: 12),
         ],
 
-        // In-place live header during run
+        // While the run goes on: what it is doing, and the cards at the latest reading.
         if (state.running) ...[
           Row(
             children: [
               Container(width: 8, height: 8, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
               const SizedBox(width: 8),
-              Text(turnTitle, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.text)),
-              if (state.replyTokens > 0) ...[
+              Text(_liveTitle(state), key: const Key('live-title'), style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.text)),
+              if (_liveLine(state) case final line?) ...[
                 const SizedBox(width: 12),
-                Text('Writing reply: ${state.replyTokens} tokens…', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
-              ] else ...[
-                const SizedBox(width: 12),
-                Text('Reading prompt…', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+                Flexible(child: Text(line, style: TextStyle(fontSize: 12.5, color: c.textMuted))),
               ],
             ],
           ),
           const SizedBox(height: 12),
+          if (series == null || series.isEmpty)
+            Text('Starting…', style: TextStyle(fontSize: 13, color: c.textMuted))
+          else
+            MetricCards(
+              series: series,
+              rows: metricRows(
+                series,
+                gpuNames: state.hardware.gpus,
+                speed: state.phase != BenchmarkPhase.measuring ? null : (state.replyTokens > 0 ? 'speed.tokens' : 'speed.prompt'),
+              ),
+              speedNote: switch (state.phase) {
+                BenchmarkPhase.loading => 'loading the model',
+                BenchmarkPhase.warmingUp => 'warming up',
+                _ => null,
+              },
+            ),
         ],
 
         // After run finishes: TokenScrubber at the top
@@ -578,19 +580,6 @@ class _LivePanelState extends State<_LivePanel> {
           ),
           const SizedBox(height: 14),
         ],
-
-        // Metric Cards (Speed, GPUs, CPU, RAM, SSD, Engine)
-        if (series == null || series.isEmpty)
-          Text(state.running ? 'Starting…' : '', style: TextStyle(fontSize: 13, color: c.textMuted))
-        else
-          MetricCards(
-            series: series,
-            rows: metricRows(series, gpuNames: state.hardware.gpus),
-            cursor: isOverall ? null : widget.cursor.value,
-            overall: isOverall,
-            whole: isOverall ? whole : null,
-            activeTokenMillis: activeTokenMillis,
-          ),
 
         // Under the cards when run has ended:
         if (!state.running && whole != null) ...[
@@ -632,5 +621,25 @@ class _LivePanelState extends State<_LivePanel> {
         ],
       ],
     );
+  }
+
+  /// What the run is doing, in the live heading.
+  static String _liveTitle(BenchmarkState state) {
+    final n = state.tests.length;
+    return switch (state.phase) {
+      BenchmarkPhase.warmingUp => 'Warm-up ${state.warmup + 1} of ${state.setup.warmups.length}',
+      BenchmarkPhase.measuring when state.test != null => n > 1 ? '${state.test!.label} (${state.testIndex + 1} of $n)' : state.test!.label,
+      _ => 'Loading the model',
+    };
+  }
+
+  /// How far the test going on is; null at other times.
+  static String? _liveLine(BenchmarkState state) {
+    if (state.phase != BenchmarkPhase.measuring) return null;
+    if (state.replyTokens > 0) return 'Writing the reply: ${state.replyTokens} tokens…';
+    final p = state.promptProgress;
+    return p == null
+        ? 'Reading the prompt…'
+        : 'Reading the prompt: ${formatNumber(p.$1.toDouble(), 0)} of ${formatNumber(p.$2.toDouble(), 0)} tokens…';
   }
 }

@@ -536,14 +536,15 @@ void main() {
   });
 
   group('lines of the live view', () {
-    test('a value is written with its limit', () {
-      final s = _ticks(2, (i) => {'gpu.0.power': 112, 'gpu.0.powerLimit': 140, 'gpu.0.load': 74});
+    test('a value is written with its limit; the GPU power against the highest limit seen', () {
+      final s = _ticks(2, (i) => {'gpu.0.power': 112, 'gpu.0.powerLimit': 95, 'gpu.0.powerTop': 140, 'gpu.0.load': 74});
       final rows = metricRows(s);
       final gpu = rows.firstWhere((r) => r.id == 'gpu.0');
       expect(gpu.lines[1].text(s, 0), '112 of 140 W');
       expect(gpu.lines[0].text(s, 0), '74 of 100 %');
       expect(gpu.summary(s, 1), '74 of 100 %  ·  112 of 140 W');
-      expect(rows.map((r) => r.id), containsAll(['speed', 'gpu.0', 'cpu', 'ram', 'ssd', 'engine']));
+      // One row each, in this order; no engine row.
+      expect(rows.map((r) => r.id), ['speed', 'gpu.0', 'cpu', 'ram', 'ssd']);
     });
 
     test('a line without a limit is measured against its own highest value', () {
@@ -554,17 +555,22 @@ void main() {
     });
 
     test('the limit that moved is the one at that moment', () {
-      final s = _ticks(3, (i) => {'gpu.0.power': 40, 'gpu.0.powerLimit': i == 0 ? 140 : 46});
+      final s = _ticks(3, (i) => {'gpu.0.power': 40, 'gpu.0.powerTop': i == 0 ? 140 : 46});
       final power = metricRows(s).firstWhere((r) => r.id == 'gpu.0').lines[1];
       expect([power.limitAt(s, 0), power.limitAt(s, 2)], [140, 46]);
     });
 
-    test('a card with no reading has a row that says so; the engine row says so without numbers', () {
+    test('without a graphics card there is no GPU row; the speed row has one line for the phase, none in the warm-ups', () {
       final s = _ticks(2, (i) => {'cpu.load': 5});
-      final rows = metricRows(s);
-      expect(rows.where((r) => r.id.startsWith('gpu')).single.hasData(s), isFalse);
-      expect(rows.firstWhere((r) => r.id == 'engine').note, contains('Not available'));
-      expect(rows.firstWhere((r) => r.id == 'cpu').hasData(s), isTrue);
+      expect(metricRows(s).where((r) => r.id.startsWith('gpu')), isEmpty);
+      List<String> speed(String? phase) => [for (final l in metricRows(s, speed: phase).first.lines) l.id];
+      expect(speed(null), isEmpty);
+      expect(speed('speed.prompt'), ['speed.prompt']);
+      expect(speed('speed.tokens'), ['speed.tokens']);
+      // Gone from the rows: PCIe, other programs, the word Package; the RAM is one line with its file cache.
+      final all = [for (final r in metricRows(_ticks(1, (i) => {'gpu.0.load': 1}))) ...r.lines];
+      expect(all.where((l) => l.id.contains('pcie') || l.id == 'cpu.other' || l.label.contains('Package')), isEmpty);
+      expect(all.firstWhere((l) => l.id == 'ram.used').second, 'ram.cache');
     });
   });
 

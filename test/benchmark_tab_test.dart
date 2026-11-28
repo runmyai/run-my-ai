@@ -18,6 +18,7 @@ import 'package:runmyai/backend/backend.dart';
 import 'package:runmyai/benchmark/benchmark.dart';
 import 'package:runmyai/benchmark/hardware.dart';
 import 'package:runmyai/benchmark/memory_layout.dart';
+import 'package:runmyai/benchmark/metrics.dart';
 import 'package:runmyai/benchmark/series.dart';
 import 'package:runmyai/data/chat_store.dart';
 import 'package:runmyai/data/models.dart';
@@ -114,6 +115,7 @@ RunSeries _series(double seconds) {
       'gpu.0.power': 30 + (t * 5) % 90,
       'gpu.0.powerLimit': 140,
       'gpu.0.powerMax': 140,
+      'gpu.0.powerTop': 140,
       'gpu.0.clock': 1700 + (t * 11) % 600,
       'gpu.0.clockMax': 3285,
       'gpu.0.temp': 50 + t / 4,
@@ -836,39 +838,73 @@ void _tab() {
     expect(tester.widget<MainButton>(find.byKey(const Key('benchmark-start'))).onTap, isNotNull);
   });
 
-  testWidgets('the live cards: modular hardware cards show meters and limits', (tester) async {
-    final series = _series(60);
-    await pump(tester, BenchmarkState(live: series, revision: 5, counters: EngineCounters.available, hardware: const HardwareInfo(gpus: ['Test GPU'])));
-    expect(tester.takeException(), isNull);
-    // The cards are on the live step.
-    await tester.tap(find.byKey(const Key('bench-step-2')));
-    await tester.pump();
-    expect(find.text('Press Start. The graphs fill in while the run goes on.'), findsOneWidget);
-    expect(find.byKey(const Key('card-gpu.0')), findsOneWidget);
-    expect(find.textContaining('of 140 W'), findsWidgets);
+  /// The texts on the page, for checking that a word is nowhere.
+  List<String> pageTexts(WidgetTester tester) => [for (final t in tester.widgetList<Text>(find.byType(Text))) t.data ?? t.textSpan?.toPlainText() ?? ''];
 
-    expect(find.byKey(const Key('meter-gpu.0.power')), findsOneWidget);
-    expect(find.byKey(const Key('meter-gpu.0.pcieRx')), findsOneWidget);
-    expect(find.byKey(const Key('card-cpu')), findsOneWidget);
-    expect(find.byKey(const Key('meter-cpu.load')), findsOneWidget);
-    expect(find.byKey(const Key('card-ram')), findsOneWidget);
-    expect(find.byKey(const Key('meter-ram.used')), findsOneWidget);
-    expect(find.byKey(const Key('card-ssd')), findsOneWidget);
-    expect(find.byKey(const Key('card-engine')), findsOneWidget);
-    expect(find.byKey(const Key('meter-eng.gInTime')), findsOneWidget);
+  /// The state of a run writing the reply of its first test.
+  BenchmarkState replying(RunSeries series, {int tokens = 12}) => BenchmarkState(
+    phase: BenchmarkPhase.measuring,
+    live: series,
+    revision: 5,
+    replyTokens: tokens,
+    tests: BenchmarkSetup.defaultTests,
+    hardware: const HardwareInfo(gpus: ['Test GPU']),
+  );
+
+  testWidgets('the live cards: one per row, Speed, GPU, CPU, RAM, SSD, each value with a bar against a limit the PC reports', (tester) async {
+    await pump(tester, replying(_series(60)));
+    expect(tester.takeException(), isNull);
+    final cards = [for (final id in ['speed', 'gpu.0', 'cpu', 'ram', 'ssd']) tester.getRect(find.byKey(Key('card-$id')))];
+    for (var i = 1; i < cards.length; i++) {
+      expect(cards[i].top, greaterThanOrEqualTo(cards[i - 1].bottom), reason: 'one card per row, in order');
+      expect((cards[i].left, cards[i].width), (cards[0].left, cards[0].width));
+    }
+    expect(find.byKey(const Key('card-engine')), findsNothing);
+    expect(find.descendant(of: find.byKey(const Key('card-gpu.0')), matching: find.text('Test GPU')), findsOneWidget);
+    // Writing the reply: only the reply's speed.
+    expect(find.byKey(const Key('meter-speed.tokens')), findsOneWidget);
+    expect(find.byKey(const Key('meter-speed.prompt')), findsNothing);
+    expect(find.byKey(const Key('meter-speed.ttft')), findsNothing);
+    // The fields as listed; no PCIe, no other programs, no "Package", no engine, no inner tiles, never a dash.
+    for (final id in ['gpu.0.load', 'gpu.0.power', 'gpu.0.clock', 'gpu.0.temp', 'gpu.0.vram', 'cpu.load', 'cpu.mhz', 'cpu.power', 'cpu.temp', 'ram.used', 'ram.swap', 'ssd.read', 'ssd.busy', 'ssd.iops', 'ssd.queue', 'ssd.temp']) {
+      expect(find.byKey(Key('meter-$id')), findsOneWidget, reason: id);
+    }
+    for (final id in ['gpu.0.pcieTx', 'gpu.0.pcieRx', 'cpu.other', 'ram.engine', 'ram.other', 'ram.cache', 'ram.swapActivity', 'eng.stall']) {
+      expect(find.byKey(Key('meter-$id')), findsNothing, reason: id);
+    }
+    final words = pageTexts(tester);
+    expect(words.where((w) => w.toLowerCase().contains('package') || w.contains('–') || w.trim() == '-'), isEmpty, reason: '$words');
+    // Bars where there is a limit: the highest power limit seen, the target temperature, the memory totals, 100 % of a load.
+    for (final id in ['gpu.0.load', 'gpu.0.power', 'gpu.0.temp', 'gpu.0.vram', 'cpu.load', 'ram.used', 'ram.swap', 'ssd.busy', 'ssd.temp']) {
+      expect(find.byKey(Key('bar-$id')), findsOneWidget, reason: id);
+    }
+    for (final id in ['gpu.0.clock', 'cpu.mhz', 'ssd.read', 'ssd.iops', 'ssd.queue']) {
+      expect(find.byKey(Key('bar-$id')), findsNothing, reason: id);
+    }
+    // This CPU reports no power or temperature limit: plain values.
+    expect(find.byKey(const Key('bar-cpu.temp')), findsNothing);
+    expect(find.byKey(const Key('bar-cpu.power')), findsNothing);
+    expect(find.descendant(of: find.byKey(const Key('meter-gpu.0.power')), matching: find.textContaining('of 140 W')), findsOneWidget);
+    // The RAM: in use and file cache in one bar, against the total.
+    expect(find.descendant(of: find.byKey(const Key('meter-ram.used')), matching: find.text('15.0 / 5.0 of 30.0 GB')), findsOneWidget);
   });
 
-  testWidgets('a row says so when the machine or the engine gives nothing', (tester) async {
+  testWidgets('a value near its limit is amber; what the PC does not give is not shown, nor a card with nothing', (tester) async {
     final bare = RunSeries();
     for (var t = 0.0; t < 5; t += 0.5) {
-      bare.add(t, {'cpu.load': 10, 'ram.total': 30, 'ram.used': 10});
+      bare.add(t, {'cpu.load': 10, 'cpu.temp': 95, 'cpu.tempMax': 100, 'ram.total': 30, 'ram.used': 10});
     }
-    await pump(tester, BenchmarkState(live: bare, revision: 1, counters: EngineCounters.missing));
-    await tester.tap(find.byKey(const Key('bench-step-2')));
-    await tester.pump();
+    await pump(tester, replying(bare));
     expect(tester.takeException(), isNull);
-    expect(find.textContaining('no graphics card could be read'), findsOneWidget);
-    expect(find.textContaining('does not report its counters'), findsOneWidget);
+    expect(find.byKey(const Key('near-cpu.temp')), findsOneWidget);
+    expect(find.byKey(const Key('near-cpu.load')), findsNothing);
+    expect(find.byKey(const Key('card-gpu.0')), findsNothing, reason: 'no graphics card');
+    expect(find.byKey(const Key('card-ssd')), findsNothing, reason: 'no reading of the drive');
+    expect(find.byKey(const Key('meter-ram.swap')), findsNothing);
+    expect(find.byKey(const Key('meter-cpu.mhz')), findsNothing);
+    expect(find.byKey(const Key('meter-speed.tokens')), findsNothing, reason: 'no speed yet');
+    expect(find.byKey(const Key('card-speed')), findsOneWidget);
+    expect(pageTexts(tester).where((w) => w.contains('–') || w.trim() == '-'), isEmpty);
   });
 
   testWidgets('a run that has ended is on Live, on the whole run, with the folds of the run under it', (tester) async {
@@ -883,7 +919,7 @@ void _tab() {
     expect(find.text('FULL RESULT'), findsNothing);
     expect(find.byKey(const Key('bench-step-3')), findsNothing);
     expect(find.byKey(const Key('scrubber-overall')), findsOneWidget);
-    expect(find.byKey(const Key('card-gpu.0')), findsOneWidget);
+    expect(find.byKey(const Key('card-gpu.0')), findsNothing, reason: 'the cards are the live readings');
 
     // The folds of the run, each closed until clicked.
     for (final title in [
@@ -1002,16 +1038,7 @@ void _tab() {
     );
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('scrubber-overall')), findsOneWidget);
-    expect(find.byKey(const Key('card-speed')), findsOneWidget);
     expect(find.textContaining('not counted'), findsNothing);
-
-    // Speed card shows overall numbers and latency percentiles (Turn 3)
-    expect(find.text('40.0 tokens/s'), findsOneWidget);
-    expect(find.text('417 tokens/s'), findsOneWidget);
-    expect(find.text('1.70 s'), findsOneWidget);
-    expect(find.textContaining('p50:'), findsOneWidget);
-    expect(find.textContaining('p90:'), findsOneWidget);
-    expect(find.textContaining('p99:'), findsOneWidget);
 
     // The run fold under cards
     final runFold = find.byKey(const Key('fold-The run'));
@@ -1027,28 +1054,51 @@ void _tab() {
     expect(find.text('Wrong guesses'), findsOneWidget);
   });
 
-  testWidgets('during a run the live header transitions in-place: Warm-up 1 -> Warm-up 2 -> Benchmark Run', (tester) async {
+  testWidgets('during a run the heading follows it: the warm-ups, then each test; the speed of the phase only', (tester) async {
     final turns = _turns();
     const setup = BenchmarkSetup();
+    const tests = BenchmarkSetup.defaultTests;
     final live = _series(60);
-    await pump(tester, BenchmarkState(phase: BenchmarkPhase.warmingUp, setup: setup, live: live, revision: 5));
+    await pump(tester, BenchmarkState(phase: BenchmarkPhase.warmingUp, setup: setup, live: live, revision: 5, tests: tests));
     final fake = ProviderScope.containerOf(tester.element(find.byType(EnginePage))).read(benchmarkProvider.notifier) as _Fake;
+    String title() => tester.widget<Text>(find.byKey(const Key('live-title'))).data!;
+    Finder inSpeed(Finder f) => find.descendant(of: find.byKey(const Key('card-speed')), matching: f);
 
-    // The first turn is going on: header says Warm-up 1.
+    // The warm-ups: the heading says so, and the Speed card shows nothing but that.
     expect(tester.takeException(), isNull);
-    expect(find.text('Warm-up 1'), findsOneWidget);
+    expect(title(), 'Warm-up 1 of 2');
+    expect(inSpeed(find.text('warming up')), findsOneWidget);
+    expect(inSpeed(find.byKey(const Key('meter-speed.tokens'))), findsNothing);
+    expect(inSpeed(find.byKey(const Key('meter-speed.prompt'))), findsNothing);
+    expect(find.byKey(const Key('card-gpu.0')), findsOneWidget);
 
-    // The first turn ends and the second goes on: header transitions in-place to Warm-up 2.
-    fake.put(BenchmarkState(phase: BenchmarkPhase.warmingUp, warmup: 1, setup: setup, live: live, revision: 6, turns: turns.sublist(0, 1)));
+    fake.put(BenchmarkState(phase: BenchmarkPhase.warmingUp, warmup: 1, setup: setup, live: live, revision: 6, turns: turns.sublist(0, 1), tests: tests));
     await tester.pump();
-    expect(find.text('Warm-up 2'), findsOneWidget);
-    expect(find.text('Warm-up 1'), findsNothing);
+    expect(title(), 'Warm-up 2 of 2');
 
-    // The measured turn goes on: header transitions in-place to Benchmark Run.
-    fake.put(BenchmarkState(phase: BenchmarkPhase.measuring, setup: setup, live: live, revision: 7, turns: turns.sublist(0, 2), replyTokens: 12));
+    // A test reading its prompt: only the prompt's speed.
+    final reading = _series(60)..add(60.5, {'speed.prompt': 420});
+    fake.put(
+      BenchmarkState(phase: BenchmarkPhase.measuring, setup: setup, live: reading, revision: 7, turns: turns.sublist(0, 2), tests: tests, promptProgress: (1000, 25000)),
+    );
     await tester.pump();
-    expect(find.text('Benchmark Run'), findsOneWidget);
-    expect(find.text('Writing reply: 12 tokens…'), findsOneWidget);
+    expect(title(), 'Reply speed (1 of 2)');
+    expect(find.text('Reading the prompt: 1000 of ${formatNumber(25000, 0)} tokens…'), findsOneWidget);
+    expect(inSpeed(find.byKey(const Key('meter-speed.prompt'))), findsOneWidget);
+    expect(inSpeed(find.byKey(const Key('meter-speed.tokens'))), findsNothing);
+    expect(inSpeed(find.text('warming up')), findsNothing);
+
+    // Writing its reply: only the reply's speed.
+    fake.put(BenchmarkState(phase: BenchmarkPhase.measuring, setup: setup, live: live, revision: 8, turns: turns.sublist(0, 2), tests: tests, replyTokens: 12));
+    await tester.pump();
+    expect(find.text('Writing the reply: 12 tokens…'), findsOneWidget);
+    expect(inSpeed(find.byKey(const Key('meter-speed.tokens'))), findsOneWidget);
+    expect(inSpeed(find.byKey(const Key('meter-speed.prompt'))), findsNothing);
+
+    // The next test.
+    fake.put(BenchmarkState(phase: BenchmarkPhase.measuring, setup: setup, live: live, revision: 9, turns: turns, tests: tests, testIndex: 1));
+    await tester.pump();
+    expect(title(), 'Prompt 25k (2 of 2)');
     expect(tester.takeException(), isNull);
   });
 
@@ -1085,83 +1135,32 @@ void _tab() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('picking a token in the scrubber updates speed card to show token duration', (tester) async {
-    final turns = _turns();
-    final shown = _result(turns: turns);
-    await pump(
-      tester,
-      BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, revision: 5, turns: turns, history: [shown]),
-    );
 
-    // In Overall mode: Speed card shows Turn 3 40.0 tokens/s
-    expect(find.text('40.0 tokens/s'), findsOneWidget);
-
-    // Step to token 0
-    await tester.tap(find.byKey(const Key('scrubber-next')));
-    await tester.pump();
-
-    // Speed card reflects the specific token
-    expect(find.descendant(of: find.byKey(const Key('card-speed')), matching: find.text('50.0 tokens/s (20.0 ms)')), findsOneWidget);
-
-    // Snap back to Overall
-    await tester.tap(find.byKey(const Key('scrubber-overall')));
-    await tester.pump();
-    expect(find.text('40.0 tokens/s'), findsOneWidget);
-  });
-
-  testWidgets('a run without times or a run that is loading renders cards cleanly', (tester) async {
-    final shown = _result(turns: _turns());
-    await pump(
-      tester,
-      BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, revision: 5, turns: shown.turns, history: [shown]),
-    );
-    expect(tester.takeException(), isNull);
-    expect(find.byKey(const Key('card-speed')), findsOneWidget);
-
-    // Stopped before any turn ended, and loading
+  testWidgets('a run that is loading shows the cards; a stopped one keeps none', (tester) async {
     await pump(tester, BenchmarkState(live: _series(20), revision: 3));
     await tester.tap(find.byKey(const Key('bench-step-2')));
     await tester.pump(const Duration(milliseconds: 200));
-    expect(find.byKey(const Key('card-gpu.0')), findsOneWidget);
+    expect(find.byKey(const Key('card-gpu.0')), findsNothing, reason: 'the cards are the live readings of a run going on');
 
     final fake = ProviderScope.containerOf(tester.element(find.byType(EnginePage))).read(benchmarkProvider.notifier) as _Fake;
-    fake.put(BenchmarkState(phase: BenchmarkPhase.loading, setup: const BenchmarkSetup(), live: _series(20), revision: 4));
+    fake.put(BenchmarkState(phase: BenchmarkPhase.loading, setup: const BenchmarkSetup(), live: _series(20), revision: 4, tests: BenchmarkSetup.defaultTests));
     await tester.pump();
     expect(tester.takeException(), isNull);
+    expect(tester.widget<Text>(find.byKey(const Key('live-title'))).data, 'Loading the model');
+    expect(find.byKey(const Key('card-gpu.0')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('card-speed')), matching: find.text('loading the model')), findsOneWidget);
   });
 
-  testWidgets('during a run the live header shows progress and cards render live series', (tester) async {
-    final turns = _turns();
-    const setup = BenchmarkSetup();
-    await pump(tester, BenchmarkState(phase: BenchmarkPhase.warmingUp, setup: setup, live: _series(15), revision: 5));
-    final fake = ProviderScope.containerOf(tester.element(find.byType(EnginePage))).read(benchmarkProvider.notifier) as _Fake;
-
-    expect(find.text('Warm-up 1'), findsOneWidget);
-    expect(find.byKey(const Key('card-gpu.0')), findsOneWidget);
-
-    // PCIe inbound during running shows clean live rate, never "of <limit>" or "avg ... of ..."
-    expect(find.descendant(of: find.byKey(const Key('meter-gpu.0.pcieRx')), matching: find.textContaining('of 7 880')), findsNothing);
-    expect(find.descendant(of: find.byKey(const Key('meter-gpu.0.pcieRx')), matching: find.textContaining('avg ')), findsNothing);
-
-    fake.put(BenchmarkState(phase: BenchmarkPhase.warmingUp, warmup: 1, setup: setup, live: _series(18.5), revision: 7, turns: turns.sublist(0, 1)));
-    await tester.pump();
-    expect(find.text('Warm-up 2'), findsOneWidget);
+  testWidgets('one card per row fits a narrow window while a run goes on', (tester) async {
+    await pump(tester, replying(_series(60)), width: 700);
     expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('card-ram')), findsOneWidget);
   });
 
   testWidgets('the whole run overall view shows speed card with latency percentiles and The run fold', (tester) async {
     final shown = _result(turns: _turns());
     await pump(tester, BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, revision: 5, turns: shown.turns, history: [shown]));
     expect(tester.takeException(), isNull);
-
-    // Speed card: generation speed, prompt processing, TTFT (Turn 3 exclusive)
-    expect(find.text('40.0 tokens/s'), findsOneWidget);
-    expect(find.text('417 tokens/s'), findsOneWidget);
-    expect(find.text('1.70 s'), findsOneWidget);
-
-    // PCIe inbound in overall view shows average and peak, but never "of <limit>" in the card
-    expect(find.descendant(of: find.byKey(const Key('meter-gpu.0.pcieRx')), matching: find.textContaining('of 7 880')), findsNothing);
-    expect(find.descendant(of: find.byKey(const Key('meter-gpu.0.pcieRx')), matching: find.textContaining('avg ')), findsOneWidget);
 
     // Where the time per token went (Turn 3 only)
     expect(find.text('Where the time per token went'), findsOneWidget);
@@ -1310,8 +1309,6 @@ void _tab() {
     );
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('scrubber-overall')), findsOneWidget);
-    expect(find.byKey(const Key('card-speed')), findsOneWidget);
-    expect(find.byKey(const Key('card-gpu.0')), findsOneWidget);
 
     for (final title in ['The run', 'Memory layout', 'Hardware over the run']) {
       final fold = find.byKey(Key('fold-$title'));
