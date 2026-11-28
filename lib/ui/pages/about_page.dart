@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../state/about.dart';
 import '../../system/open_url.dart';
 import '../../theme.dart';
+import '../benchmark/fold.dart';
 import '../buttons.dart';
 import '../clicky.dart';
 
@@ -27,6 +28,17 @@ const thanksProjects = [
   'Fiddler', 'nvmoe', 'qwen-fieldfare', 'vllm-expert-cache', 'PowerInfer',
 ];
 const thanksPeople = ['freedomljc', 'leloch', 'hikarioyama', 'grawnchtoader'];
+
+/// Grawnch has his own card on the page, so the thanks sentence leaves his user name out.
+final _thanksSentencePeople = [for (final name in thanksPeople) if (name != 'grawnchtoader') name];
+
+/// The models the app offers: who made each model, who made the quantized file the app downloads, and the model's
+/// licence, as the models' own pages on Hugging Face give them.
+const modelCredits = [
+  (model: 'Ling 3.0 Flash', maker: 'inclusionAI', quant: 'bloomer010 (MXFP4)', licence: 'MIT'),
+  (model: 'Flint 40B', maker: 'Recursive', quant: 'Unsloth (UD-Q4_K_XL)', licence: 'Apache 2.0'),
+  (model: 'Qwen3.8 Flash Next', maker: 'Qwen', quant: 'Grawnch (WV-v5, 3.5 bpw)', licence: 'Qwen Community License 1.0'),
+];
 
 /// What the author's card says, and the two places it links to.
 const authorName = 'Harin Mani Karri';
@@ -147,7 +159,29 @@ class _AboutPageState extends ConsumerState<AboutPage> {
         const SizedBox(height: 8),
         _Paragraph(
           'Thanks to the projects and papers whose work it draws on: ${thanksProjects.join(', ')}; '
-          'and to ${_list(thanksPeople)}, whose designs and code it started from.',
+          'and to ${_list(_thanksSentencePeople)}, whose designs and code it started from.',
+        ),
+        const SizedBox(height: 16),
+        Fold(
+          title: 'Model credits',
+          titleStyle: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final m in modelCredits)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Column(
+                    key: Key('model-credit-${m.model}'),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(m.model, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500, color: c.text)),
+                      _Paragraph('Made by ${m.maker}. Quantized file by ${m.quant}. Licence: ${m.licence}.'),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ),
         const SizedBox(height: 28),
         const _Heading('Licences'),
@@ -158,10 +192,12 @@ class _AboutPageState extends ConsumerState<AboutPage> {
         ),
         const SizedBox(height: 12),
         _Licenses(id: 'about-licenses', texts: _bundledTexts),
-        const SizedBox(height: 24),
-        const _Heading('Flutter and its packages'),
-        const SizedBox(height: 12),
-        _Licenses(id: 'about-package-licenses', texts: _packageTexts),
+        const SizedBox(height: 20),
+        Fold(
+          title: 'Flutter and its packages',
+          titleStyle: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+          child: _Licenses(id: 'about-package-licenses', texts: _packageTexts),
+        ),
       ],
     );
   }

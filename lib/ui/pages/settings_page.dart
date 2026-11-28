@@ -181,7 +181,7 @@ class _SettingsList extends ConsumerWidget {
         const SizedBox(height: 28),
         const FeedbackSection(),
         const SizedBox(height: 28),
-        const SettingName('About', description: 'Versions, credits and licences.'),
+        const SettingName('Credits'),
         const SizedBox(height: 12),
         Align(
           alignment: Alignment.centerLeft,

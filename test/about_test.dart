@@ -154,14 +154,65 @@ void main() {
       expect(find.textContaining('The ggml authors', findRichText: true), findsOneWidget);
       expect(find.textContaining('Harin Mani Karri', findRichText: true), findsWidgets);
 
+      expect(find.byKey(const Key('licence-a_test_package')), findsNothing, reason: 'the packages\' licences start closed');
+      await tester.tap(find.byKey(const Key('fold-Flutter and its packages')));
+      await tester.pump();
+      await tester.pump();
       await tester.tap(find.byKey(const Key('licence-a_test_package')));
       await tester.pump();
       expect(find.text('A test licence text.', findRichText: true), findsOneWidget);
+
+      // The thanks sentence leaves out the user name of the co-founder, who has his own card.
+      final thanks = find.textContaining('whose designs and code it started from');
+      expect(tester.widget<Text>(thanks).data, isNot(contains('grawnchtoader')));
+      expect(tester.widget<Text>(thanks).data, contains('freedomljc, leloch and hikarioyama'));
 
       await tester.tap(find.byKey(const Key('about-back')));
       await tester.pump();
       expect(find.byKey(const Key('about-page')), findsNothing);
       expect(find.byKey(const Key('about-link')), findsOneWidget);
+    });
+
+    testWidgets('Settings calls the link Credits with no description; the page keeps its title', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageProvider.overrideWithValue(Storage(dir)),
+            backendProvider.overrideWithValue(DummyBackend()),
+            shownModelProvider.overrideWithValue(null),
+          ],
+          child: MaterialApp(
+            theme: buildTheme(Brightness.light),
+            home: const Scaffold(body: SettingsPage()),
+          ),
+        ),
+      );
+      tester.view.physicalSize = const Size(1000, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pump();
+      expect(find.text('Credits'), findsOneWidget);
+      expect(find.text('About'), findsNothing);
+      expect(find.text('Versions, credits and licences.'), findsNothing);
+      expect(find.byTooltip('Versions, credits and licences.'), findsNothing);
+      expect(find.ancestor(of: find.text('Credits'), matching: find.byType(Tooltip)), findsNothing);
+      expect(find.text('About Run My AI'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('about-link')));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+      await tester.pump();
+      expect(find.text('About'), findsOneWidget, reason: 'the page\'s title');
+    });
+
+    testWidgets('Model credits start closed and name each model\'s maker, quantized file and licence', (tester) async {
+      await open(tester);
+      expect(find.byKey(const Key('model-credit-Ling 3.0 Flash')), findsNothing);
+      await tester.tap(find.byKey(const Key('fold-Model credits')));
+      await tester.pump();
+      for (final m in modelCredits) {
+        expect(find.byKey(Key('model-credit-${m.model}')), findsOneWidget);
+        expect(find.text('Made by ${m.maker}. Quantized file by ${m.quant}. Licence: ${m.licence}.'), findsOneWidget);
+      }
+      expect([for (final m in modelCredits) m.model], ['Ling 3.0 Flash', 'Flint 40B', 'Qwen3.8 Flash Next']);
     });
   });
 }
