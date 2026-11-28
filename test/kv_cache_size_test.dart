@@ -22,8 +22,11 @@ void main() {
     expect(kvCacheBytes(modelId: 'dummy', tokens: 65536, quant: 'q8_0'), isNull);
   });
 
-  test('sizes are formatted in GB from a gigabyte on, else MB', () {
-    expect(formatKvCacheBytes(1187217408), '1.11 GB');
-    expect(formatKvCacheBytes(359317504), '342.7 MB');
+  test('sizes are rounded to 25 MB, and to one decimal in GB from 1024 MB on', () {
+    expect(formatKvCacheBytes(1187217408), '1.1 GB');
+    expect(formatKvCacheBytes(359317504), '350 MB');
+    expect(formatKvCacheBytes(607043584), '575 MB');
+    expect(formatKvCacheBytes(1070000000), '1.0 GB');
+    expect(formatKvCacheBytes(5000000), '25 MB');
   });
 }
