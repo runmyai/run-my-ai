@@ -95,8 +95,9 @@ void main() {
       );
       // a built-in GPU's memory is the RAM: fixed memory
       expect(autoCommand(8192, vramFree: 'CUDA0=512MiB'), isNot(contains('elastic')));
-      // no card: the CPU, no graphics memory flags, fixed memory
-      expect(autoCommand(8192, elastic: true), '-c 8192 -ctk q8_0 -ctv q8_0 --moe-stream model --device none');
+      // no card: the CPU, no graphics memory flags; elastic RAM there too
+      expect(autoCommand(8192, elastic: true), '-c 8192 -ctk q8_0 -ctv q8_0 --moe-stream model --device none --moe-stream-elastic 1');
+      expect(autoCommand(8192), '-c 8192 -ctk q8_0 -ctv q8_0 --moe-stream model --device none');
       expect(autoCommand(4096, vramFree: '1GiB', modelFlags: ['--x {models}/a.bin']), contains('--moe-stream model --x {models}/a.bin '));
     });
 

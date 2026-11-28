@@ -300,7 +300,7 @@ void main() {
       expect([for (final c in same) c.key], ['Vulkan0#0', 'Vulkan0#1']);
     });
 
-    test('elastic RAM only beside a separate card: a built-in GPU used as the card runs with fixed memory, no VRAM row', () async {
+    test('elastic RAM beside a separate card and on the CPU alone: a built-in GPU used as the card runs with fixed memory, no VRAM row', () async {
       final separate = await withCards([card('CUDA0', 12 * 1024, 10)]);
       final file = (await separate.loadCatalog()).first.files.first;
       expect(separate.sharesRam, isFalse);
@@ -309,7 +309,7 @@ void main() {
       expect(built.sharesRam, isTrue);
       expect(built.autoCommands(file)[4096], isNot(contains('--moe-stream-elastic')));
       expect((await withCards([])).sharesRam, isFalse, reason: 'no card at all');
-      expect((await withCards([])).autoCommands(file)[4096], isNot(contains('--moe-stream-elastic')), reason: 'the CPU: fixed memory');
+      expect((await withCards([])).autoCommands(file)[4096], contains('--moe-stream-elastic 1'), reason: 'the CPU alone: elastic RAM too');
     });
 
     test('one card with a name: its own list form; nothing else about the cards from the app', () async {
@@ -341,7 +341,7 @@ void main() {
     test("no card: the CPU. A small separate card is the engine's to use", () async {
       final none = await withCards([]);
       final file = (await none.loadCatalog()).first.files.first;
-      expect(none.autoCommands(file)[4096], autoCommand(4096));
+      expect(none.autoCommands(file)[4096], autoCommand(4096, elastic: true));
       expect((await withCards([card('CUDA0', 2 * 1024, 5)])).autoCommands(file)[4096],
           autoCommand(4096, vramFree: 'CUDA0=512MiB', elastic: true));
     });
