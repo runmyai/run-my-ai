@@ -15,7 +15,10 @@ void main() {
     expect(bytes('flint-40b', 65536, 'q8_0'), 1105477632);
     expect(bytes('flint-40b', 262144, 'q8_0'), 4061216768);
     // Qwen: 12 attention layers a token, plus the fixed state.
-    expect(bytes('qwen3.8-flash-next', 65536, 'q8_0'), 1187217408);
+    expect(bytes('qwen3.8-flash-next', 65536, 'q8_0'), 1187586048);
+    // A length that is not a multiple of 256 is sized as the engine rounds it up (100,000 -> 100,096 cells).
+    expect(bytes('ling-3.0-flash', 100000, 'q8_0'), 507372544);
+    expect(bytes('qwen3.8-flash-next', 200000, 'q8_0'), 3385171968);
   });
 
   test('a model without a formula has no size', () {
