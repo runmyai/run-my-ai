@@ -31,6 +31,7 @@ import '../look.dart';
 import '../marked_text.dart';
 import '../markdown/md_view.dart';
 import '../menu_panel.dart';
+import '../community_links.dart';
 import '../reply_card.dart';
 import '../thinking_block.dart';
 import '../thinking_toggle.dart';
@@ -631,7 +632,13 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: ChatPage.contentWidth),
-              child: const _MessageBox(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const _MessageBox(),
+                  const CommunityLine(),
+                ],
+              ),
             ),
           ),
         ),

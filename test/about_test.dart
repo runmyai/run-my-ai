@@ -16,6 +16,7 @@ import 'package:runmyai/state/library.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/system/open_url.dart';
 import 'package:runmyai/theme.dart';
+import 'package:runmyai/ui/community_links.dart';
 import 'package:runmyai/ui/pages/about_page.dart';
 import 'package:runmyai/ui/pages/settings_page.dart';
 
@@ -101,7 +102,7 @@ void main() {
     tearDown(() => dir.deleteSync(recursive: true));
 
     Future<void> open(WidgetTester tester) async {
-      tester.view.physicalSize = const Size(1000, 2400);
+      tester.view.physicalSize = const Size(1000, 2800);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
@@ -181,6 +182,16 @@ void main() {
       expect(find.byKey(const Key('about-link')), findsOneWidget);
     });
 
+    testWidgets('it shows the star ask, Sponsor and all six community links, in order', (tester) async {
+      await open(tester);
+      expect(find.byKey(const Key('community-star')), findsOneWidget);
+      expect(find.byKey(const Key('community-sponsor')), findsOneWidget);
+      expect(communityLinks.map((l) => l.$1), ['GitHub', 'Discord', 'YouTube', 'X', 'LinkedIn', 'Hugging Face']);
+      for (final (label, _) in communityLinks) {
+        expect(find.byKey(Key('community-link-$label')), findsOneWidget, reason: label);
+      }
+    });
+
     testWidgets('Settings calls the link Credits with no description; the page keeps its title', (tester) async {
       await tester.pumpWidget(
         ProviderScope(
@@ -195,7 +206,7 @@ void main() {
           ),
         ),
       );
-      tester.view.physicalSize = const Size(1000, 2400);
+      tester.view.physicalSize = const Size(1000, 2800);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       await tester.pump();

@@ -11,6 +11,7 @@ import '../../theme.dart';
 import '../benchmark/fold.dart';
 import '../buttons.dart';
 import '../clicky.dart';
+import '../community_links.dart';
 
 /// The licence texts that ship with the app, as (name, asset) pairs: the app's own, the engine's (which carries the
 /// ggml authors' notice) and ik_llama.cpp's, whose code the engine uses.
@@ -150,6 +151,37 @@ class _AboutPageState extends ConsumerState<AboutPage> {
         _Version(id: 'about-app-version', name: 'Run My AI', value: appVersion),
         const SizedBox(height: 6),
         _Version(id: 'about-engine-version', name: 'TokenWing engine', value: engineVersion),
+        const SizedBox(height: 28),
+        const _Heading('Community'),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            AppButton(
+              key: const Key('community-star'),
+              label: starUsLabel,
+              icon: Icons.star_outline,
+              dense: true,
+              onTap: () => openUrl(starUsUrl),
+            ),
+            AppButton(
+              key: const Key('community-sponsor'),
+              label: 'Sponsor',
+              icon: Icons.favorite_border,
+              dense: true,
+              onTap: () => openUrl(sponsorUrl),
+            ),
+            for (final (label, url) in communityLinks)
+              AppButton(
+                key: Key('community-link-$label'),
+                label: label,
+                trailingIcon: Icons.north_east,
+                dense: true,
+                onTap: () => openUrl(url),
+              ),
+          ],
+        ),
         const SizedBox(height: 28),
         const _Heading('Credits'),
         const SizedBox(height: 12),

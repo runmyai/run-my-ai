@@ -25,6 +25,7 @@ class Prefs {
     this.shareBenchmarks = true,
     this.vramHeadroomGiB,
     this.vramHeadroom = const {},
+    this.communityStep = 0,
   });
 
   /// System until the user picks one in Settings: then Run My AI Dark, unless the computer is set to light (see
@@ -72,6 +73,9 @@ class Prefs {
   /// The graphics card memory (VRAM) the engine leaves free on each card, by [cardKeys].
   final Map<String, double> vramHeadroom;
 
+  /// The line under the message box: 0 GitHub, 1 Discord, 2 done (see [PrefsData.communityStep]).
+  final int communityStep;
+
   /// What the engine is started with.
   VramHeadroom get vramHeadroomSetting =>
       VramHeadroom(byCard: vramHeadroom, others: vramHeadroomGiB ?? defaultVramHeadroomGiB);
@@ -93,6 +97,7 @@ class Prefs {
     double? stateLimitGiB,
     bool? shareBenchmarks,
     Map<String, double>? vramHeadroom,
+    int? communityStep,
   }) => Prefs(
     theme: theme ?? this.theme,
     darkStyle: darkStyle ?? this.darkStyle,
@@ -109,6 +114,7 @@ class Prefs {
     shareBenchmarks: shareBenchmarks ?? this.shareBenchmarks,
     vramHeadroomGiB: vramHeadroomGiB,
     vramHeadroom: vramHeadroom ?? this.vramHeadroom,
+    communityStep: communityStep ?? this.communityStep,
   );
 }
 
@@ -145,6 +151,7 @@ class PrefsNotifier extends Notifier<Prefs> {
       shareBenchmarks: saved.shareBenchmarks,
       vramHeadroomGiB: saved.vramHeadroomGiB,
       vramHeadroom: saved.vramHeadroom,
+      communityStep: saved.communityStep,
     );
   }
 
@@ -174,6 +181,8 @@ class PrefsNotifier extends Notifier<Prefs> {
   /// time the model loads. Always saved as the card's own value: a card with one no longer takes the older single value.
   void setVramHeadroom(String card, double gib) =>
       _save(state.copyWith(vramHeadroom: {...state.vramHeadroom, card: max(gib, minVramHeadroomGiB)}));
+
+  void setCommunityStep(int step) => _save(state.copyWith(communityStep: step));
 
   void toggleThinking() => _save(state.copyWith(thinking: !state.thinking));
 
@@ -217,6 +226,7 @@ class PrefsNotifier extends Notifier<Prefs> {
             shareBenchmarks: prefs.shareBenchmarks,
             vramHeadroomGiB: prefs.vramHeadroomGiB,
             vramHeadroom: prefs.vramHeadroom,
+            communityStep: prefs.communityStep,
           ),
         );
   }
