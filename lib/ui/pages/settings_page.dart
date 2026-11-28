@@ -11,17 +11,20 @@ import '../../state/library.dart';
 import '../../state/providers.dart';
 import '../../system/chime.dart';
 import '../../theme.dart';
+import '../benchmark/fold.dart';
 import '../buttons.dart';
 import '../context_settings.dart';
 import '../settings/feedback_section.dart';
 import '../settings/privacy_section.dart';
 import '../menu_panel.dart';
 import '../settings/folders_section.dart';
+import '../settings/setting_name.dart';
 import 'about_page.dart';
 
 /// Settings: the theme (System, Light or Dark; the developer's build also has the other theme families, reply motion and
 /// the speed's look), the sound when a reply finishes, the saved chats' disk limit and the RAM left free, the engine folder,
 /// the context length track with each length's cache type, and a button that opens About in place of the settings.
+/// Each setting's description shows as a tooltip on its name; Storage and Folders are drop-downs, closed at first.
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -63,10 +66,7 @@ class _SettingsList extends ConsumerWidget {
           style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500, color: c.text),
         ),
         const SizedBox(height: 24),
-        Text(
-          'Theme',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
+        const SettingName('Theme'),
         const SizedBox(height: 12),
         if (!devBuild)
           Align(
@@ -130,14 +130,9 @@ class _SettingsList extends ConsumerWidget {
           ),
         if (devBuild) ...[
           const SizedBox(height: 28),
-          Text(
+          const SettingName(
             'Reply motion',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'How a reply comes onto the screen while it is being written.',
-            style: TextStyle(fontSize: 13, color: c.textSecondary),
+            description: 'How a reply comes onto the screen while it is being written.',
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -153,12 +148,7 @@ class _SettingsList extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 28),
-          Text(
-            'Generation speed',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-          ),
-          const SizedBox(height: 2),
-          Text('How the speed under a reply looks.', style: TextStyle(fontSize: 13, color: c.textSecondary)),
+          const SettingName('Generation speed', description: 'How the speed under a reply looks.'),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -181,11 +171,11 @@ class _SettingsList extends ConsumerWidget {
         const SizedBox(height: 28),
         const _Sound(),
         const SizedBox(height: 28),
-        const _StateLimit(),
+        Fold(title: 'Storage', titleStyle: settingsFoldTitle(c), child: const _StateLimit()),
         const SizedBox(height: 20),
         const _VramHeadroom(),
         const SizedBox(height: 28),
-        const FoldersSection(),
+        Fold(title: 'Folders', titleStyle: settingsFoldTitle(c), tooltip: foldersAbout, child: const FoldersSection()),
         const SizedBox(height: 28),
         const _Context(),
         const SizedBox(height: 28),
@@ -193,12 +183,7 @@ class _SettingsList extends ConsumerWidget {
         const SizedBox(height: 28),
         const FeedbackSection(),
         const SizedBox(height: 28),
-        Text(
-          'About',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text('Versions, credits and licences.', style: TextStyle(fontSize: 13, color: c.textSecondary)),
+        const SettingName('About', description: 'Versions, credits and licences.'),
         const SizedBox(height: 12),
         Align(
           alignment: Alignment.centerLeft,
@@ -239,14 +224,10 @@ class _StateLimitState extends ConsumerState<_StateLimit> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
+        const SettingName(
           'Saved chats',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'How much disk space chats may use to continue quickly. When it is full the oldest are removed; your chats themselves are never touched.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
+          size: 14,
+          description: 'How much disk space chats may use to continue quickly. When it is full the oldest are removed; your chats themselves are never touched.',
         ),
         const SizedBox(height: 12),
         Row(
@@ -315,14 +296,10 @@ class _VramHeadroom extends ConsumerWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
+        const SettingName(
           'VRAM headroom',
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
+          size: 14,
+          description: 'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
         ),
         for (final card in cards) ...[
           const SizedBox(height: 12),
@@ -354,14 +331,9 @@ class _Context extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
+        const SettingName(
           'Context length',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'How much text a chat can hold, and how its memory is stored at each length. A change applies the next time the model loads.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
+          description: 'How much text a chat can hold, and how its memory is stored at each length. A change applies the next time the model loads.',
         ),
         const SizedBox(height: 12),
         if (entry == null)
@@ -406,12 +378,7 @@ class _SoundState extends ConsumerState<_Sound> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Notification Sound',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text('A sound when a response finishes.', style: TextStyle(fontSize: 13, color: c.textSecondary)),
+        const SettingName('Notification Sound', description: 'A sound when a response finishes.'),
         const SizedBox(height: 12),
         Wrap(
           spacing: 8,

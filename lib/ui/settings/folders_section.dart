@@ -15,13 +15,15 @@ import '../../system/relaunch.dart';
 import '../../theme.dart';
 import '../buttons.dart';
 import '../engine_setup.dart';
+import 'setting_name.dart';
 import 'slow_drive.dart';
 
 /// Settings' folders: where models are downloaded, the folders models are also read from, the chats, the saved
 /// chat states and the engine. Moving one copies its files to the new place and then removes the old ones (on the
 /// same drive they are simply moved); the engine is stopped first, and downloads are paused before the models move.
 /// In the engine step of the first start ([firstStart]) it shows the main folder too, and leaves out the folders models
-/// are also read from and the engine download.
+/// are also read from and the engine download. In Settings the heading is the drop-down around it, and each folder's
+/// description shows as a tooltip on its name; in the first start they are written out.
 class FoldersSection extends ConsumerStatefulWidget {
   const FoldersSection({super.key, this.firstStart = false});
 
@@ -30,6 +32,9 @@ class FoldersSection extends ConsumerStatefulWidget {
   @override
   ConsumerState<FoldersSection> createState() => _FoldersSectionState();
 }
+
+/// What the folders are, under or over the Folders heading.
+const foldersAbout = 'Where Run My AI keeps its files. Moving a folder takes its files along.';
 
 class _FoldersSectionState extends ConsumerState<FoldersSection> {
   /// The folder being moved (its row's id), and how far: [_done] of [_total] bytes.
@@ -127,6 +132,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
       id: id,
       title: title,
       about: about,
+      aboutAsTooltip: !widget.firstStart,
       path: path,
       button: Row(
         mainAxisSize: MainAxisSize.min,
@@ -150,17 +156,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (!first) ...[
-          Text(
-            'Folders',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-          ),
-          const SizedBox(height: 2),
-        ],
-        Text(
-          'Where Run My AI keeps its files. Moving a folder takes its files along.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
-        ),
+        if (first) Text(foldersAbout, style: TextStyle(fontSize: 13, color: c.textSecondary)),
         if (first)
           row(
             'main',
@@ -285,6 +281,7 @@ class _FolderRow extends StatelessWidget {
     required this.id,
     required this.title,
     required this.about,
+    required this.aboutAsTooltip,
     required this.path,
     required this.button,
     this.progress,
@@ -292,6 +289,7 @@ class _FolderRow extends StatelessWidget {
   });
 
   final String id, title, about, path;
+  final bool aboutAsTooltip;
   final Widget button;
   final (int, int)? progress;
   final String? failure;
@@ -311,11 +309,8 @@ class _FolderRow extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text),
-                    ),
-                    Text(about, style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+                    SettingName(title, size: 14, description: aboutAsTooltip ? about : null),
+                    if (!aboutAsTooltip) Text(about, style: TextStyle(fontSize: 12.5, color: c.textMuted)),
                     const SizedBox(height: 2),
                     SelectableText(
                       path,
@@ -375,13 +370,10 @@ class _ReadFolders extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          const SettingName(
             'Also read models from',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: c.text),
-          ),
-          Text(
-            'Models already on this computer are used where they are.',
-            style: TextStyle(fontSize: 12.5, color: c.textMuted),
+            size: 14,
+            description: 'Models already on this computer are used where they are.',
           ),
           for (final dir in folders)
             Padding(

@@ -161,7 +161,7 @@ void main() {
       ),
     );
     expect(find.text(shareBenchmarksLabel), findsOneWidget);
-    expect(find.text('Anonymous, never your chats. You can turn this off anytime in Settings.'), findsOneWidget);
+    expect(find.byTooltip(shareBenchmarksNote), findsOneWidget, reason: 'its line is a tooltip in Settings');
     expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isFalse);
     await tester.tap(find.byKey(const Key('share-check')));
     await tester.pump();

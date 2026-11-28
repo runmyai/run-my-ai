@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/prefs.dart';
 import '../../theme.dart';
+import 'setting_name.dart';
 import '../welcome.dart' show shareBenchmarksLabel, shareBenchmarksNote;
 
 /// Settings: whether benchmark results and app stats may be shared (the same choice as on the welcome screen).
@@ -32,16 +33,9 @@ class PrivacySection extends ConsumerWidget {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(top: 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    shareBenchmarksLabel,
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(shareBenchmarksNote, style: TextStyle(fontSize: 13, color: c.textSecondary)),
-                ],
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SettingName(shareBenchmarksLabel, description: shareBenchmarksNote),
               ),
             ),
           ),
