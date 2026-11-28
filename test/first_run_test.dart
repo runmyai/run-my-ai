@@ -1,6 +1,6 @@
 // The first-start screens: the welcome screen (shown once, with the benchmark sharing choice), the Settings switch for
-// the same choice, the chat window without a model (Send off), the bubble at the Store (shown once), and the chat's
-// texts before the very first message.
+// the same choice, the chat window without a model (Send off), the bubble at the Store (shown once), the chat's
+// texts before the very first message, the top bar's feedback button, the one-time star card and the Community page.
 // Run: flutter test test/first_run_test.dart
 import 'dart:async';
 import 'dart:io';
@@ -64,13 +64,9 @@ class _Folders extends FoldersNotifier {
   FolderSet build() => FolderSet(main: main, models: '$main/models', chats: '$main/chats', cache: '$main/cache');
 }
 
-/// What the line under the message box counts its ten minutes by.
-var clockNow = DateTime(2026);
-
 void main() {
   late Directory dir;
   setUp(() {
-    clockNow = DateTime(2026);
     held = null;
     opened.clear();
     dir = Directory.systemTemp.createTempSync('runmyai-firstrun-');
@@ -105,7 +101,6 @@ void main() {
         chatStoreProvider.overrideWithValue(store),
         backendProvider.overrideWithValue(_Backend()),
         todayProvider.overrideWith(_Today.new),
-        communityClockProvider.overrideWithValue(() => clockNow),
         starCardForcedProvider.overrideWithValue(starForced),
         linkOpenerProvider.overrideWithValue((url) async {
           opened.add(url);
@@ -254,69 +249,65 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('the sidebar shows the seven community icons', (tester) async {
-    await open(tester, seen: {'welcomeShown': true, 'storeHintClosed': true, 'firstMessageSent': true});
+  testWidgets('the Community row above Store opens the page: three cards and the six accounts; no icon row', (
+    tester,
+  ) async {
+    final container = await open(tester, seen: sent);
     for (final name in ['star', 'discord', 'youtube', 'x', 'linkedin', 'huggingface', 'sponsor']) {
-      expect(find.byKey(Key('community-icon-$name')), findsOneWidget, reason: name);
+      expect(find.byKey(Key('community-icon-$name')), findsNothing, reason: name);
     }
-    for (final tip in ['Star us on GitHub', 'Discord', 'YouTube', 'X', 'LinkedIn', 'Hugging Face', 'Sponsor']) {
-      expect(find.byTooltip(tip), findsOneWidget, reason: tip);
+    final row = find.byKey(const Key('community'));
+    expect(tester.getTopLeft(row).dy, lessThan(tester.getTopLeft(find.byKey(const Key('store'))).dy));
+    await tester.tap(row);
+    await tester.pump();
+    expect(container.read(sectionProvider), Section.community);
+    expect(find.text("Run My AI is free and open source. Here's how to follow along and help."), findsOneWidget);
+    final boxes = [
+      for (final id in ['star', 'discord', 'sponsor']) find.byKey(Key('community-card-$id-box')),
+    ];
+    for (final box in boxes) {
+      expect(box, findsOneWidget);
     }
+    expect(tester.getSize(boxes[0]), tester.getSize(boxes[1]), reason: 'equal size');
+    expect(tester.getSize(boxes[1]), tester.getSize(boxes[2]));
+    expect(tester.getTopLeft(boxes[0]).dy, tester.getTopLeft(boxes[2]).dy, reason: 'side by side');
+    for (final (title, button, url) in [
+      ('Star us on GitHub', 'star', starUsUrl),
+      ('Join the Discord', 'discord', discordUrl),
+      ('Sponsor', 'sponsor', sponsorUrl),
+    ]) {
+      expect(find.text(title), findsWidgets);
+      await tester.tap(find.byKey(Key('community-card-$button')));
+      expect(opened.last, url);
+    }
+    expect(find.text('Follow us'), findsOneWidget);
+    for (final (name, url) in communityLinks) {
+      await tester.tap(find.byKey(Key('follow-$name')));
+      expect(opened.last, url, reason: name);
+    }
+    await tester.pumpWidget(const SizedBox());
   });
 
-  group('the line under the message box', () {
-    const seen = {'welcomeShown': true, 'storeHintClosed': true, 'firstMessageSent': true};
-    final star = find.byKey(const Key('line-star')), discord = find.byKey(const Key('line-discord'));
+  testWidgets('the Community page stacks its cards on a narrow window', (tester) async {
+    final container = await open(tester, seen: sent);
+    tester.view.physicalSize = const Size(900, 900);
+    container.read(sectionProvider.notifier).select(Section.community);
+    await tester.pump();
+    final star = find.byKey(const Key('community-card-star-box')),
+        sponsor = find.byKey(const Key('community-card-sponsor-box'));
+    expect(tester.getTopLeft(sponsor).dy, greaterThan(tester.getBottomLeft(star).dy));
+    expect(tester.getSize(star).width, tester.getSize(sponsor).width);
+    await tester.pumpWidget(const SizedBox());
+  });
 
-    // (The app ends here: the pending timers go with the widgets.)
-    Future<void> end(WidgetTester tester) => tester.pumpWidget(const SizedBox());
-
-    testWidgets('GitHub shows at start, in any chat, and is gone after ten minutes', (tester) async {
-      await open(tester, seen: seen);
-      expect(star, findsOneWidget);
-      expect(discord, findsNothing);
-      await tester.enterText(find.byType(TextField), 'hello');
-      await tester.tap(find.byKey(const Key('send')));
-      await tester.pump();
-      expect(star, findsOneWidget, reason: 'a chat with a message too');
-      clockNow = clockNow.add(communityLineTime);
-      await tester.pump(communityLineTime);
-      expect(star, findsNothing);
-      expect(Storage(dir).readPrefs().communityStep, 0, reason: 'timing out closes nothing for good');
-      await end(tester);
-    });
-
-    testWidgets('closing GitHub hides it for good; Discord comes at the next start, and its close ends it', (
-      tester,
-    ) async {
-      await open(tester, seen: seen);
-      await tester.tap(find.byKey(const Key('line-close')));
-      await tester.pump();
-      expect(star, findsNothing);
-      expect(discord, findsNothing, reason: 'Discord waits for the next start');
-      expect(Storage(dir).readPrefs().communityStep, 1);
-      await end(tester);
-
-      await open(tester, seen: seen);
-      expect(star, findsNothing);
-      expect(discord, findsOneWidget);
-      clockNow = clockNow.add(communityLineTime);
-      await tester.pump(communityLineTime);
-      expect(discord, findsNothing);
-      await end(tester);
-
-      await open(tester, seen: seen);
-      expect(discord, findsOneWidget, reason: 'timing out did not close it');
-      await tester.tap(find.byKey(const Key('line-close')));
-      await tester.pump();
-      expect(Storage(dir).readPrefs().communityStep, 2);
-      await end(tester);
-
-      await open(tester, seen: seen);
-      expect(star, findsNothing);
-      expect(discord, findsNothing);
-      await end(tester);
-    });
+  testWidgets('a settings file from an older version with the line under the message box still reads', (tester) async {
+    File('${dir.path}/settings.json').writeAsStringSync('{"bell": false, "communityStep": 1}');
+    expect(Storage(dir).readPrefs().bell, isFalse);
+    final container = await open(tester, seen: sent);
+    expect(container.read(prefsProvider).bell, isFalse);
+    expect(find.byKey(const Key('line-star')), findsNothing);
+    expect(find.byKey(const Key('line-discord')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
   });
 
   group('the star card', () {

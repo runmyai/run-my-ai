@@ -11,6 +11,7 @@ import '../dev/dev_build.dart';
 import 'dev_speed_control.dart';
 import 'model_picker.dart';
 import 'pages/chat_page.dart';
+import 'pages/community_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/engine_page.dart';
 import 'pages/simple_pages.dart';
@@ -39,6 +40,7 @@ class Shell extends ConsumerWidget {
       Section.code => const CodePage(),
       Section.store => const StorePage(),
       Section.engine => const EnginePage(),
+      Section.community => const CommunityPage(),
       Section.settings => const SettingsPage(),
     };
     if (ref.watch(serveProvider.select((s) => s.pageShown))) return const ServePage();

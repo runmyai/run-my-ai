@@ -640,13 +640,7 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: ChatPage.contentWidth),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const _MessageBox(),
-                  const CommunityLine(),
-                ],
-              ),
+              child: const _MessageBox(),
             ),
           ),
         ),
