@@ -184,15 +184,22 @@ class _AboutPageState extends ConsumerState<AboutPage> {
           ),
         ),
         const SizedBox(height: 28),
-        const _Heading('Licences'),
-        const SizedBox(height: 2),
-        Text(
-          'Run My AI and TokenWing are free software under the MIT licence. Choose one to read it.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        Fold(
+          title: 'Licences',
+          titleStyle: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Run My AI and TokenWing are free software under the MIT licence. Choose one to read it.',
+                style: TextStyle(fontSize: 13, color: c.textSecondary),
+              ),
+              const SizedBox(height: 12),
+              _Licenses(id: 'about-licenses', texts: _bundledTexts),
+            ],
+          ),
         ),
-        const SizedBox(height: 12),
-        _Licenses(id: 'about-licenses', texts: _bundledTexts),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         Fold(
           title: 'Flutter and its packages',
           titleStyle: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),

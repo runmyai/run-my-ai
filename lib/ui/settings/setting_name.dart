@@ -2,6 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../theme.dart';
 
+/// How long the pointer must rest on a name before its description shows: long enough that moving across the page
+/// does not flash descriptions up. Used by every description tooltip (setting names, drop-down headings, the share-data
+/// line); the short tooltips on icon buttons keep Flutter's own wait.
+const descriptionTooltipWait = Duration(seconds: 2);
+
 /// A setting's name in Settings. Its [description] is not written under it: it shows when the pointer rests on the
 /// name, so the page stays short.
 class SettingName extends StatelessWidget {
@@ -17,7 +22,9 @@ class SettingName extends StatelessWidget {
       name,
       style: TextStyle(fontSize: size, fontWeight: FontWeight.w500, color: context.colors.text),
     );
-    return description == null ? text : Tooltip(message: description, child: text);
+    return description == null
+        ? text
+        : Tooltip(message: description, waitDuration: descriptionTooltipWait, child: text);
   }
 }
 

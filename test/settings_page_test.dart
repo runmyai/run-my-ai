@@ -1,5 +1,6 @@
-// The Settings page (lib/ui/pages/settings_page.dart): Storage and Folders as drop-downs that start closed, each
-// setting's description shown as a tooltip on its name instead of as text under it, and the KV cache quantization
+// The Settings page (lib/ui/pages/settings_page.dart): Folders as a drop-down that starts closed (its rows in order, the
+// saved chat states' disk limit inside their row, its Change buttons held while the model is in use), each setting's
+// description shown as a tooltip on its name instead of as text under it, and the KV cache quantization
 // picker (lib/ui/context_settings.dart), which sets each length's cache type and never the chat's context length, and
 // the sharing choice as one small line at the end of the page.
 // Run: flutter test test/settings_page_test.dart
@@ -10,16 +11,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:runmyai/backend/dummy_backend.dart';
+import 'package:runmyai/data/chat_store.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
+import 'package:runmyai/state/chats.dart';
 import 'package:runmyai/state/library.dart';
 import 'package:runmyai/state/prefs.dart';
 import 'package:runmyai/state/profiles.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/system/folders.dart';
 import 'package:runmyai/theme.dart';
+import 'package:runmyai/ui/buttons.dart';
 import 'package:runmyai/ui/pages/settings_page.dart';
 import 'package:runmyai/ui/settings/folders_section.dart';
+import 'package:runmyai/ui/settings/setting_name.dart';
 import 'package:runmyai/ui/welcome.dart' show shareBenchmarksLabel, shareBenchmarksNote;
 
 /// The app's folders in the test's folder.
@@ -40,19 +45,23 @@ class _Folders extends FoldersNotifier {
 void main() {
   late Directory dir;
   late ProviderContainer container;
-  setUp(() {
+  late ChatStore store;
+  setUp(() async {
     dir = Directory.systemTemp.createTempSync('runmyai-settings-');
+    store = await ChatStore.open(dir);
     container = ProviderContainer(
       overrides: [
         storageProvider.overrideWithValue(Storage(dir)),
+        chatStoreProvider.overrideWithValue(store),
         shownModelProvider.overrideWithValue(null),
         backendProvider.overrideWithValue(DummyBackend()),
         foldersProvider.overrideWith(() => _Folders('${dir.path}/main')),
       ],
     );
   });
-  tearDown(() {
+  tearDown(() async {
     container.dispose();
+    await store.close();
     dir.deleteSync(recursive: true);
   });
 
@@ -71,15 +80,12 @@ void main() {
     );
   }
 
-  testWidgets('Storage and Folders start closed and open on a click', (tester) async {
+  testWidgets('Folders starts closed and opens on a click; there is no Storage drop-down', (tester) async {
     await show(tester);
+    expect(find.byKey(const Key('fold-Storage')), findsNothing);
+    expect(find.text('Storage'), findsNothing);
     expect(find.byKey(const Key('state-limit')), findsNothing);
     expect(find.byKey(const Key('folder-path-models')), findsNothing);
-
-    await tester.tap(find.byKey(const Key('fold-Storage')));
-    await tester.pump();
-    expect(find.byKey(const Key('state-limit')), findsOneWidget);
-    expect(find.byKey(const Key('folder-path-models')), findsNothing, reason: 'Folders stays closed');
 
     await tester.tap(find.byKey(const Key('fold-Folders')));
     await tester.pump();
@@ -89,39 +95,128 @@ void main() {
     expect(find.byKey(const Key('folder-path-main')), findsNothing, reason: 'the main folder is only in the first start');
   });
 
+  testWidgets('the folders are in order: engine, chats, saved chat states, models, then the folders read under models', (
+    tester,
+  ) async {
+    await show(tester);
+    await tester.tap(find.byKey(const Key('fold-Folders')));
+    await tester.pump();
+    final tops = [
+      for (final id in ['engine', 'chats', 'cache', 'models']) tester.getTopLeft(find.byKey(Key('folder-path-$id'))).dy,
+      tester.getTopLeft(find.text('Also read models from')).dy,
+    ];
+    expect(tops, [...tops]..sort());
+    expect(
+      tester.getTopLeft(find.text('Also read models from')).dx,
+      greaterThan(tester.getTopLeft(find.text('Models')).dx),
+      reason: 'indented under Models',
+    );
+  });
+
+  testWidgets('the disk-space limit is a field in the saved chat states row and saves the setting', (tester) async {
+    await show(tester);
+    await tester.tap(find.byKey(const Key('fold-Folders')));
+    await tester.pump();
+    final field = find.byKey(const Key('state-limit'));
+    expect(field, findsOneWidget);
+    expect(find.text('Up to'), findsOneWidget);
+    // In the same row as the folder's path: level with it, below the chats row and above the models row.
+    final y = tester.getCenter(field).dy;
+    expect(y, greaterThan(tester.getBottomLeft(find.byKey(const Key('folder-path-chats'))).dy));
+    expect(y, lessThan(tester.getTopLeft(find.byKey(const Key('folder-path-models'))).dy));
+    expect(find.text('Saved chats'), findsNothing, reason: 'no separate setting with its own name');
+
+    await tester.enterText(field, '25');
+    await tester.pump();
+    expect(container.read(prefsProvider).stateLimitGiB, 25);
+    await tester.enterText(field, '0');
+    await tester.pump();
+    expect(container.read(prefsProvider).stateLimitGiB, 25, reason: 'a limit of 0 or less is not taken');
+    await tester.enterText(field, 'x');
+    await tester.pump();
+    expect(container.read(prefsProvider).stateLimitGiB, 25, reason: 'nor text that is not a number');
+  });
+
+  testWidgets('the folder buttons: Reinstall engine and Change, held while a reply is being written', (tester) async {
+    await show(tester);
+    await tester.tap(find.byKey(const Key('fold-Folders')));
+    await tester.pump();
+    expect(find.text('Reinstall engine...'), findsOneWidget);
+    expect(find.text('Download engine...'), findsNothing);
+    expect(find.text('Move...'), findsNothing);
+    expect(find.text('Choose...'), findsNothing);
+    const ids = ['engine', 'chats', 'cache', 'models'];
+    bool enabled(String id) => tester.widget<AppButton>(find.byKey(Key('folder-move-$id'))).onTap != null;
+    for (final id in ids) {
+      expect(tester.widget<AppButton>(find.byKey(Key('folder-move-$id'))).label, 'Change...');
+      expect(enabled(id), isTrue, reason: '$id: nothing is running');
+    }
+
+    final chats = container.read(chatsProvider.notifier);
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    chats.state = chats.state.copyWith(replyingId: () => 'c1');
+    await tester.pump();
+    for (final id in ids) {
+      expect(enabled(id), isFalse, reason: '$id: a reply is being written');
+    }
+
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    chats.state = chats.state.copyWith(replyingId: () => null);
+    await tester.pump();
+    for (final id in ids) {
+      expect(enabled(id), isTrue, reason: '$id: the reply ended');
+    }
+  });
+
   testWidgets('descriptions are tooltips on the names, never text on the page', (tester) async {
     await show(tester);
-    await tester.tap(find.byKey(const Key('fold-Storage')));
     await tester.tap(find.byKey(const Key('fold-Folders')));
     await tester.pump();
     for (final description in [
-      'A sound when a response finishes.',
-      'How much disk space chats may use to continue quickly. When it is full the oldest are removed; your chats '
-          'themselves are never touched.',
+      'Plays a sound when a reply is finished.',
       foldersAbout,
-      'Downloaded models go here.',
-      'Your chats, one file each.',
-      'What lets a chat continue quickly. The engine stops while it moves.',
-      'Models already on this computer are used where they are.',
+      'The program that runs the models.',
+      'Your conversations, one file per chat.',
+      'The engine saves its memory of each chat here, so an old chat continues instantly. When they reach the limit, '
+          'the oldest are deleted. Your conversations are never deleted; an old chat just takes longer to continue.',
+      'Models you download are stored here.',
+      'Other folders that already hold model files. They are used from there, not copied.',
+      'How precisely the context cache is stored at each context length. A smaller type uses less memory and is '
+          'slightly less exact. Applies the next time the model loads.',
       'An idea, a bug, or something you like: it goes straight to us.',
     ]) {
       expect(find.text(description), findsNothing, reason: description);
       expect(find.byTooltip(description), findsOneWidget, reason: description);
     }
     expect(find.byIcon(Icons.info_outline), findsNothing, reason: 'no info buttons');
+    for (final tooltip in tester.widgetList<Tooltip>(find.byType(Tooltip))) {
+      expect(tooltip.message, isNot(contains('stop')), reason: 'no description says the model or engine stops');
+    }
   });
 
-  testWidgets('resting the pointer on a name shows its description', (tester) async {
+  testWidgets('a description shows only after the pointer has rested on the name for 2 seconds', (tester) async {
     await show(tester);
-    const description = 'A sound when a response finishes.';
+    const description = 'Plays a sound when a reply is finished.';
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(find.text('Notification Sound')));
-    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(milliseconds: 1900));
+    expect(find.text(description), findsNothing, reason: 'not yet');
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 200));
     expect(find.text(description), findsOneWidget);
     await mouse.moveTo(Offset.zero);
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('every description tooltip waits the same 2 seconds', (tester) async {
+    await show(tester);
+    expect(descriptionTooltipWait, const Duration(seconds: 2));
+    for (final message in ['Plays a sound when a reply is finished.', foldersAbout, shareBenchmarksNote]) {
+      final tooltip = find.ancestor(of: find.byTooltip(message), matching: find.byType(Tooltip)).first;
+      expect(tester.widget<Tooltip>(tooltip).waitDuration, descriptionTooltipWait, reason: message);
+    }
   });
 
   testWidgets('the KV cache block sets each length\'s cache type and has no buttons that pick a length', (tester) async {
@@ -129,6 +224,7 @@ void main() {
     container = ProviderContainer(
       overrides: [
         storageProvider.overrideWithValue(Storage(dir)),
+        chatStoreProvider.overrideWithValue(store),
         shownModelProvider.overrideWithValue(_entry),
         backendProvider.overrideWithValue(DummyBackend()),
         foldersProvider.overrideWith(() => _Folders('${dir.path}/main')),

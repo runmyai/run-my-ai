@@ -148,6 +148,14 @@ void main() {
       expect(find.textContaining('are made by Harin Mani Karri'), findsOneWidget);
       expect(find.textContaining('llama.cpp'), findsWidgets);
 
+      expect(find.byKey(Key('licence-${bundledLicenses[0].$1}')), findsNothing, reason: 'the licences start closed');
+      expect(find.text('Licences'), findsOneWidget, reason: 'only their heading shows');
+      await tester.tap(find.byKey(const Key('fold-Licences')));
+      await tester.pump();
+      await tester.pump();
+      for (final (name, _) in bundledLicenses) {
+        expect(find.byKey(Key('licence-$name')), findsOneWidget, reason: name);
+      }
       expect(find.textContaining('Permission is hereby granted'), findsNothing, reason: 'a licence opens when chosen');
       await tester.tap(find.byKey(Key('licence-${bundledLicenses[1].$1}')));
       await tester.pump();

@@ -22,9 +22,10 @@ import '../settings/setting_name.dart';
 import 'about_page.dart';
 
 /// Settings: the theme (System, Light or Dark; the developer's build also has the other theme families, reply motion and
-/// the speed's look), the sound when a reply finishes, the saved chats' disk limit and the RAM left free, the engine folder,
-/// the KV cache type for each context length, and a button that opens About in place of the settings.
-/// Each setting's description shows as a tooltip on its name; Storage and Folders are drop-downs, closed at first.
+/// the speed's look), the sound when a reply finishes, the graphics card memory left free, the folders (with the saved
+/// chat states' disk limit in their row), the KV cache type for each context length, and a button that opens About in
+/// place of the settings. Each setting's description shows as a tooltip on its name; Folders is a drop-down, closed at
+/// first.
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -171,10 +172,7 @@ class _SettingsList extends ConsumerWidget {
         const SizedBox(height: 28),
         const _Sound(),
         const SizedBox(height: 28),
-        Fold(title: 'Storage', titleStyle: settingsFoldTitle(c), child: const _StateLimit()),
-        const SizedBox(height: 20),
         const _VramHeadroom(),
-        const SizedBox(height: 28),
         Fold(title: 'Folders', titleStyle: settingsFoldTitle(c), tooltip: foldersAbout, child: const FoldersSection()),
         const SizedBox(height: 28),
         const _Context(),
@@ -199,75 +197,8 @@ class _SettingsList extends ConsumerWidget {
   }
 }
 
-/// The most the chats' saved states may take on the disk. A change applies the next time the engine starts.
-class _StateLimit extends ConsumerStatefulWidget {
-  const _StateLimit();
-
-  @override
-  ConsumerState<_StateLimit> createState() => _StateLimitState();
-}
-
-class _StateLimitState extends ConsumerState<_StateLimit> {
-  late final _text = TextEditingController(text: _show(ref.read(prefsProvider).stateLimitGiB));
-
-  static String _show(double gib) => gib == gib.roundToDouble() ? '${gib.round()}' : '$gib';
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SettingName(
-          'Saved chats',
-          size: 14,
-          description: 'How much disk space chats may use to continue quickly. When it is full the oldest are removed; your chats themselves are never touched.',
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            SizedBox(
-              width: 100,
-              child: TextField(
-                key: const Key('state-limit'),
-                controller: _text,
-                onChanged: (text) {
-                  final gib = double.tryParse(text.trim());
-                  if (gib != null && gib > 0) ref.read(prefsProvider.notifier).setStateLimit(gib);
-                },
-                style: TextStyle(fontSize: 13, color: c.text),
-                cursorColor: c.text,
-                decoration: InputDecoration(
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: c.inputBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: c.text.withValues(alpha: 0.35)),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text('GB', style: TextStyle(fontSize: 13, color: c.textMuted)),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-/// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs: one row per card the
-/// engine can use (the same for every model).
+/// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs: a drop-down with one row
+/// per card the engine can use (the same for every model), shown only when there is such a card.
 class _VramHeadroom extends ConsumerWidget {
   const _VramHeadroom();
 
@@ -291,31 +222,32 @@ class _VramHeadroom extends ConsumerWidget {
     return '${gb.endsWith('.0') ? gb.substring(0, gb.length - 2) : gb} GB';
   }
 
+  // A drop-down, closed at first, with one row per card; the gap under it comes with it, so nothing is left when hidden.
   Widget _section(AppColors c, List<({String key, String name, String desc, int mib})> cards) => Padding(
-    padding: const EdgeInsets.only(top: 20),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SettingName(
-          'VRAM headroom',
-          size: 14,
-          description: 'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
-        ),
-        for (final card in cards) ...[
-          const SizedBox(height: 12),
-          Text(
-            [
-              if (card.desc.isNotEmpty) card.desc else if (card.name.isEmpty) 'Graphics card',
-              if (card.name.isNotEmpty) card.name,
-              _gb(card.mib),
-            ].join(', '),
-            key: Key('vram-card-${card.key}'),
-            style: TextStyle(fontSize: 13, color: c.text),
-          ),
-          const SizedBox(height: 6),
-          VramHeadroomInput(card: card.key),
+    padding: const EdgeInsets.only(bottom: 28),
+    child: Fold(
+      title: 'VRAM headroom',
+      titleStyle: settingsFoldTitle(c),
+      tooltip: 'How much graphics card memory to leave free for your desktop and other apps. Applies the next time a model loads.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final (i, card) in cards.indexed) ...[
+            if (i > 0) const SizedBox(height: 12),
+            Text(
+              [
+                if (card.desc.isNotEmpty) card.desc else if (card.name.isEmpty) 'Graphics card',
+                if (card.name.isNotEmpty) card.name,
+                _gb(card.mib),
+              ].join(', '),
+              key: Key('vram-card-${card.key}'),
+              style: TextStyle(fontSize: 13, color: c.text),
+            ),
+            const SizedBox(height: 6),
+            VramHeadroomInput(card: card.key),
+          ],
         ],
-      ],
+      ),
     ),
   );
 }
@@ -333,8 +265,7 @@ class _Context extends ConsumerWidget {
       children: [
         const SettingName(
           'KV cache quantization',
-          description:
-              'How the context cache (KV cache) is stored at each context length: a smaller type uses less memory. A change applies the next time the model loads at that length.',
+          description: 'How precisely the context cache is stored at each context length. A smaller type uses less memory and is slightly less exact. Applies the next time the model loads.',
         ),
         const SizedBox(height: 12),
         if (entry == null)
@@ -379,7 +310,7 @@ class _SoundState extends ConsumerState<_Sound> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SettingName('Notification Sound', description: 'A sound when a response finishes.'),
+        const SettingName('Notification Sound', description: 'Plays a sound when a reply is finished.'),
         const SizedBox(height: 12),
         Wrap(
           spacing: 8,
