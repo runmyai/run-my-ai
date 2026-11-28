@@ -197,7 +197,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
     final modelsRow = row(
       'models',
       'Models',
-      'Downloaded models go here.',
+      'Models you download are stored here.',
       folders.models,
       onMove: () => _move(
         'models',
@@ -213,7 +213,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
     final chatsRow = row(
       'chats',
       'Chats',
-      'Your chats, one file each.',
+      'Your conversations, one file per chat.',
       folders.chats,
       // The open chats are saved and closed first; the app then starts again on the new folder (or on the old one if
       // the move failed), so no change is written to the folder the files left.
@@ -228,7 +228,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
     final cacheRow = row(
       'cache',
       'Saved chat states',
-      'What lets a chat continue quickly. The engine stops while it moves.',
+      'The engine saves its memory of each chat here, so an old chat continues instantly. When they reach the limit, the oldest are deleted. Your conversations are never deleted; an old chat just takes longer to continue.',
       folders.cache,
       onMove: () => _move('cache', folders.cache, _stopEngine, (to) => notifier.set(folders.copyWith(cache: to))),
       extra: first ? null : const _StateLimit(),
@@ -238,7 +238,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
         ? row(
             'engine',
             'Engine',
-            '${installedLine}The engine Run My AI runs. A change applies the next time it starts.',
+            '${installedLine}The program that runs the models.',
             engine,
             onMove: () async {
               final dir = await getDirectoryPath(initialDirectory: engine);
@@ -258,7 +258,7 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
         : row(
             'engine',
             'Engine',
-            '${installedLine}The engine Run My AI runs. It stops while it moves.',
+            '${installedLine}The program that runs the models.',
             engine,
             onMove: () => _move('engine', engine, _stopEngine, ref.read(prefsProvider.notifier).setEngineFolder),
             extra: first ? null : download,
@@ -457,7 +457,7 @@ class _ReadFolders extends StatelessWidget {
           const SettingName(
             'Also read models from',
             size: 14,
-            description: 'Models already on this computer are used where they are.',
+            description: 'Other folders that already hold model files. They are used from there, not copied.',
           ),
           for (final dir in folders)
             Padding(

@@ -228,7 +228,7 @@ class _VramHeadroom extends ConsumerWidget {
     child: Fold(
       title: 'VRAM headroom',
       titleStyle: settingsFoldTitle(c),
-      tooltip: 'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
+      tooltip: 'How much graphics card memory to leave free for your desktop and other apps. Applies the next time a model loads.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -265,7 +265,7 @@ class _Context extends ConsumerWidget {
       children: [
         const SettingName(
           'KV cache quantization',
-          description: 'How the context cache (KV cache) is stored at each context length: a smaller type uses less memory. A change applies the next time the model loads at that length.',
+          description: 'How precisely the context cache is stored at each context length. A smaller type uses less memory and is slightly less exact. Applies the next time the model loads.',
         ),
         const SizedBox(height: 12),
         if (entry == null)
@@ -310,7 +310,7 @@ class _SoundState extends ConsumerState<_Sound> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SettingName('Notification Sound', description: 'A sound when a response finishes.'),
+        const SettingName('Notification Sound', description: 'Plays a sound when a reply is finished.'),
         const SizedBox(height: 12),
         Wrap(
           spacing: 8,

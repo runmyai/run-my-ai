@@ -245,6 +245,12 @@ void main() {
         ];
       final container = await show(tester, backend);
       expect(find.text('VRAM headroom'), findsOneWidget, reason: 'one heading above the rows');
+      expect(
+        find.byTooltip(
+          'How much graphics card memory to leave free for your desktop and other apps. Applies the next time a model loads.',
+        ),
+        findsOneWidget,
+      );
       expect(find.byType(VramHeadroomInput), findsNothing, reason: 'a drop-down, closed at first');
       await tester.tap(find.byKey(const Key('fold-VRAM headroom')));
       await tester.pump();

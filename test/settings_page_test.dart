@@ -173,23 +173,30 @@ void main() {
     await tester.tap(find.byKey(const Key('fold-Folders')));
     await tester.pump();
     for (final description in [
-      'A sound when a response finishes.',
+      'Plays a sound when a reply is finished.',
       foldersAbout,
-      'Downloaded models go here.',
-      'Your chats, one file each.',
-      'What lets a chat continue quickly. The engine stops while it moves.',
-      'Models already on this computer are used where they are.',
+      'The program that runs the models.',
+      'Your conversations, one file per chat.',
+      'The engine saves its memory of each chat here, so an old chat continues instantly. When they reach the limit, '
+          'the oldest are deleted. Your conversations are never deleted; an old chat just takes longer to continue.',
+      'Models you download are stored here.',
+      'Other folders that already hold model files. They are used from there, not copied.',
+      'How precisely the context cache is stored at each context length. A smaller type uses less memory and is '
+          'slightly less exact. Applies the next time the model loads.',
       'An idea, a bug, or something you like: it goes straight to us.',
     ]) {
       expect(find.text(description), findsNothing, reason: description);
       expect(find.byTooltip(description), findsOneWidget, reason: description);
     }
     expect(find.byIcon(Icons.info_outline), findsNothing, reason: 'no info buttons');
+    for (final tooltip in tester.widgetList<Tooltip>(find.byType(Tooltip))) {
+      expect(tooltip.message, isNot(contains('stop')), reason: 'no description says the model or engine stops');
+    }
   });
 
   testWidgets('a description shows only after the pointer has rested on the name for 2 seconds', (tester) async {
     await show(tester);
-    const description = 'A sound when a response finishes.';
+    const description = 'Plays a sound when a reply is finished.';
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: Offset.zero);
@@ -206,7 +213,7 @@ void main() {
   testWidgets('every description tooltip waits the same 2 seconds', (tester) async {
     await show(tester);
     expect(descriptionTooltipWait, const Duration(seconds: 2));
-    for (final message in ['A sound when a response finishes.', foldersAbout, shareBenchmarksNote]) {
+    for (final message in ['Plays a sound when a reply is finished.', foldersAbout, shareBenchmarksNote]) {
       final tooltip = find.ancestor(of: find.byTooltip(message), matching: find.byType(Tooltip)).first;
       expect(tester.widget<Tooltip>(tooltip).waitDuration, descriptionTooltipWait, reason: message);
     }
