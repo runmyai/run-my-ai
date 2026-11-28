@@ -1,15 +1,13 @@
 // The Benchmark tab as widgets, with made-up numbers: every part draws without an error at a desktop width and at a
-// narrow one, rows and folds open, a token picked in a chart moves the graphs' cursor, each turn has its own stretch of
-// the graphs and its own details (and the whole run its own tab, with the numbers of all the turns together), a run that
-// ends stays on Live, a history row opens, no disturbance message is shown, and the setup (three drop-downs, a line on
-// what the test does, Start; a prompt test that does not fit the context is greyed; a saved setup of an older version
-// opens). No engine runs and no machine is read.
+// narrow one; the live cards (one per row, bars against the limits the PC reports, the speed of the phase); a run that
+// ends stays on Live with its result, the same result a history row opens (the chosen tests' numbers only); no
+// disturbance message is shown; and the setup (three drop-downs and the tests, a line on what they do, Start; a test that
+// does not fit the context is greyed; a saved setup of an older version opens). No engine runs and no machine is read.
 // Run: flutter test test/benchmark_tab_test.dart
 import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,7 +26,7 @@ import 'package:runmyai/state/library.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/benchmark/fold.dart';
-import 'package:runmyai/ui/benchmark/live_graphs.dart';
+import 'package:runmyai/ui/benchmark/result_view.dart';
 import 'package:runmyai/ui/buttons.dart';
 import 'package:runmyai/ui/context_settings.dart';
 import 'package:runmyai/ui/pages/engine_page.dart';
@@ -254,44 +252,14 @@ List<TurnRecord> _turns() => const [
   ),
 ];
 
-/// [turns] placed on the run's time axis, turn by turn at the given (start, end) seconds.
-List<TurnRecord> _timed(List<TurnRecord> turns, List<(double, double)> places) => [
-  for (var i = 0; i < turns.length; i++)
-    TurnRecord(
-      warmup: turns[i].warmup,
-      firstTokenMillis: turns[i].firstTokenMillis,
-      promptTokens: turns[i].promptTokens,
-      promptMillis: turns[i].promptMillis,
-      replyTokens: turns[i].replyTokens,
-      replyMillis: turns[i].replyMillis,
-      totalMillis: turns[i].totalMillis,
-      stopReason: turns[i].stopReason,
-      tokenMillis: turns[i].tokenMillis,
-      engineStats: turns[i].engineStats,
-      startSeconds: places[i].$1,
-      endSeconds: places[i].$2,
-    ),
-];
-
-/// A run of [seconds], one tick a second, whose CPU load is the second it is at: a moment can be read off the row.
-RunSeries _ramp(int seconds) {
-  final s = RunSeries();
-  for (var t = 0; t <= seconds; t++) {
-    s.add(t.toDouble(), {'cpu.load': t.toDouble()});
-  }
-  s
-    ..beginPhase(PhaseBand.load, 0)
-    ..beginPhase(PhaseBand.prompt, seconds * 0.5)
-    ..endPhases(seconds.toDouble());
-  return s;
-}
-
 BenchmarkResult _result({
   int id = 1,
   double speed = 40,
   RunSeries? series,
   String flags = '-c 65536 --a 1 --temp 0',
   List<TurnRecord> turns = const [],
+  String label = 'Story chat',
+  List<TestResult> tests = const [],
 }) {
   final tokens = [for (var i = 0; i < 300; i++) 20 + (i % 17) + (i % 50 == 0 ? 60 : 0).toDouble()];
   return BenchmarkResult(
@@ -302,7 +270,7 @@ BenchmarkResult _result({
     profileName: 'Auto',
     flags: flags,
     memoryCapGiB: null,
-    promptLabel: 'Story chat',
+    promptLabel: label,
     replyLength: 1024,
     warmups: const ['warm 1', 'warm 2'],
     loadMillis: 12000,
@@ -330,6 +298,7 @@ BenchmarkResult _result({
     timeParts: const {'SSD wait': 6.0, 'CPU': 9.0, 'GPU': 6.0, 'CPU→GPU copies': 0.4, 'CPU-GPU sync': 0.6},
     layers: [for (var i = 0; i < 41; i++) {'misses': 10.0 + i, 'stall_ms': 100.0 + i * 3}],
     turns: turns,
+    tests: tests,
     series: series ?? _series(60),
     memory: const MemoryLayout(ramSlots: 191, streamedLayers: 41, vramExpertsPerLayer: 62, gpuLayers: 2, kvMiB: 1020, freeRamGiB: 22),
     environment: RunEnvironment(
@@ -343,177 +312,43 @@ BenchmarkResult _result({
   );
 }
 
+/// A run of several tests ([tests] by id, in the order they ran): the reply speed's turn is the third of [_turns] (40
+/// tokens/s, its time split [parts]); prompt 8k reads at 2000 tokens/s, prompt 25k at 1250.
+BenchmarkResult _multi({
+  int id = 1,
+  List<String> tests = const ['reply', 'prompt-8k', 'prompt-25k'],
+  Map<String, double> parts = const {'SSD wait': 5.4, 'CPU': 10.0, 'GPU': 9.0, 'CPU-GPU sync': 4.0, 'Other': 1.0},
+}) {
+  TurnRecord prompt(int tokens, double millis, int ttft) => TurnRecord(
+    warmup: false,
+    firstTokenMillis: ttft,
+    promptTokens: tokens,
+    promptMillis: millis,
+    replyTokens: 60,
+    replyMillis: 1500,
+    totalMillis: ttft + 1500,
+  );
+  final turn = TurnRecord(
+    warmup: false,
+    firstTokenMillis: 1700,
+    promptTokens: 40,
+    promptMillis: 100,
+    replyTokens: 300,
+    replyMillis: 7500,
+    totalMillis: 9300,
+    tokenMillis: const [20, 21, 22, 70],
+  );
+  final all = {
+    'reply': TestResult(testId: 'reply', label: 'Reply speed', turn: turn, timeParts: parts),
+    'prompt-8k': TestResult(testId: 'prompt-8k', label: 'Prompt 8k', turn: prompt(8000, 4000, 4100)),
+    'prompt-25k': TestResult(testId: 'prompt-25k', label: 'Prompt 25k', turn: prompt(25000, 20000, 20200)),
+  };
+  final chosen = [for (final t in tests) all[t]!];
+  return _result(id: id, label: chosen.map((t) => t.label).join(' + '), tests: chosen, turns: [..._turns().take(2), for (final t in chosen) t.turn]);
+}
+
 void main() {
-  test('time on the axis is written in seconds, then minutes', () {
-    expect(formatSeconds(42), '42 s');
-    expect(formatSeconds(125), '2:05');
-    expect(niceStep(30), 5);
-    expect(niceStep(600), 120);
-  });
-
-  group('the span of the axis', _span);
-  group('graphs of a window', _window);
   group('the tab', _tab);
-}
-
-void _span() {
-  test('without a window it is the whole run, from 0 to its end, and at least a second long', () {
-    final whole = AxisSpan.of(60, null);
-    expect((whole.from, whole.to, whole.length, whole.windowed), (0, 60, 60, false));
-    expect(AxisSpan.of(0, null).to, 1, reason: 'a run with no tick yet still has an axis');
-    expect(AxisSpan.of(0.4, null).to, 1);
-  });
-
-  test('a window is exactly that stretch, at least a second wide', () {
-    final w = AxisSpan.of(100, (20, 40));
-    expect((w.from, w.to, w.length, w.windowed), (20, 40, 20, true));
-    expect(AxisSpan.of(100, (20, 20.2)).to, 21, reason: 'a turn that has only just begun');
-    expect(AxisSpan.of(100, (20, 20)).to, 21);
-    expect(AxisSpan.of(100, (30, 10)).to, 31, reason: 'an end before the start is not a negative stretch');
-    expect(AxisSpan.of(10, (20, 40)).to, 40, reason: 'the run\'s own end does not limit a window');
-  });
-
-  test('a moment and a place on the axis map both ways, from the window\'s start', () {
-    final w = AxisSpan.of(100, (20, 40));
-    expect((w.x(20, 200), w.x(30, 200), w.x(40, 200)), (0, 100, 200));
-    expect(w.x(10, 200), -100, reason: 'a moment before the window is left of the axis');
-    expect((w.timeAt(0, 200), w.timeAt(100, 200), w.timeAt(200, 200)), (20, 30, 40));
-    expect((w.timeAt(-5, 200), w.timeAt(250, 200)), (20, 40), reason: 'outside the axis counts as its edge');
-    // The whole run maps as it always did: seconds over the run's length, across the width.
-    final whole = AxisSpan.of(60, null);
-    expect((whole.x(30, 300), whole.timeAt(150, 300), whole.timeAt(400, 300)), (150, 30, 60));
-    expect((w.contains(20), w.contains(40), w.contains(19.9), w.contains(40.1)), (true, true, false, false));
-  });
-
-  test('a phase is cut to the window, one outside it is left out, and one still going on reaches its end', () {
-    final w = AxisSpan.of(100, (20, 40));
-    expect(w.band(0, 10), isNull);
-    expect(w.band(0, 20), isNull, reason: 'it ended where the window begins');
-    expect(w.band(40, 50), isNull, reason: 'it begins where the window ends');
-    expect(w.band(10, 30), (20, 30));
-    expect(w.band(25, 35), (25, 35));
-    expect(w.band(35, 60), (35, 40));
-    expect(w.band(0, 100), (20, 40));
-    expect(w.band(30, 30, open: true), (30, 40), reason: 'no end yet: it goes on to the window\'s end');
-    expect(w.band(5, 5, open: true), (20, 40));
-    expect(w.band(30, 30), (30, 30), reason: 'a closed phase of no length stays a mark');
-    // The whole run draws every phase as it is, even where it passes the last tick.
-    expect(AxisSpan.of(60, null).band(0, 70), (0, 70));
-    expect(AxisSpan.of(60, null).band(50, 50, open: true), (50, 50));
-  });
-
-  test('spans with the same stretch are equal, so the graphs paint again only when it moves', () {
-    expect(AxisSpan.of(100, (20, 40)), AxisSpan.of(50, (20, 40)));
-    expect(AxisSpan.of(100, (20, 40)), isNot(AxisSpan.of(100, (20, 41))));
-    expect(AxisSpan.of(40, null), isNot(AxisSpan.of(40, (0, 40))), reason: 'a window of the same stretch clips; the whole run does not');
-    expect(AxisSpan.of(100, (20, 40)).hashCode, AxisSpan.of(5, (20, 40)).hashCode);
-  });
-}
-
-void _window() {
-  /// The graphs alone on a page, with [window] and [cursor].
-  Future<void> pumpGraphs(WidgetTester tester, RunSeries series, {(double, double)? window, ValueNotifier<double?>? cursor, bool running = false}) async {
-    tester.view
-      ..physicalSize = const Size(1000, 3000)
-      ..devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: buildTheme(Brightness.dark),
-        home: Scaffold(
-          body: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: LiveGraphs(series: series, cursor: cursor ?? ValueNotifier<double?>(null), revision: 1, running: running, window: window),
-          ),
-        ),
-      ),
-    );
-    await tester.pump();
-  }
-
-  /// The pointer of the test, made the first time it is needed.
-  TestGesture? mouse;
-  setUp(() => mouse = null);
-
-  /// Puts the pointer on the CPU row's chart, [fraction] of the way across it.
-  Future<void> hoverAt(WidgetTester tester, double fraction) async {
-    final row = tester.getRect(find.byKey(const Key('graph-row-cpu')));
-    var pointer = mouse;
-    if (pointer == null) {
-      pointer = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await pointer.addPointer(location: Offset.zero);
-      addTearDown(pointer.removePointer);
-      mouse = pointer;
-    }
-    await pointer.moveTo(Offset(row.left + row.width * fraction, row.center.dy + 40));
-    await tester.pump();
-  }
-
-  testWidgets('without a window the rows say the latest moment, and hovering reads the moment across the whole run', (tester) async {
-    await pumpGraphs(tester, _ramp(100));
-    expect(tester.takeException(), isNull);
-    expect(find.textContaining('100 of 100 %'), findsOneWidget);
-    await hoverAt(tester, 0.5);
-    expect(find.textContaining('50 of 100 %'), findsOneWidget);
-    await hoverAt(tester, 0.25);
-    expect(find.textContaining('25 of 100 %'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('a window says the moment at its end, and hovering reads the moments inside it only', (tester) async {
-    await pumpGraphs(tester, _ramp(100), window: (60, 80));
-    expect(tester.takeException(), isNull);
-    expect(find.textContaining('80 of 100 %'), findsOneWidget, reason: 'the end of the window, not of the run');
-    await hoverAt(tester, 0.5);
-    expect(find.textContaining('70 of 100 %'), findsOneWidget);
-    await hoverAt(tester, 0.01);
-    expect(find.textContaining('60 of 100 %'), findsOneWidget);
-    await hoverAt(tester, 0.99);
-    expect(find.textContaining('80 of 100 %'), findsOneWidget);
-    expect(find.textContaining('50 of 100 %'), findsNothing);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('a moment pinned from outside is marked in a window only when it lies inside it', (tester) async {
-    final cursor = ValueNotifier<double?>(10);
-    addTearDown(cursor.dispose);
-    await pumpGraphs(tester, _ramp(100), window: (60, 80), cursor: cursor);
-    expect(find.textContaining('80 of 100 %'), findsOneWidget, reason: 'second 10 is not in this window');
-    expect(find.textContaining('10 of 100 %'), findsNothing);
-    cursor.value = 65;
-    await tester.pump();
-    expect(find.textContaining('65 of 100 %'), findsOneWidget, reason: 'second 65 is');
-    // Over the whole run every moment is on the axis.
-    cursor.value = 10;
-    await pumpGraphs(tester, _ramp(100), cursor: cursor);
-    expect(find.textContaining('10 of 100 %'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('the opened line says its lowest, average and highest over the window, and over the run without one', (tester) async {
-    await pumpGraphs(tester, _ramp(100), window: (60, 80));
-    await tester.tap(find.byKey(const Key('graph-row-cpu')));
-    await tester.pump(const Duration(milliseconds: 200));
-    await tester.tap(find.byKey(const Key('meter-cpu.load')));
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('Load: lowest 60, average 70, highest 80 %'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-
-    // The same graphs without the window (the row and the line stay open): the whole run.
-    await pumpGraphs(tester, _ramp(100));
-    expect(find.text('Load: lowest 0, average 50, highest 100 %'), findsOneWidget);
-  });
-
-  testWidgets('a window just begun, one past the last tick, and one of a run still going on draw without an error', (tester) async {
-    await pumpGraphs(tester, _ramp(100), window: (100, 100));
-    expect(tester.takeException(), isNull);
-    await pumpGraphs(tester, _ramp(100), window: (130, 140));
-    expect(tester.takeException(), isNull);
-    await pumpGraphs(tester, _ramp(100), window: (50, 100), running: true);
-    await hoverAt(tester, 0.5);
-    expect(find.textContaining('75 of 100 %'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
 }
 
 /// Scrolls the page until [finder] is inside the window (a widget the list has built is not always on screen).
@@ -907,68 +742,91 @@ void _tab() {
     expect(pageTexts(tester).where((w) => w.contains('–') || w.trim() == '-'), isEmpty);
   });
 
-  testWidgets('a run that has ended is on Live, on the whole run, with the folds of the run under it', (tester) async {
-    final shown = _result(id: 2, turns: _turns());
-    final earlier = _result(id: 1, speed: 36, flags: '-c 65536 --a 2 --temp 0 --extra 1');
-    await pump(
-      tester,
-      BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, revision: 5, turns: shown.turns, history: [shown, earlier], disturbed: shown.disturbed),
-    );
-    expect(tester.takeException(), isNull);
-    expect(find.text('LIVE'), findsOneWidget);
-    expect(find.text('FULL RESULT'), findsNothing);
-    expect(find.byKey(const Key('bench-step-3')), findsNothing);
-    expect(find.byKey(const Key('scrubber-overall')), findsOneWidget);
-    expect(find.byKey(const Key('card-gpu.0')), findsNothing, reason: 'the cards are the live readings');
-
-    // The folds of the run, each closed until clicked.
-    for (final title in [
-      'The run',
-      'Memory layout',
-      'Hardware over the run',
-    ]) {
-      final fold = find.byKey(Key('fold-$title')).first;
-      await reveal(tester, fold);
-      await tester.tap(fold);
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(tester.takeException(), isNull, reason: title);
-    }
-    expect(find.textContaining('191 slots per layer'), findsOneWidget);
-
-    // Removed / hidden folds are not rendered.
-    for (final title in ['Phases', 'Sanity: the reply and why it ended', 'Setup record', 'Compare with another run', 'Engine output']) {
+  /// What the result page no longer shows (all of it stays in the saved run).
+  void nothingRemoved(WidgetTester tester) {
+    for (final title in ['The run', 'Memory layout', 'Hardware over the run', 'Streaming from the SSD', 'Each layer']) {
       expect(find.byKey(Key('fold-$title')), findsNothing, reason: title);
     }
-  });
+    expect(find.byType(Fold), findsNothing);
+    expect(find.byType(Table), findsNothing, reason: 'no rows per turn');
+    expect(find.textContaining('Turn 1'), findsNothing);
+    expect(find.byKey(const Key('scrubber-overall')), findsNothing, reason: 'no time graph');
+    expect(find.byKey(const Key('graph-row-gpu.0')), findsNothing, reason: 'no time graph');
+    for (final key in ['first-token', 'load', 'slowest-1', 'slowest-token', 'total', 'hits', 'guesses', 'ssd-reads']) {
+      expect(find.byKey(Key('result-$key')), findsNothing, reason: key);
+    }
+  }
 
-  testWidgets('the folds closed under the whole run keep clean titles', (tester) async {
-    final shown = _result(turns: _turns());
-    await pump(tester, BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, turns: shown.turns, history: [shown]));
-    expect(find.byKey(const Key('fold-The run')), findsOneWidget);
-    expect(find.byKey(const Key('fold-Memory layout')), findsOneWidget);
-    expect(find.byKey(const Key('fold-Hardware over the run')), findsOneWidget);
-  });
-
-  testWidgets('a run in the history is a row; a click opens its result with the graphs it was made with; delete asks twice', (tester) async {
-    final run = _result(id: 7);
-    await pump(tester, BenchmarkState(history: [run]));
+  testWidgets('a run that has ended is on Live with its result: the time per token on top, then the chosen tests\' numbers', (tester) async {
+    final shown = _multi(id: 2);
+    await pump(tester, BenchmarkState(result: shown, live: shown.series, revision: 5, turns: shown.turns, history: [shown]));
     expect(tester.takeException(), isNull);
+    expect(find.text('LIVE'), findsOneWidget);
+    expect(find.byKey(const Key('card-gpu.0')), findsNothing, reason: 'the cards are the live readings');
+    expect(find.textContaining('Test Model  ·  65k  ·  Auto  ·  Reply speed + Prompt 8k + Prompt 25k'), findsOneWidget);
+    // The time per token comes first.
+    final time = tester.getRect(find.text('Where the time per token went'));
+    final tiles = tester.getRect(find.byKey(const Key('result-reply-speed')));
+    expect(time.top, lessThan(tiles.top));
+    expect(find.textContaining('Server and streaming'), findsNothing);
+    expect(find.textContaining('CPU 10.0 ms'), findsOneWidget);
+    // The reply speed, and a line per prompt test with its speed and time to first token.
+    expect(find.descendant(of: find.byKey(const Key('result-reply-speed')), matching: find.text('Reply speed')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('result-reply-speed')), matching: find.textContaining('40.0')), findsOneWidget);
+    String line(String id) => (tester.widget<Text>(find.descendant(of: find.byKey(Key('result-$id')), matching: find.byType(Text))).textSpan!).toPlainText();
+    expect(line('prompt-8k'), '8k → ${formatNumber(2000, 0)} tokens/s  ·  TTFT 4.10 s');
+    expect(line('prompt-25k'), '25k → ${formatNumber(1250, 0)} tokens/s  ·  TTFT 20.20 s');
+    nothingRemoved(tester);
+  });
+
+  testWidgets('only the chosen tests\' numbers: no prompt speed without a prompt test, no reply speed or time split without the reply test', (tester) async {
+    final replyOnly = _multi(id: 3, tests: const ['reply']);
+    await pump(tester, BenchmarkState(result: replyOnly, live: replyOnly.series, history: [replyOnly]));
+    expect(find.byKey(const Key('result-reply-speed')), findsOneWidget);
+    expect(find.byKey(const Key('result-prompt-speed')), findsNothing);
+    expect(find.text('Where the time per token went'), findsOneWidget);
+
+    final promptOnly = _multi(id: 4, tests: const ['prompt-25k']);
+    await tester.pumpWidget(const SizedBox());
+    await pump(tester, BenchmarkState(result: promptOnly, live: promptOnly.series, history: [promptOnly]));
+    expect(find.byKey(const Key('result-reply-speed')), findsNothing);
+    expect(find.byKey(const Key('result-prompt-25k')), findsOneWidget);
+    expect(find.text('Where the time per token went'), findsNothing);
+    // A history row names its figure.
+    await tester.tap(find.byKey(const Key('bench-history')));
+    await tester.pump();
+    expect(find.text('25k → ${formatNumber(1250, 0)} tokens/s'), findsOneWidget);
+
+    // An engine that gave only the SSD wait: no bar, no heading.
+    final unsplit = _multi(id: 5, tests: const ['reply'], parts: const {'SSD wait': 5.4});
+    await tester.pumpWidget(const SizedBox());
+    await pump(tester, BenchmarkState(result: unsplit, live: unsplit.series, history: [unsplit]));
+    expect(find.text('Where the time per token went'), findsNothing);
+    expect(find.byKey(const Key('result-reply-speed')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a run in the history is a row; a click opens the same result as right after the run; delete asks twice', (tester) async {
+    final run = _multi(id: 7);
+    await pump(tester, BenchmarkState(result: run, live: run.series, history: [run]));
+    // Right after the run: what the Live step shows.
+    List<String> shownTexts() => [
+      for (final t in tester.widgetList<Text>(find.descendant(of: find.byType(ResultView), matching: find.byType(Text))))
+        t.data ?? t.textSpan!.toPlainText(),
+    ];
+    final afterRun = shownTexts();
     await tester.tap(find.byKey(const Key('bench-history')));
     await tester.pump();
     expect(find.text('FULL RESULT'), findsNothing);
-    expect(find.textContaining('Test Model  ·  Auto  ·  65k  ·  Story chat'), findsOneWidget);
+    expect(find.textContaining('Test Model  ·  Auto  ·  65k  ·  Reply speed + Prompt 8k + Prompt 25k'), findsOneWidget);
     expect(find.textContaining('Disturbed'), findsNothing, reason: 'the run was disturbed, and no row says so');
     expect(find.text('40.0 tokens/s'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('history-7')));
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.takeException(), isNull);
-    expect(find.byKey(const Key('graph-row-gpu.0')), findsOneWidget, reason: 'the stored graphs');
-    expect(find.byKey(const Key('result-reply-speed')), findsOneWidget);
-    // The whole result of a saved run: the memory layout and hardware folds are present.
-    for (final title in ['Memory layout', 'Hardware over the run']) {
-      expect(find.byKey(Key('fold-$title')), findsOneWidget, reason: title);
-    }
+    expect(shownTexts(), afterRun, reason: 'one result page in both places');
+    nothingRemoved(tester);
     expect(find.textContaining('Disturbed'), findsNothing);
 
     await tester.tap(find.byKey(const Key('history-delete-7')));
@@ -1030,29 +888,6 @@ void _tab() {
     expect(find.text('HISTORY'), findsNothing);
   });
 
-  testWidgets('after a run finishes: scrubber is at top with Overall selected, flat run facts show under cards', (tester) async {
-    final shown = _result(turns: _turns());
-    await pump(
-      tester,
-      BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, revision: 5, turns: shown.turns, history: [shown]),
-    );
-    expect(tester.takeException(), isNull);
-    expect(find.byKey(const Key('scrubber-overall')), findsOneWidget);
-    expect(find.textContaining('not counted'), findsNothing);
-
-    // The run fold under cards
-    final runFold = find.byKey(const Key('fold-The run'));
-    expect(runFold, findsOneWidget);
-    await reveal(tester, runFold);
-    await tester.tap(runFold);
-    await tester.pump(const Duration(milliseconds: 200));
-
-    expect(find.text('Cache hits'), findsOneWidget);
-    expect(find.text('Misses'), findsOneWidget);
-    expect(find.text('SSD wait'), findsWidgets);
-    expect(find.text('Correct guesses'), findsOneWidget);
-    expect(find.text('Wrong guesses'), findsOneWidget);
-  });
 
   testWidgets('during a run the heading follows it: the warm-ups, then each test; the speed of the phase only', (tester) async {
     final turns = _turns();
@@ -1102,39 +937,6 @@ void _tab() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('token scrubber allows stepping, input, picking tokens, and returning to Overall', (tester) async {
-    final turns = _turns();
-    final shown = _result(turns: turns);
-    await pump(
-      tester,
-      BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, revision: 5, turns: turns, history: [shown]),
-    );
-    expect(tester.takeException(), isNull);
-
-    // Starts in Overall mode
-    expect(find.byKey(const Key('scrubber-overall')), findsOneWidget);
-    expect(find.byKey(const Key('scrubber-next')), findsOneWidget);
-
-    // Step to first token using [▶]
-    await tester.tap(find.byKey(const Key('scrubber-next')));
-    await tester.pump();
-    expect(find.textContaining('Token'), findsWidgets);
-    expect(find.byKey(const Key('scrubber-input')), findsOneWidget);
-
-    // Step further using [▶]
-    await tester.tap(find.byKey(const Key('scrubber-next')));
-    await tester.pump();
-
-    // Step back using [◀]
-    await tester.tap(find.byKey(const Key('scrubber-prev')));
-    await tester.pump();
-
-    // Click [ Overall ] to snap back
-    await tester.tap(find.byKey(const Key('scrubber-overall')));
-    await tester.pump();
-    expect(tester.takeException(), isNull);
-  });
-
 
   testWidgets('a run that is loading shows the cards; a stopped one keeps none', (tester) async {
     await pump(tester, BenchmarkState(live: _series(20), revision: 3));
@@ -1157,29 +959,7 @@ void _tab() {
     expect(find.byKey(const Key('card-ram')), findsOneWidget);
   });
 
-  testWidgets('the whole run overall view shows speed card with latency percentiles and The run fold', (tester) async {
-    final shown = _result(turns: _turns());
-    await pump(tester, BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, revision: 5, turns: shown.turns, history: [shown]));
-    expect(tester.takeException(), isNull);
-
-    // Where the time per token went (Turn 3 only)
-    expect(find.text('Where the time per token went'), findsOneWidget);
-
-    // The run fold
-    final runFold = find.byKey(const Key('fold-The run'));
-    expect(runFold, findsOneWidget);
-    await reveal(tester, runFold);
-    await tester.tap(runFold);
-    await tester.pump(const Duration(milliseconds: 200));
-
-    expect(find.text('12.0 s'), findsOneWidget);
-    expect(find.text('Cache hits'), findsOneWidget);
-    expect(find.text('Misses'), findsOneWidget);
-    expect(find.text('SSD wait'), findsWidgets);
-    expect(find.text('Correct guesses'), findsOneWidget);
-  });
-
-  testWidgets('when a run ends the page stays on Live and selects Overall; a stopped run goes back to setup', (tester) async {
+  testWidgets('when a run ends the page stays on Live with its result; a stopped run goes back to setup', (tester) async {
     final turns = _turns();
     const setup = BenchmarkSetup();
     await pump(tester, BenchmarkState(phase: BenchmarkPhase.measuring, warmup: 1, setup: setup, live: _series(60), revision: 5, turns: turns.sublist(0, 2)));
@@ -1193,7 +973,7 @@ void _tab() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('LIVE'), findsOneWidget);
-    expect(find.byKey(const Key('scrubber-overall')), findsOneWidget);
+    expect(find.byKey(const Key('result-reply-speed')), findsOneWidget);
 
     // A run that was stopped has no result: the page goes to setup.
     fake.put(BenchmarkState(phase: BenchmarkPhase.warmingUp, setup: setup, live: _series(9), revision: 8, turns: turns.sublist(0, 1)));
@@ -1205,40 +985,6 @@ void _tab() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a saved run opens in the history with a fold for each turn, for the streaming numbers and for each layer', (tester) async {
-    final run = _result(id: 4, turns: _turns());
-    await pump(tester, BenchmarkState(history: [run]));
-    await tester.tap(find.byKey(const Key('bench-history')));
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('history-4')));
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(tester.takeException(), isNull);
-    expect(find.text('The turns: each with its own numbers, the warm-ups not counted'), findsOneWidget);
-    expect(find.byType(Table), findsOneWidget);
-    // One fold per turn, named by what the turn was, closed until clicked.
-    const titles = ['Turn 1: warm-up, not counted', 'Turn 2: warm-up, not counted', 'Turn 3: measured'];
-    for (final title in titles) {
-      expect(find.byKey(Key('fold-$title')), findsOneWidget, reason: title);
-    }
-    expect(find.text('4.20 s to the first token'), findsNothing);
-    for (final (title, ttft) in [(titles[0], '4.20 s to the first token'), (titles[2], '1.70 s to the first token')]) {
-      final fold = find.byKey(Key('fold-$title'));
-      await reveal(tester, fold);
-      await tester.tap(fold);
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.text(ttft), findsOneWidget, reason: title);
-    }
-    expect(find.text('2.60 s to the first token'), findsNothing, reason: 'turn 2 stayed closed');
-    expect(find.text('8.00 ms/token'), findsNWidgets(2), reason: 'the table\'s and the fold\'s SSD wait of turn 1');
-    for (final title in ['Streaming from the SSD', 'Each layer']) {
-      final fold = find.byKey(Key('fold-$title'));
-      await reveal(tester, fold);
-      await tester.tap(fold);
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(tester.takeException(), isNull, reason: title);
-    }
-    expect(find.textContaining('Found in memory'), findsWidgets);
-  });
 
   testWidgets('no disturbance message is shown on the page: not while a run goes on, not after it, not in the history', (tester) async {
     final run = _result(id: 3, turns: _turns());
@@ -1261,12 +1007,6 @@ void _tab() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('LIVE'), findsOneWidget);
     none();
-    final mem = find.byKey(const Key('fold-Memory layout'));
-    await reveal(tester, mem);
-    await tester.tap(mem);
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('Video Memory (VRAM)'), findsOneWidget);
-    none();
 
     await tester.tap(find.byKey(const Key('bench-history')));
     await tester.pump();
@@ -1276,48 +1016,34 @@ void _tab() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byKey(const Key('result-reply-speed')), findsOneWidget);
     none();
-    final saved = find.byKey(const Key('fold-Memory layout'));
-    await reveal(tester, saved);
-    await tester.tap(saved);
-    await tester.pump(const Duration(milliseconds: 200));
-    none();
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a run saved before the turns existed opens in the history with no turns table and no turn folds', (tester) async {
+  testWidgets('a run of one test saved before several tests opens in the history as that test\'s result', (tester) async {
     final run = _result(id: 5);
-    await pump(tester, BenchmarkState(history: [run]));
+    final prompt = _result(id: 6, label: 'Prompt 25k');
+    await pump(tester, BenchmarkState(history: [run, prompt]));
     await tester.tap(find.byKey(const Key('bench-history')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('history-5')));
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('result-reply-speed')), findsOneWidget);
-    expect(find.byType(Table), findsNothing);
-    expect(find.textContaining('The turns:'), findsNothing);
-    expect(find.textContaining('Turn 1:'), findsNothing);
-    expect(find.byKey(const Key('fold-Memory layout')), findsOneWidget, reason: 'the rest of the result is there');
+    expect(find.text('Where the time per token went'), findsOneWidget);
+    nothingRemoved(tester);
+    await tester.tap(find.byKey(const Key('history-5')));
+    await tester.tap(find.byKey(const Key('history-6')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const Key('result-reply-speed')), findsNothing);
+    expect(find.byKey(const Key('result-prompt-25k')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('the cards, scrubber, facts and folds fit a narrow window without overflow', (tester) async {
-    final turns = _timed(_turns(), const [(12, 18), (18, 24), (24, 60)]);
-    final shown = _result(turns: turns);
-    await pump(
-      tester,
-      BenchmarkState(setup: const BenchmarkSetup(), result: shown, live: shown.series, turns: turns, history: [shown]),
-      width: 700,
-    );
+  testWidgets('the result fits a narrow window without overflow', (tester) async {
+    final shown = _multi();
+    await pump(tester, BenchmarkState(result: shown, live: shown.series, turns: shown.turns, history: [shown]), width: 700);
     expect(tester.takeException(), isNull);
-    expect(find.byKey(const Key('scrubber-overall')), findsOneWidget);
-
-    for (final title in ['The run', 'Memory layout', 'Hardware over the run']) {
-      final fold = find.byKey(Key('fold-$title'));
-      await reveal(tester, fold);
-      await tester.tap(fold);
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(tester.takeException(), isNull, reason: title);
-    }
-    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('result-prompt-speed')), findsOneWidget);
   });
 }
 

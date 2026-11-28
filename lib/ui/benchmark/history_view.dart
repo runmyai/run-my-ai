@@ -8,18 +8,14 @@ import '../../engine/commands.dart';
 import '../../theme.dart';
 import '../buttons.dart';
 import '../clicky.dart';
-import 'live_graphs.dart';
 import 'result_view.dart';
 
-/// One past run as a compact row: the model, profile, context, prompt, reply speed and date. A click opens its full
-/// result with the graphs it was made with; the row also has Copy flags and Delete.
+/// One past run as a compact row: the model, profile, context, tests, its main figure and date. A click opens its
+/// result, the same as right after the run; the row also has Copy flags and Delete.
 class HistoryRow extends StatefulWidget {
-  const HistoryRow({super.key, required this.result, required this.others, required this.onDelete});
+  const HistoryRow({super.key, required this.result, required this.onDelete});
 
   final BenchmarkResult result;
-
-  /// The runs it can be compared with (the whole history).
-  final List<BenchmarkResult> others;
   final VoidCallback onDelete;
 
   @override
@@ -30,13 +26,10 @@ class _HistoryRowState extends State<HistoryRow> {
   var _open = false;
   var _sure = false;
   Timer? _unsure;
-  final _cursor = ValueNotifier<double?>(null);
-  final _graphs = GlobalKey();
 
   @override
   void dispose() {
     _unsure?.cancel();
-    _cursor.dispose();
     super.dispose();
   }
 
@@ -91,9 +84,9 @@ class _HistoryRowState extends State<HistoryRow> {
                         Text(date, style: TextStyle(fontSize: 12.5, color: c.textMuted)),
                         const SizedBox(width: 12),
                         SizedBox(
-                          width: 92,
+                          width: 130,
                           child: Text(
-                            '${r.tokensPerSecond.toStringAsFixed(1)} tokens/s',
+                            historyFigure(r),
                             textAlign: TextAlign.end,
                             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: c.text, fontFeatures: const [FontFeature.tabularFigures()]),
                           ),
@@ -136,25 +129,8 @@ class _HistoryRowState extends State<HistoryRow> {
           ),
           if (_open) ...[
             const SizedBox(height: 8),
-            if (r.series != null) ...[
-              Container(
-                key: _graphs,
-                child: LiveGraphs(series: r.series!, cursor: _cursor, gpuNames: r.environment.hardware.gpus),
-              ),
-              const SizedBox(height: 14),
-            ],
-            ResultView(
-              result: r,
-              others: widget.others,
-              onShowMoment: r.series == null
-                  ? null
-                  : (t) {
-                      _cursor.value = t;
-                      final box = _graphs.currentContext;
-                      if (box != null) unawaited(Scrollable.ensureVisible(box, duration: const Duration(milliseconds: 250), alignment: 0.05));
-                    },
-            ),
-            const SizedBox(height: 6),
+            ResultView(result: r),
+            const SizedBox(height: 10),
           ],
         ],
       ),

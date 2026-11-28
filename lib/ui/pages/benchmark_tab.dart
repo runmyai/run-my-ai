@@ -3,23 +3,18 @@ part of 'engine_page.dart';
 /// The parts of the benchmark, one on screen at a time.
 enum _View { setup, live, history }
 
-/// The Benchmark tab as steps: the setup, the live view of a run (which keeps the whole result of the run once it has
-/// ended), and the history beside them. The stepper on top switches; the setup is the only door into a run. Each part
-/// keeps its detail behind a click.
+/// The Benchmark tab as steps: the setup, the live view of a run (which shows the run's result once it has ended), and
+/// the history beside them. The stepper on top switches; the setup is the only door into a run.
 class _BenchmarkTab extends ConsumerStatefulWidget {
-  const _BenchmarkTab({required this.entry, required this.control});
+  const _BenchmarkTab({required this.entry});
 
   final CatalogEntry entry;
-  final EngineControl control;
 
   @override
   ConsumerState<_BenchmarkTab> createState() => _BenchmarkTabState();
 }
 
 class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
-  /// A moment pinned on the graphs (a token clicked in the charts under them).
-  final _cursor = ValueNotifier<double?>(null);
-
   /// The part on screen; chosen from the state the first time it is built.
   _View? _view;
 
@@ -34,12 +29,6 @@ class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
       _beforeHistory = null;
     }
     setState(() => _view = v);
-  }
-
-  @override
-  void dispose() {
-    _cursor.dispose();
-    super.dispose();
   }
 
   @override
@@ -80,7 +69,7 @@ class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
         switch (view) {
           _View.live => _Panel(
             title: 'Live',
-            child: _LivePanel(state: state, control: widget.control, cursor: _cursor),
+            child: _LivePanel(state: state),
           ),
           _View.history => _Panel(
             title: 'History',
@@ -93,7 +82,6 @@ class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
                         HistoryRow(
                           key: ValueKey(run.id ?? run.at),
                           result: run,
-                          others: state.history,
                           onDelete: () => notifier.delete(run),
                         ),
                     ],
@@ -454,65 +442,19 @@ class _BenchmarkSettings extends ConsumerWidget {
   }
 }
 
-/// The run as it goes on and after it: the turns, the four numbers that matter, what is happening, the graphs and the
-/// engine's output. The turn tabs pick the turn: the current one live, finished ones frozen with their own real numbers
-/// and, under the graphs, their details — the user can go back to an earlier turn, and the view follows the run
-/// otherwise. Each turn has its own graphs (its stretch of the run); the tab before the turns is the whole run. When a run
-/// ends the whole run is shown, with every number taken over all the turns together, the turns side by side, and the
-/// folds of the run (its phases, memory layout, hardware, setup and engine output).
-class _LivePanel extends StatefulWidget {
-  const _LivePanel({required this.state, required this.control, required this.cursor});
+/// The run as it goes on and after it: while it goes on, what it is doing and the live cards; once it has ended, its
+/// result (the same page the history opens).
+class _LivePanel extends StatelessWidget {
+  const _LivePanel({required this.state});
 
   final BenchmarkState state;
-  final EngineControl control;
-  final ValueNotifier<double?> cursor;
-
-  @override
-  State<_LivePanel> createState() => _LivePanelState();
-}
-
-class _LivePanelState extends State<_LivePanel> {
-  bool _overall = false;
-  int? _pickedToken;
-
-  @override
-  void initState() {
-    super.initState();
-    _overall = !widget.state.running;
-    _pickedToken = null;
-  }
-
-  @override
-  void didUpdateWidget(_LivePanel old) {
-    super.didUpdateWidget(old);
-    final (before, now) = (old.state, widget.state);
-    if (!before.running && now.running) {
-      _overall = false;
-      _pickedToken = null;
-      widget.cursor.value = null;
-    } else if (before.running && !now.running && now.result != null) {
-      _overall = true;
-      _pickedToken = null;
-      widget.cursor.value = null;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final state = widget.state;
     final series = state.live;
     final result = state.result;
-    final turns = state.turns.isNotEmpty ? state.turns : (result?.turns ?? const <TurnRecord>[]);
-    final measuredTurn = turns.isNotEmpty ? turns.lastWhere((t) => !t.warmup, orElse: () => turns.last) : null;
-    final whole = !state.running && measuredTurn != null ? WholeRun([measuredTurn]) : (!state.running && turns.isNotEmpty ? WholeRun(turns) : null);
-    final tokens = measuredTurn != null && measuredTurn.tokens.isNotEmpty
-        ? measuredTurn.tokens
-        : (result?.tokens ?? const <double>[]);
-
-    final bool isOverall = !state.running && _overall;
-
-    final hint = state.note ?? (!state.running && result == null ? 'Press Start. The graphs fill in while the run goes on.' : null);
+    final hint = state.note ?? (!state.running && result == null ? 'Press Start. The numbers fill in while the run goes on.' : null);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -554,71 +496,7 @@ class _LivePanelState extends State<_LivePanel> {
             ),
         ],
 
-        // After run finishes: TokenScrubber at the top
-        if (!state.running && tokens.isNotEmpty) ...[
-          TokenScrubber(
-            tokens: tokens,
-            overall: isOverall,
-            picked: _pickedToken,
-            onSelectOverall: () {
-              setState(() {
-                _overall = true;
-                _pickedToken = null;
-              });
-              widget.cursor.value = null;
-            },
-            onPickToken: (index) {
-              setState(() {
-                _overall = false;
-                _pickedToken = index;
-              });
-              final at = measuredTurn != null ? turnTokenSeconds(measuredTurn, index) : (result != null ? tokenTimeSeconds(result, index) : null);
-              if (at != null) {
-                widget.cursor.value = at;
-              }
-            },
-          ),
-          const SizedBox(height: 14),
-        ],
-
-        // Under the cards when run has ended:
-        if (!state.running && whole != null) ...[
-          // 1. Where the time per token went (Turn 3 only)
-          if (measuredTurn != null) ...[
-            Builder(
-              builder: (context) {
-                final parts = timeParts(measuredTurn.engineStats);
-                final totalMs = measuredTurn.replyTokens > 0 ? measuredTurn.replyMillis / measuredTurn.replyTokens : 0.0;
-                if (!hasTimeSplit(parts) || totalMs <= 0) return const SizedBox.shrink();
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 18),
-                    const SectionLabel('Where the time per token went'),
-                    TimePerToken(total: totalMs, parts: parts),
-                  ],
-                );
-              },
-            ),
-          ],
-
-          // 2. The Run Facts (Load time, Cache hits, Misses, SSD wait, Correct guesses, Wrong guesses)
-          const SizedBox(height: 18),
-          Fold(
-            title: 'The run',
-            child: Facts([
-              if (result?.loadMillis case final load?)
-                ('Load time', '${(load / 1000).toStringAsFixed(1)} s'),
-              ...engineFacts(whole.engine, whole: false),
-            ]),
-          ),
-
-          // 3. Dropdowns / Collapsible folds
-          if (result != null) ...[
-            const SizedBox(height: 14),
-            RunFolds(result: result, others: state.history),
-          ],
-        ],
+        if (!state.running && result != null) ResultView(result: result),
       ],
     );
   }
