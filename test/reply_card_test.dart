@@ -100,8 +100,6 @@ void main() {
         ('TTFT', '0.08 s'),
         ('Tokens', 'in 120  ·  out 40'),
         ('Time', '1.1 s'),
-        ('SSD wait', '5.3 ms/token'),
-        ('Found in RAM', '96 %'),
       ]);
       expect(replyBasis(s), 'Ling  ·  Auto  ·  65k');
     });

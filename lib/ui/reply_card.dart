@@ -18,8 +18,6 @@ List<(String, String)> replyFacts(ReplyStats s) {
     if (s.firstWordMillis != null) ('TTFT', seconds(s.firstWordMillis!)),
     if (tokens.isNotEmpty) ('Tokens', tokens.join('  ·  ')),
     if (s.totalMillis != null) ('Time', seconds(s.totalMillis!)),
-    if (s.ssdWaitPerWord != null) ('SSD wait', '${s.ssdWaitPerWord!.toStringAsFixed(1)} ms/token'),
-    if (s.hitRate != null) ('Found in RAM', '${s.hitRate!.toStringAsFixed(0)} %'),
   ];
 }
 
