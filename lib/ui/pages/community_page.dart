@@ -81,6 +81,7 @@ class CommunityPage extends ConsumerWidget {
             for (final (name, url) in communityLinks)
               InkWell(
                 key: Key('follow-$name'),
+                mouseCursor: SystemMouseCursors.click,
                 borderRadius: BorderRadius.circular(8),
                 onTap: () => open(url),
                 child: Padding(
