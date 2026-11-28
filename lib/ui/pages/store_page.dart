@@ -221,7 +221,7 @@ class _FileRow extends ConsumerWidget {
           ] else if (downloaded && tune.busy) ...[
             const SizedBox(height: 4),
             Text(
-              'Your PC was busy while tuning. Close background apps and tune again for the best speed.',
+              'Tuned while the PC was busy. Tune again when it\'s free for the best speed.',
               key: Key('tune-status-${file.id}'),
               style: TextStyle(fontSize: 12, color: c.textSecondary),
             ),

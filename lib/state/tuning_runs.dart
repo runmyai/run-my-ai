@@ -6,6 +6,7 @@ import '../backend/backend.dart';
 import '../data/models.dart';
 import 'benchmark.dart';
 import 'chats.dart';
+import 'library.dart';
 import 'providers.dart';
 import 'serve.dart';
 
@@ -18,7 +19,7 @@ class TuningState {
   /// The model file being tuned now.
   final String? tuning;
 
-  /// Model files whose kept result was measured while other programs kept the PC busy.
+  /// Model files just tuned while other programs kept the PC busy: their row says so for [busyNoteTime], then no more.
   final Set<String> busy;
 
   TuningState copyWith({List<String>? waiting, String? Function()? tuning, Set<String>? busy}) => TuningState(
@@ -28,13 +29,18 @@ class TuningState {
   );
 }
 
+/// How long a model's row says that it was tuned on a busy PC.
+const busyNoteTime = Duration(seconds: 30);
+
 /// Measures the PC for each model with the autotuner: by itself once a download is checked (unless a result for that
 /// model file and autotuner is kept), and again when the user asks. One tune at a time, never while the engine writes a
-/// reply, runs a benchmark or hosts (it waits for them to end); the engine unloads every model it has loaded first, so
-/// the PC is quiet while it measures.
+/// reply, runs a benchmark or hosts (it waits for them to end); the engine unloads every model it has loaded first and
+/// the downloads stand still meanwhile, so the app itself keeps the PC quiet while it measures. Other programs may
+/// not: the model is tuned all the same, and its row says so for a short while.
 /// A message sent meanwhile waits in the engine until the tune ends.
 class TuningRunsNotifier extends Notifier<TuningState> {
   var _running = false;
+  final _busyNotes = <String, Timer>{};
 
   TuneControl? get _backend {
     final backend = ref.read(backendProvider);
@@ -52,15 +58,25 @@ class TuningRunsNotifier extends Notifier<TuningState> {
     ref.listen(chatsProvider.select((s) => s.replyingId), (_, _) => _next());
     ref.listen(benchmarkProvider.select((s) => s.running), (_, _) => _next());
     ref.listen(serveProvider.select((s) => s.phase), (_, _) => _next());
-    ref.listen(catalogFilesProvider, (_, files) => state = state.copyWith(busy: _keptBusy(files)));
-    return TuningState(tuning: backend.tuning.value, busy: _keptBusy(ref.read(catalogFilesProvider)));
+    ref.onDispose(() {
+      for (final t in _busyNotes.values) {
+        t.cancel();
+      }
+    });
+    return TuningState(tuning: backend.tuning.value);
   }
 
-  /// The model files whose kept result says the PC was busy.
-  Set<String> _keptBusy(Map<String, CatalogEntry> files) => {
-    for (final e in files.values)
-      if (_backend?.savedTune(e.file)?['busy'] == true) e.file.id,
-  };
+  /// The row of [id] says "tuned while the PC was busy" from now for [busyNoteTime], or no more ([on] false).
+  void _busyNote(String id, bool on) {
+    _busyNotes.remove(id)?.cancel();
+    if (on) {
+      _busyNotes[id] = Timer(busyNoteTime, () {
+        _busyNotes.remove(id);
+        if (ref.mounted) state = state.copyWith(busy: {...state.busy}..remove(id));
+      });
+    }
+    state = state.copyWith(busy: on ? {...state.busy, id} : ({...state.busy}..remove(id)));
+  }
 
   /// A download of [file] has been checked: it is tuned, unless a result for it is kept.
   void afterDownload(ModelFile file) {
@@ -97,11 +113,17 @@ class TuningRunsNotifier extends Notifier<TuningState> {
         if (!ref.mounted || _engineBusy) return;
       }
       state = state.copyWith(waiting: [for (final w in state.waiting) if (w != id) w]);
-      final result = await backend.tune(file);
+      // The app's own downloads write to the model's drive: they stand still while it is measured.
+      final library = ref.read(libraryProvider.notifier);
+      await library.holdDownloads();
+      final Map<String, dynamic>? result;
+      try {
+        result = await backend.tune(file);
+      } finally {
+        if (ref.mounted) library.releaseDownloads();
+      }
       if (!ref.mounted) return;
-      final busy = {...state.busy}..remove(id);
-      if (result?['busy'] == true) busy.add(id);
-      state = state.copyWith(busy: busy);
+      _busyNote(id, result?['busy'] == true);
     } finally {
       _running = false;
       if (ref.mounted) unawaited(_next());

@@ -1,5 +1,6 @@
 // Tuning for the PC: by itself after a download, skipped when a result is kept, waiting while the engine is in use,
-// the model unloaded first, a message sent meanwhile waiting in the engine, the busy note and Tune.
+// the model unloaded first, the downloads standing still meanwhile, a message sent meanwhile waiting in the engine, the
+// busy note (shown for a short while) and Tune.
 // Run: flutter test test/tuning_runs_test.dart
 import 'dart:async';
 import 'dart:io';
@@ -35,6 +36,10 @@ class _Backend implements Backend, EngineControl, TuneControl {
 
   /// Whether the next tune finds the PC busy.
   var busy = false;
+
+  /// Files whose pretend download goes on until the test ends it, and how often each download was started.
+  final slow = <String, Completer<void>>{};
+  final starts = <String, int>{};
 
   final _tuning = ValueNotifier<String?>(null);
 
@@ -84,7 +89,11 @@ class _Backend implements Backend, EngineControl, TuneControl {
   @override
   Future<List<CatalogModel>> loadCatalog() async => [_model];
   @override
-  Stream<double> download(ModelFile file) => Stream.value(1);
+  Stream<double> download(ModelFile file) {
+    starts[file.id] = (starts[file.id] ?? 0) + 1;
+    final end = slow[file.id];
+    return end == null ? Stream.value(1) : Stream.fromFuture(end.future.then((_) => 1.0));
+  }
   @override
   Future<void> deleteDownload(ModelFile file) async {}
   @override
@@ -206,12 +215,54 @@ void main() {
     expect(backend.calls, ['tune m/f']);
   });
 
+  test('the downloads stand still while a model is tuned and continue after', () async {
+    const second = ModelFile(id: 'm/g', quantization: 'q2', sizeBytes: 1);
+    final library = container.read(libraryProvider.notifier);
+    DownloadPhase? phase() => container.read(libraryProvider).downloads['m/g']?.phase;
+    backend
+      ..slow['m/g'] = Completer<void>()
+      ..gate = Completer<void>();
+    // The first is downloaded at once and tuned; the next in line does not start before the tune ends.
+    library
+      ..download(_file)
+      ..download(second);
+    await settle();
+    expect(tuning().tuning, 'm/f');
+    expect(backend.starts['m/g'], isNull);
+    expect(phase(), DownloadPhase.queued);
+    backend.gate.complete();
+    await settle();
+    expect(backend.starts['m/g'], 1);
+    expect(phase(), DownloadPhase.downloading);
+
+    // Tune pressed while it downloads: it stops without showing as paused, and continues by itself.
+    backend.gate = Completer<void>();
+    container.read(tuningRunsProvider.notifier).tuneAgain(_file);
+    await settle();
+    expect(tuning().tuning, 'm/f');
+    expect(phase(), DownloadPhase.queued);
+    backend.gate.complete();
+    await settle();
+    expect(backend.starts['m/g'], 2);
+    expect(phase(), DownloadPhase.downloading);
+
+    // Paused by the user during a tune, it stays paused.
+    backend.gate = Completer<void>();
+    container.read(tuningRunsProvider.notifier).tuneAgain(_file);
+    await settle();
+    library.pause('m/g');
+    backend.gate.complete();
+    await settle();
+    expect(phase(), DownloadPhase.paused);
+    expect(backend.starts['m/g'], 2);
+  });
+
   test('a tune that finds the PC busy is marked so; Tune again on a quiet PC clears it', () async {
     backend.busy = true;
     container.read(tuningRunsProvider.notifier).tuneAgain(_file);
     await settle();
     expect(tuning().busy, {'m/f'});
-    // Kept: a new start of the app reads it again.
+    // Not kept: a new start of the app does not show it.
     final again = ProviderContainer(
       overrides: [
         storageProvider.overrideWithValue(Storage(dir)),
@@ -221,7 +272,7 @@ void main() {
     );
     addTearDown(again.dispose);
     await again.read(catalogProvider.future);
-    expect(again.read(tuningRunsProvider).busy, {'m/f'});
+    expect(again.read(tuningRunsProvider).busy, isEmpty);
 
     backend.busy = false;
     container.read(tuningRunsProvider.notifier).tuneAgain(_file);
@@ -263,9 +314,16 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.text('Downloaded'), findsOneWidget);
-    expect(find.textContaining('Your PC was busy while tuning'), findsOneWidget);
+    expect(find.text('Tuned while the PC was busy. Tune again when it\'s free for the best speed.'), findsOneWidget);
     expect(find.byKey(const Key('tune-again-m/f')), findsOneWidget);
     expect(find.text('Tune'), findsOneWidget);
+
+    // The note goes by itself.
+    await tester.pump(busyNoteTime - const Duration(seconds: 1));
+    expect(find.byKey(const Key('tune-status-m/f')), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.byKey(const Key('tune-status-m/f')), findsNothing);
+    expect(find.text('Downloaded'), findsOneWidget);
   });
 
   testWidgets('Tune is off while a reply is being written', (tester) async {

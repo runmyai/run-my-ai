@@ -30,27 +30,39 @@ void main() {
     final r = busyBetween(
       _at(0, total: 0, idle: 0, disk: 0, ownRead: 0),
       _at(4, total: 9600, idle: 8000, own: 1400, disk: 4040000000, ownRead: 4000000000),
+      processors: 24,
     );
-    expect(r.cpu, closeTo(200 / 9600, 1e-9));
+    // 200 of 9600 ticks on 24 threads: half a core.
+    expect(r.cores, closeTo(0.5, 1e-9));
     expect(r.diskBytesPerSecond, closeTo(10e6, 1));
     expect(r.busy, isFalse);
   });
 
-  test('other programs using more than 10 % of the CPU make it busy', () {
+  test('other programs using more than one core make it busy, on a small PC and a large one', () {
+    // 9600 ticks, 2400 used, 1400 of them the autotuner's: 1000 others' = 2.5 of 24 threads.
     final r = busyBetween(
       _at(0, total: 1000, idle: 500, own: 100),
       _at(4, total: 10600, idle: 7700, own: 1500),
+      processors: 24,
     );
-    // 9600 ticks, 2400 used, 1400 of them the autotuner's: 1000 others' = 10.4 %.
-    expect(r.cpu, closeTo(1000 / 9600, 1e-9));
+    expect(r.cores, closeTo(2.5, 1e-9));
     expect(r.diskBytesPerSecond, isNull);
     expect(r.busy, isTrue);
+    // The same share of the CPU on 8 threads is 0.83 of a core: quiet.
+    final small = busyBetween(
+      _at(0, total: 1000, idle: 500, own: 100),
+      _at(4, total: 10600, idle: 7700, own: 1500),
+      processors: 8,
+    );
+    expect(small.cores, closeTo(8 * 1000 / 9600, 1e-9));
+    expect(small.busy, isFalse);
   });
 
-  test('other programs moving more than 50 MB/s on the drive make it busy', () {
+  test('other programs moving more than 40 MB/s on the drive make it busy', () {
     final r = busyBetween(
       _at(1, total: 0, idle: 0, disk: 1000, ownRead: 0),
       _at(3, total: 4800, idle: 4700, disk: 1000 + 3000000000 + 120000000, ownRead: 3000000000),
+      processors: 24,
     );
     expect(r.diskBytesPerSecond, closeTo(60e6, 1));
     expect(r.busy, isTrue);
@@ -60,6 +72,7 @@ void main() {
     final r = busyBetween(
       _at(0, total: 0, idle: 0, disk: 0),
       _at(2, total: 4800, idle: 4700, disk: 80000000),
+      processors: 24,
     );
     expect(r.diskBytesPerSecond, closeTo(40e6, 1));
     expect(r.busy, isFalse);

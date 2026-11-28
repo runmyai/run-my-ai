@@ -1,11 +1,16 @@
 import 'dart:async';
 import 'dart:io';
 
-/// More than this share of all the CPU time used by other programs counts as busy.
-const busyCpuShare = 0.10;
+import 'win32_busy.dart';
 
-/// More than this many bytes a second read or written on the model's drive by other programs counts as busy.
-const busyDiskBytesPerSecond = 50e6;
+/// Other programs using more than this many cores' worth of CPU time count as busy. Measured with the autotuner under
+/// a known load: with 0.4 of a core of background work its picks stay the same run after run; with one more core kept
+/// busy its reply-thread count already changes. Counted in cores, so it means the same on a PC with 4 cores and with 32.
+const busyCores = 1.0;
+
+/// More than this many bytes a second read or written on the model's drive by other programs counts as busy: the
+/// autotuner's SSD reader count starts to change from about 50 MB/s of other traffic.
+const busyDiskBytesPerSecond = 40e6;
 
 /// The CPU time of the whole PC from /proc/stat's first line, in clock ticks: all of it, and the part spent idle (idle +
 /// waiting for disks). Guest time is left out: it is already counted in user time.
@@ -63,42 +68,53 @@ String? mountSource(String mountinfo, String path) {
   return best;
 }
 
-/// One look at the counters: the PC's CPU time, the autotuner's own CPU time, the drive's bytes and the autotuner's
-/// own read bytes (each null when it could not be read).
+/// One look at the counters: the PC's CPU time over all its processors ([total], and the [idle] part of it), the
+/// autotuner's own CPU time ([own], in the same unit), the drive's bytes and the autotuner's own read bytes (each null
+/// when it could not be read).
 typedef BusySample = ({Duration at, int total, int idle, int own, int? disk, int? ownRead});
 
-/// How busy other programs kept the PC between [first] and [last]: their share of all the CPU time and their bytes a
-/// second on the drive, the autotuner's own part taken out of both.
-({double cpu, double? diskBytesPerSecond, bool busy}) busyBetween(BusySample first, BusySample last) {
+/// How busy other programs kept the PC between [first] and [last]: the cores' worth of CPU time they used (on a PC
+/// with [processors] processors) and their bytes a second on the drive, the autotuner's own part taken out of both.
+({double cores, double? diskBytesPerSecond, bool busy}) busyBetween(
+  BusySample first,
+  BusySample last, {
+  required int processors,
+}) {
   final total = last.total - first.total;
   final used = total - (last.idle - first.idle);
-  final cpu = total <= 0 ? 0.0 : ((used - (last.own - first.own)) / total).clamp(0.0, 1.0);
+  final cores = total <= 0 ? 0.0 : ((used - (last.own - first.own)) / total).clamp(0.0, 1.0) * processors;
   final seconds = (last.at - first.at).inMicroseconds / 1e6;
   double? disk;
   if (seconds > 0 && first.disk != null && last.disk != null) {
     final own = first.ownRead != null && last.ownRead != null ? last.ownRead! - first.ownRead! : 0;
     disk = (last.disk! - first.disk! - own).clamp(0, 1 << 62) / seconds;
   }
-  return (cpu: cpu, diskBytesPerSecond: disk, busy: cpu > busyCpuShare || (disk ?? 0) > busyDiskBytesPerSecond);
+  return (cores: cores, diskBytesPerSecond: disk, busy: cores > busyCores || (disk ?? 0) > busyDiskBytesPerSecond);
 }
 
 /// Watches how busy other programs keep the PC while the process [pid] (the autotuner) runs: the counters are read
-/// every quarter second while it can be seen, and [stop] compares the first look with the last. Linux only: on other
-/// systems [start] gives null and the result counts as measured on a quiet PC.
+/// every quarter second while it can be seen, and [stop] compares the first look with the last. On Linux (/proc) and
+/// Windows (the system's own counters); on other systems [start] gives null and the result counts as measured on a
+/// quiet PC.
 class BusyMeter {
-  BusyMeter._(this._pid, this._drive) {
-    _first = _sample();
-    _timer = Timer.periodic(const Duration(milliseconds: 250), (_) => _last = _sample() ?? _last);
+  BusyMeter._(this._pid, this._drive, [this._win32]) {
+    _first = _look();
+    _timer = Timer.periodic(const Duration(milliseconds: 250), (_) => _last = _look() ?? _last);
   }
 
   /// Starts watching the process [pid]; [modelPath]: the file it reads, whose drive is watched.
   static BusyMeter? start(int pid, String modelPath) {
-    if (!Platform.isLinux) return null;
-    return BusyMeter._(pid, _driveOf(modelPath));
+    if (Platform.isLinux) return BusyMeter._(pid, _driveOf(modelPath));
+    if (Platform.isWindows) {
+      final counters = Win32BusyCounters.open(pid, modelPath);
+      return counters == null ? null : BusyMeter._(pid, null, counters);
+    }
+    return null;
   }
 
   final int _pid;
   final String? _drive;
+  final Win32BusyCounters? _win32;
   final _clock = Stopwatch()..start();
   late final Timer _timer;
   BusySample? _first, _last;
@@ -106,9 +122,19 @@ class BusyMeter {
   /// Whether other programs kept the PC busy; null when it could not be told (the process ended too soon).
   bool? stop() {
     _timer.cancel();
+    _win32?.close();
     final first = _first, last = _last;
     if (first == null || last == null) return null;
-    return busyBetween(first, last).busy;
+    return busyBetween(first, last, processors: Platform.numberOfProcessors).busy;
+  }
+
+  BusySample? _look() {
+    final win32 = _win32;
+    if (win32 == null) return _sample();
+    final c = win32.read();
+    return c == null
+        ? null
+        : (at: _clock.elapsed, total: c.total, idle: c.idle, own: c.own, disk: c.disk, ownRead: c.ownRead);
   }
 
   BusySample? _sample() {

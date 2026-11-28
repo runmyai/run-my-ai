@@ -87,6 +87,8 @@ class LibraryNotifier extends Notifier<LibraryState> {
   ModelFile? _active;
   Future<void>? _activeRun;
   void Function()? _stopActive;
+  var _held = false;        // a model is being tuned: no download runs
+  ModelFile? _heldActive;   // the download stopped for it: it continues first
 
   @override
   LibraryState build() {
@@ -160,7 +162,7 @@ class LibraryNotifier extends Notifier<LibraryState> {
 
   /// Pauses every download (before the models folder moves).
   Future<void> pauseAll() async {
-    for (final f in [..._queue]) {
+    for (final f in [..._queue, ?_heldActive]) {
       pause(f.id);
     }
     final running = _activeRun;
@@ -181,8 +183,35 @@ class LibraryNotifier extends Notifier<LibraryState> {
     _update(downloaded: state.downloaded, downloads: {...state.downloads}..remove(fileId), picked: state.picked);
   }
 
+  /// A model is about to be tuned: the download that is going stops (what is written stays) and none starts until
+  /// [releaseDownloads], so the drive and the CPU are free of the app's own work while the PC is measured. Its row
+  /// shows it as waiting in line, not as paused: the stop is not the user's.
+  Future<void> holdDownloads() async {
+    _held = true;
+    final active = _active, running = _activeRun;
+    // (the one that has just ended, whose tune this is, needs no stop)
+    if (active == null || running == null || state.downloaded.contains(active.id)) return;
+    _heldActive = active;
+    _stopActive?.call();
+    await running;
+  }
+
+  /// The tune is over: the download stopped for it continues (unless it was paused or cancelled meanwhile), then the
+  /// line as before.
+  void releaseDownloads() {
+    _held = false;
+    final file = _heldActive;
+    _heldActive = null;
+    if (file != null &&
+        state.downloads[file.id]?.phase == DownloadPhase.queued &&
+        !_queue.any((f) => f.id == file.id)) {
+      _queue.insert(0, file);
+    }
+    _next();
+  }
+
   void _next() {
-    if (_active != null || _queue.isEmpty) return;
+    if (_held || _active != null || _queue.isEmpty) return;
     final file = _active = _queue.removeAt(0);
     _setStatus(
       file.id,
@@ -198,7 +227,8 @@ class LibraryNotifier extends Notifier<LibraryState> {
       if (done) {
         _finished(file);
       } else if (state.downloads[file.id] case final status?) {
-        _setStatus(file.id, status.as(DownloadPhase.paused));
+        // (stopped for a tune: it waits in line and continues by itself)
+        _setStatus(file.id, status.as(_heldActive?.id == file.id ? DownloadPhase.queued : DownloadPhase.paused));
       }
     } on DownloadFailure catch (e) {
       if (!ref.mounted) return;
