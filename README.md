@@ -52,11 +52,17 @@ Download the file for your system from [Releases](https://github.com/runmyai/run
 
 ## FAQ
 
-**Does it change the model's answers?**
-No. Every expert the model picks is computed, with its full weights in the file's own quantization: no expert skipping, no top-k cut.
+**Does it change the model's answers or skip experts?**
+No. Every expert the model picks is computed, with its full weights in the file's own quantization: no expert skipping, no top-k cut. Computers round numbers slightly differently depending on the order they add them in, so no two engines give bit-identical results. Even llama.cpp gives slightly different results from itself when you only change its batch size. We measured ours against llama.cpp: the difference is no bigger than that.
+
+**What SSD do I need?**
+We suggest an NVMe SSD on PCIe 3.0 or above.
 
 **Will it wear out my SSD?**
-No. SSDs wear when they're written, not when they're read. Running a model only reads.
+No. SSDs wear when they're written, not when they're read. That's why every SSD's endurance rating counts terabytes written (TBW) and nothing else. Running a model only reads.
+
+**Can I use it with Hermes Agent, Pi or my own tools?**
+Yes. Run My AI has a serve mode with an OpenAI-compatible API. Hermes Agent, Pi, or any tool that can use an OpenAI-compatible endpoint can use the models it runs.
 
 **Is it free?**
 Yes. No usage caps, no subscription, and the code is open source under the MIT licence.
