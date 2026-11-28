@@ -367,8 +367,7 @@ class _BenchmarkSettings extends ConsumerWidget {
             label: 'Context length',
             value: length,
             entries: [
-              for (final choice in contextChoices(presets))
-                SelectEntry(id: '${choice.length}', value: choice.length, label: contextLabel(choice.length), enabled: choice.available),
+              for (final n in presets) SelectEntry(id: '$n', value: n, label: contextLabel(n)),
             ],
             onChanged: busy ? null : (n) => notifier.setSetup(setup.copyWith(contextLength: n)),
           ),

@@ -690,20 +690,12 @@ void _tab() {
     expect(problems.where((p) => p.contains('_BenchmarkSettings') || p.contains('SelectBox')), isEmpty, reason: problems.join('\n'));
   });
 
-  testWidgets('the context length lists the preset\'s lengths, and 100k and 200k greyed in their place', (tester) async {
+  testWidgets('the context length lists the preset\'s lengths, each one to be chosen', (tester) async {
     await pump(tester, const BenchmarkState());
     await open(tester, 'benchmark-context');
-    final entries = ['4096', '65536', '100000', '200000'];
-    final tops = [for (final e in entries) tester.getTopLeft(find.byKey(Key('benchmark-context-$e'))).dy];
-    expect(tops, [...tops]..sort(), reason: 'in their numeric place');
-    expect([for (final e in entries) chosable(tester, 'benchmark-context-$e')], [true, true, false, false]);
-    expect(find.descendant(of: find.byType(MenuItemButton), matching: find.text('100k')), findsOneWidget);
-    expect(find.descendant(of: find.byType(MenuItemButton), matching: find.text('200k')), findsOneWidget);
-    // (Greyed: a click does nothing, and the list stays open.)
-    await tester.tap(find.byKey(const Key('benchmark-context-100000')));
-    await tester.pump(const Duration(milliseconds: 250));
-    expect(faceText(tester, 'benchmark-context'), '65k');
-    expect(find.byKey(const Key('benchmark-context-4096')), findsOneWidget);
+    final entries = ['4096', '65536'];
+    expect([for (final e in entries) chosable(tester, 'benchmark-context-$e')], [true, true]);
+    expect(find.byKey(const Key('benchmark-context-100000')), findsNothing, reason: 'not a length of this model');
     await tester.tap(find.byKey(const Key('benchmark-context-4096')));
     await tester.pump(const Duration(milliseconds: 250));
     await tester.pump(const Duration(milliseconds: 250));

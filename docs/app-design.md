@@ -123,6 +123,7 @@ Run from the app folder. `flutter test` runs every file in `test/` and needs no 
 | `folded_text_test.dart`, `cut_title_test.dart` | `FoldedText`; `CutTitle`. |
 | `shortcuts_test.dart` | `listOrder` (the order Alt+Up / Alt+Down walk) and the text-size steps of `PrefsNotifier`. |
 | `settings_page_test.dart` | The Settings page: Storage and Folders closed at first and opening on a click, each description a tooltip on its name and not text on the page, the tooltip shown under the pointer. |
+| `context_lengths_test.dart` | 100k and 200k offered in the chat window's picker in their place, and a chat at either starting the engine with that `-c`. |
 | `about_test.dart` | The engine's `--version` output (parsed, and read from a stand-in program), `appVersion` equal to pubspec.yaml, the bundled licence files equal to their sources, every project of the engine's Thanks section named on the page, and the page itself: opened from Settings, versions, credits, a licence opening, Back. |
 | `colors_test.dart` | The contrast rules of every theme: button, option and focus-ring borders at least 3:1 against the page, text at least 4.5:1, each button state one clear step from the next, rows visible on the page and the sidebar. |
 | `benchmark_test.dart` | A run in `BenchmarkNotifier` with a stand-in engine and machine: the order of its messages in one conversation, nothing saved for it, the phases, the word times, the record, the timing flag added only when the engine lists it, the long prompt cut by the engine's count, Stop, the history and its bound, and the context options. |
@@ -153,7 +154,7 @@ Run from the app folder. `flutter test` runs every file in `test/` and needs no 
 
 ## 8. Auto commands
 
-The Auto profile's command is short: `autoCommand` (`lib/engine/commands.dart`) writes, for each context length in `autoContextLengths` (4k to 262k), the context length, the context cache type and `--moe-stream model`. With that word the engine switches on its own speed-ups for prompts, replies, the CPU, the RAM and the graphics memory, so the app keeps no list of engine flags.
+The Auto profile's command is short: `autoCommand` (`lib/engine/commands.dart`) writes, for each context length in `autoContextLengths` (4k to 262k, 100k and 200k among them), the context length, the context cache type and `--moe-stream model`. With that word the engine switches on its own speed-ups for prompts, replies, the CPU, the RAM and the graphics memory, so the app keeps no list of engine flags.
 
 What depends on the PC comes from the engine's `autotuner` program. The app runs it once per model, right after the model's download is checked (and again when the user presses Tune), keeps its result in `autotuner.json`, and at every start `withTuning` (`lib/engine/tuning.dart`) appends the flags the autotuner recommends (`recommended_args`: the thread counts for replies and prompts, the fast cores, the SSD readers, the card of the expert pool or the shared-memory mode). Without a result the command stands as it is and the engine picks for itself.
 

@@ -76,20 +76,6 @@ class KvCache {
   String get label => '$name ($tag)';
 }
 
-/// The context lengths that have no preset yet: the setup lists them, not to be chosen.
-const unavailableContextLengths = [100000, 200000];
-
-/// The lengths the setup's context dropdown lists: the lengths the model's preset has (to be chosen), and the ones of
-/// [unavailableContextLengths] it has not (greyed), all in their numeric place.
-List<({int length, bool available})> contextChoices(List<int> presets) {
-  bool sameLength(int a, int b) => a ~/ 1000 == b ~/ 1000;
-  return [
-    for (final n in presets) (length: n, available: true),
-    for (final n in unavailableContextLengths)
-      if (!presets.any((p) => sameLength(p, n))) (length: n, available: false),
-  ]..sort((a, b) => a.length.compareTo(b.length));
-}
-
 /// The context length a setup runs with: the one it saved when the model's preset has it, otherwise the default one
 /// (or the closest the preset has below it).
 int contextChoice(List<int> presets, int saved) {

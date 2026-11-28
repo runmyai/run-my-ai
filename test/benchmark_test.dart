@@ -213,22 +213,22 @@ void main() {
   group('context options', () {
     const m = 1000000;
     test('the standard lengths up to the model\'s longest', () {
-      expect(contextOptions(262144).map(contextLabel), ['4k', '8k', '16k', '32k', '65k', '131k', '262k']);
+      expect(contextOptions(262144).map(contextLabel), ['4k', '8k', '16k', '32k', '65k', '100k', '131k', '200k', '262k']);
       expect(contextOptions(300000).last, 262144);
     });
 
     test('at the top of the list', () {
       expect(contextOptions(10485760).map(contextLabel).last, '10M');
-      expect(contextOptions(2097152).map(contextLabel).toList().sublist(7), ['524k', '1M', '2M']);
+      expect(contextOptions(2097152).map(contextLabel).toList().sublist(9), ['524k', '1M', '2M']);
     });
 
     test('a 15M model: after 10M, 15M', () {
-      expect(contextOptions(15000000).map(contextLabel).toList().sublist(10), ['5M', '10M', '15M']);
+      expect(contextOptions(15000000).map(contextLabel).toList().sublist(12), ['5M', '10M', '15M']);
     });
 
     test('above 10M the only further option is the model\'s own longest', () {
       final options = contextOptions(20 * m);
-      expect(options.map(contextLabel).toList().sublist(11), ['10M', '20M']);
+      expect(options.map(contextLabel).toList().sublist(13), ['10M', '20M']);
       expect(options.last, 20 * m);
     });
 
@@ -296,27 +296,12 @@ void main() {
       expect(const BenchmarkSetup().warmups, warmupMessages);
     });
 
-    test('the context dropdown lists the preset\'s lengths, and 100k and 200k greyed in their place', () {
-      const presets = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
-      expect([for (final c in contextChoices(presets)) (contextLabel(c.length), c.available)], [
-        ('4k', true),
-        ('8k', true),
-        ('16k', true),
-        ('32k', true),
-        ('65k', true),
-        ('100k', false),
-        ('131k', true),
-        ('200k', false),
-        ('262k', true),
-      ]);
-      // A length the preset does have is not greyed.
-      expect(contextChoices([4096, 100000]).map((c) => (c.length, c.available)), [(4096, true), (100000, true), (200000, false)]);
-    });
-
     test('a saved context length is kept when the preset has it, else the default one', () {
       const presets = [4096, 8192, 65536, 131072];
       expect(contextChoice(presets, 8192), 8192);
       expect(contextChoice(presets, 100000), 65536, reason: 'no preset for it');
+      expect(contextChoice(autoContextLengths, 100000), 100000, reason: '100k is an Auto length');
+      expect(contextChoice(autoContextLengths, 200000), 200000, reason: '200k is an Auto length');
       expect(contextChoice(presets, 12345), 65536);
       expect(contextChoice(const [4096, 8192], 65536), 8192, reason: 'the closest the preset has below the default');
     });
