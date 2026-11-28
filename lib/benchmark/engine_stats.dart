@@ -66,6 +66,10 @@ Map<String, double> _splitHandoff(Map<String, double> parts, double? copies) {
 /// The part of the token's time that runs beside the others (not added to the token).
 const timeBesideParts = {'GPU'};
 
+/// Whether [parts] split the token's time at all: the SSD wait alone is no split (an engine started without
+/// --moe-stream-timing gives only that).
+bool hasTimeSplit(Map<String, double> parts) => parts.keys.any((k) => k != 'SSD wait' && !timeBesideParts.contains(k));
+
 /// One reading of the engine's counters (they count from when the model was loaded) and gauges.
 class EngineSnapshot {
   const EngineSnapshot({required this.counters, required this.gauges, this.layers = const [], this.layout = const {}});

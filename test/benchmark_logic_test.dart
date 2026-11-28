@@ -712,6 +712,10 @@ void main() {
         'GPU': 8.0,
       });
       expect(timeParts({'layers': 40}), isEmpty);
+      // The SSD wait alone (an engine started without its timing switch) is no split, and draws no bar.
+      expect(hasTimeSplit({'SSD wait': 5.0}), isFalse);
+      expect(hasTimeSplit({'SSD wait': 5.0, 'GPU': 3.0}), isFalse);
+      expect(hasTimeSplit({'SSD wait': 5.0, 'CPU': 12.0}), isTrue);
       // Without the copies' own time the hand-off stays the one part:
       expect(timeParts({'time_per_word': {'handoff_ms': 5.0}}), {'CPU-GPU sync': 5.0});
       // With it, the hand-off is split into the copies and the waiting:

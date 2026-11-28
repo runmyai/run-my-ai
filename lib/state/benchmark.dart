@@ -273,10 +273,9 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       if (insight != null &&
           !EngineFlags.parse(run.flags).arguments.any((a) => a == timingFlag) &&
           await insight.acceptsFlag(timingFlag)) {
-        run = run.withFlags('${run.flags} $timingFlag 1');
         added.add('$timingFlag 1');
       }
-      run = run.forBenchmark();
+      run = run.forBenchmark(added: added.join(' '));
 
       // The readings need a moment to arrive, and the CPU's load is the difference between two readings.
       await monitor.start();
@@ -509,7 +508,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         modelName: modelName,
         contextLength: run.contextLength,
         profileName: profileName,
-        flags: run.flags,
+        flags: [run.flags, ...added].join(' '),
         memoryCapGiB: run.memoryCapGiB,
         vramHeadroom: {
           if (backend is TuneControl)

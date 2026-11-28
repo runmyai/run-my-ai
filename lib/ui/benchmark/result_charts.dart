@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../benchmark/benchmark.dart';
-import '../../benchmark/engine_stats.dart' show timeBesideParts;
+import '../../benchmark/engine_stats.dart' show hasTimeSplit, timeBesideParts;
 import '../../theme.dart';
 import '../buttons.dart';
 import 'chart_colors.dart';
@@ -313,16 +313,16 @@ class TimePerToken extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    if (total <= 0) return const SizedBox.shrink();
+    if (total <= 0 || !hasTimeSplit(parts)) return const SizedBox.shrink();
     final stacked = {for (final e in parts.entries) if (!timeBesideParts.contains(e.key)) e.key: e.value};
     final beside = {for (final e in parts.entries) if (timeBesideParts.contains(e.key)) e.key: e.value};
     final known = stacked.values.fold(0.0, (a, b) => a + b);
     final rest = total - known;
     final shown = <(String, double)>[
       for (final e in stacked.entries) (e.key, e.value),
-      // (The engine's own leftover already came in as a part; this is the gap the app sees between the parts and the
-      // whole token: the server and the app themselves.)
-      if (rest > total * 0.02) (stacked.isEmpty ? 'Everything else' : 'Server and streaming', rest),
+      // (The engine's own leftover already came in as a part; this is the gap between the parts and the whole token:
+      // the server's work around each token, outside its compute.)
+      if (rest > total * 0.02) ('Sampling and server', rest),
     ];
     final width = math.max(total, known);
     return Column(

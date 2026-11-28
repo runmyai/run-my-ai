@@ -917,7 +917,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
   /// How [run] starts an engine: an engine already running is the one asked for only if it was started with the
   /// same flags, memory cap and graphics card headroom.
   @visibleForTesting
-  static String startedWith(EngineRun run) => '${run.memoryCapGiB}\n${run.vramHeadroom.key}\n${run.flags}';
+  static String startedWith(EngineRun run) =>
+      '${run.memoryCapGiB}\n${run.vramHeadroom.key}\n${run.flags}\n${run.addedFlags}';
 
   /// Whether [engine] is the one asked for: running the model [modelId] at the length [run] says, started with its
   /// flags and memory cap. One started another way (a benchmark's test flags left running) is started again.
@@ -1021,7 +1022,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     // user's context cache type from the Settings
     final row = _flagsFor(local, run.vramHeadroom)[run.contextLength];
     final flags = EngineFlags.parse(
-      withVramFree(row == null ? run.flags : withUserChoices(row, run.flags), _vramFree(run.vramHeadroom)),
+      '${withVramFree(row == null ? run.flags : withUserChoices(row, run.flags), _vramFree(run.vramHeadroom))} ${run.addedFlags}',
     );
     final port = serve?.port ?? await EngineProcess.freePort();
     final hosting = serve == null ? null : serveSetup(alias: serve.alias, apiKey: serve.apiKey, environment: flags.environment);

@@ -376,7 +376,9 @@ void main() {
       File('${folder.path}/autotuner').writeAsStringSync(
         '#!/bin/sh\necho tuner >> ${log.path}\nsleep 1\necho \'{"threads": 3}\'\necho tuned >> ${log.path}\n',
       );
-      File('${folder.path}/llama-server').writeAsStringSync('#!/bin/sh\necho engine >> ${log.path}\nexec sleep 300\n');
+      File('${folder.path}/llama-server').writeAsStringSync(
+        '#!/bin/sh\necho "\$@" > ${root.path}/args\necho engine >> ${log.path}\nexec sleep 300\n',
+      );
       await Process.run('chmod', ['+x', '${folder.path}/autotuner', '${folder.path}/llama-server']);
       final data = Directory('${root.path}/data')..createSync();
       FolderSet(
@@ -426,6 +428,15 @@ void main() {
       expect(lines(), ['tuner', 'tuned', 'engine']);
       expect(seen, [file.id, null]);
       expect(engine.savedTune(file)?['threads'], 3);
+    }, skip: Platform.isWindows ? 'the stand-in programs are shell scripts' : null);
+
+    test("a benchmark's added flags reach the engine on top of the Auto command", () async {
+      unawaited(engine.startEngine(
+        file,
+        const EngineRun(flags: '-c 4096', contextLength: 4096).forBenchmark(added: '--moe-stream-timing 1'),
+      ));
+      await until(() => lines().contains('engine'));
+      expect(File('${root.path}/args').readAsStringSync(), contains('--moe-stream-timing 1'));
     }, skip: Platform.isWindows ? 'the stand-in programs are shell scripts' : null);
   });
 }

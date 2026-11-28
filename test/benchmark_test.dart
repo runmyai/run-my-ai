@@ -91,7 +91,7 @@ class _Backend implements Backend, EngineControl {
   }
 
   @override
-  Future<void> startEngine(ModelFile file, EngineRun run, {bool restart = false}) async => calls.add('start:${run.flags}');
+  Future<void> startEngine(ModelFile file, EngineRun run, {bool restart = false}) async => calls.add('start:${[run.flags, if (run.addedFlags.isNotEmpty) run.addedFlags].join(' ')}');
   @override
   Future<void> stopEngine() async => calls.add('stop');
   @override

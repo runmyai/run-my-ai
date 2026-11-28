@@ -590,7 +590,7 @@ class _LivePanelState extends State<_LivePanel> {
               builder: (context) {
                 final parts = timeParts(measuredTurn.engineStats);
                 final totalMs = measuredTurn.replyTokens > 0 ? measuredTurn.replyMillis / measuredTurn.replyTokens : 0.0;
-                if (parts.isEmpty && totalMs <= 0) return const SizedBox.shrink();
+                if (!hasTimeSplit(parts) || totalMs <= 0) return const SizedBox.shrink();
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
