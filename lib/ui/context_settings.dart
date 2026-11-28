@@ -52,13 +52,14 @@ int? kvCacheBytes({required String modelId, required int tokens, required String
   return bytes < 0 ? null : bytes.round();
 }
 
-/// A size in bytes as the picker shows it: GB from a gigabyte on, else MB.
+/// A size in bytes as the picker shows it: MB rounded to a multiple of 25 (never under 25), or GB to one decimal
+/// once the rounded MB reaches 1024.
 String formatKvCacheBytes(int bytes) {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
-  } else {
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
+  const mib = 1024 * 1024;
+  final steps = (bytes / mib / 25).round();
+  final mb = (steps < 1 ? 1 : steps) * 25;
+  if (mb >= 1024) return '${(bytes / (1024 * mib)).toStringAsFixed(1)} GB';
+  return '$mb MB';
 }
 
 /// The size text shown for a quantization at a context length, or null for a model with no formula.
