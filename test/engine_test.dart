@@ -11,8 +11,8 @@ import 'package:runmyai/backend/engine_backend.dart';
 import 'package:runmyai/data/chat_store.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
-import 'package:runmyai/engine/auto_commands.dart';
 import 'package:runmyai/engine/chat_stream.dart';
+import 'package:runmyai/engine/commands.dart';
 import 'package:runmyai/engine/context_fit.dart';
 import 'package:runmyai/engine/engine_flags.dart';
 import 'package:runmyai/engine/engine_process.dart';
@@ -76,17 +76,50 @@ void main() {
     });
 
     test('the commands the models start with leave out what the app supplies', () {
-      for (final auto in [lingAuto, flintAuto]) {
-        expect(auto.keys, [4096, 8192, 16384, 32768, 65536, 131072, 262144]);
-        for (final MapEntry(key: length, value: command) in auto.entries) {
-          final flags = EngineFlags.parse(command);
-          expect(flags.environment['GGML_CUDA_COPY_KERNEL'], '65536');
-          expect(flags.arguments[flags.arguments.indexOf('-c') + 1], '$length');
-          for (final supplied in ['-m', '--host', '--port', 'systemd-run']) {
-            expect(flags.arguments, isNot(contains(supplied)));
-          }
+      expect(autoContextLengths, [4096, 8192, 16384, 32768, 65536, 131072, 262144]);
+      for (final length in autoContextLengths) {
+        final flags = EngineFlags.parse(autoCommand(length, vramFree: '512MiB', elastic: true));
+        expect(flags.environment, isEmpty);
+        expect(flags.arguments[flags.arguments.indexOf('-c') + 1], '$length');
+        expect(flags.arguments[flags.arguments.indexOf('--moe-stream') + 1], 'model');
+        for (final supplied in ['-m', '--host', '--port', 'systemd-run']) {
+          expect(flags.arguments, isNot(contains(supplied)));
         }
       }
+    });
+
+    test('the Auto command: short, the engine and the autotuner fill in the rest', () {
+      expect(
+        autoCommand(8192, vramFree: 'CUDA0=512MiB', elastic: true),
+        '-c 8192 -ctk q8_0 -ctv q8_0 --moe-stream model --moe-stream-vram-free CUDA0=512MiB --moe-stream-elastic 1',
+      );
+      // a built-in GPU's memory is the RAM: fixed memory
+      expect(autoCommand(8192, vramFree: 'CUDA0=512MiB'), isNot(contains('elastic')));
+      // no card: the CPU, no graphics memory flags, fixed memory
+      expect(autoCommand(8192, elastic: true), '-c 8192 -ctk q8_0 -ctv q8_0 --moe-stream model --device none');
+      expect(autoCommand(4096, vramFree: '1GiB', modelFlags: ['--x {models}/a.bin']), contains('--moe-stream model --x {models}/a.bin '));
+    });
+
+    test('the model\'s data files next to it are named to the engine, with a graphics card in use', () {
+      bool there(String p) => p == '/m/a.gguf.correction' || p == '/m/a.gguf.vram-experts.json';
+      const base = ['-c', '4096', '--moe-stream', 'model'];
+      expect(withModelData(base, '/m/a.gguf', exists: there), [
+        ...base, '--moe-stream-correction', '/m/a.gguf.correction', '--moe-stream-vram-experts-file', '/m/a.gguf.vram-experts.json',
+      ]);
+      // only the files that are there (a model without a correction file)
+      expect(withModelData(base, '/m/a.gguf', exists: (p) => p.endsWith('.json')), [
+        ...base, '--moe-stream-vram-experts-file', '/m/a.gguf.vram-experts.json',
+      ]);
+      // on the CPU the engine keeps its own default; a flag the command has keeps its file
+      expect(withModelData([...base, '--device', 'none'], '/m/a.gguf', exists: there), [...base, '--device', 'none']);
+      expect(
+        withModelData([...base, '--moe-stream-correction', '/m/other.correction'], '/m/a.gguf', exists: there),
+        [...base, '--moe-stream-correction', '/m/other.correction', '--moe-stream-vram-experts-file', '/m/a.gguf.vram-experts.json'],
+      );
+      // the word `model` still gets the file; a command that does not stream is left alone
+      expect(withModelData(['--moe-stream', 'model', '--moe-stream-correction', 'model', '--device', 'none'], '/m/a.gguf', exists: there),
+          ['--moe-stream', 'model', '--moe-stream-correction', '/m/a.gguf.correction', '--device', 'none']);
+      expect(withModelData(['-c', '4096'], '/m/a.gguf', exists: there), ['-c', '4096']);
     });
   });
 

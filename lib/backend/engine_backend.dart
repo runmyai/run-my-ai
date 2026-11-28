@@ -11,7 +11,6 @@ import '../benchmark/hardware.dart';
 import '../benchmark/nvml.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
-import '../engine/auto_commands.dart';
 import '../engine/commands.dart';
 import '../engine/chat_states.dart';
 import '../engine/chat_stream.dart';
@@ -31,9 +30,8 @@ import 'backend.dart';
 class _LocalModel {
   const _LocalModel({
     required this.model,
-    required this.flags,
-    required this.smallFlags,
-    required this.cpuFlags,
+    this.dataFlags = const [],
+    this.cardDataFlags = const [],
     this.thinkingSwitch = false,
   });
 
@@ -42,10 +40,9 @@ class _LocalModel {
   /// The file the engine loads: the weights, the first of the model's files.
   String get path => model.files.first.parts.first;
 
-  /// One command per context length, for a large GPU, a small one, and none.
-  final Map<int, String> flags, smallFlags, cpuFlags;
-
-  /// Its layer count, its first MoE layer, and one layer's experts in GiB (for the two-card layout).
+  /// Its data files that are not named after the model file ({models} = its folder): on every PC ([dataFlags]), and
+  /// with a graphics card in use ([cardDataFlags]). The others are found by their name (withModelData).
+  final List<String> dataFlags, cardDataFlags;
 
   /// Its thinking can be turned off.
   final bool thinkingSwitch;
@@ -155,9 +152,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_lingFile],
       ),
-      flags: lingAuto,
-      smallFlags: lingAutoSmall,
-      cpuFlags: lingAutoCpu,
       thinkingSwitch: true,
     ),
     _LocalModel(
@@ -171,9 +165,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.always,
         files: [_flintFile],
       ),
-      flags: flintAuto,
-      smallFlags: flintAutoSmall,
-      cpuFlags: flintAutoCpu,
     ),
     _LocalModel(
       model: CatalogModel(
@@ -186,9 +177,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
         thinking: ModelThinking.optional,
         files: [_qwenFile],
       ),
-      flags: qwenAuto,
-      smallFlags: qwenAutoSmall,
-      cpuFlags: qwenAutoCpu,
+      dataFlags: ['--moe-stream-correction {models}/Qwen3.8-Flash-Next-WV-v5-3.5bpw.correction'],
+      cardDataFlags: ['--moe-stream-vram-experts-file {models}/Qwen3.8-Flash-Next-WV-v5-3.5bpw.vram-experts.json'],
       thinkingSwitch: true,
     ),
   ];
@@ -281,7 +271,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       final meter = BusyMeter.start(p.pid, model);
       final out = p.stdout.transform(utf8.decoder).join();
       unawaited(p.stderr.drain<void>());
-      // a hung autotuner (a broken driver, a stalled disk) is stopped: the engine then starts with the table's values
+      // a hung autotuner (a broken driver, a stalled disk) is stopped: the engine then starts with its own picks
       final code = await p.exitCode.timeout(const Duration(seconds: 30), onTimeout: () {
         p.kill();
         return -1;
@@ -301,7 +291,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
       }));
       return t;
     } on Exception {
-      return null;   // the table's values then stand
+      return null;   // the engine's own picks then stand
     } finally {
       if (_tuning.value == id) _tuning.value = null;
     }
@@ -313,11 +303,6 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     await _tuneRun;
     final file = local.model.files.first;
     return savedTune(file) ?? await tune(file);
-  }
-
-  double get _largestCardGiB {
-    final cards = _cards;
-    return cards.isEmpty ? 0.0 : cards.map((c) => c.mib).reduce(max) / 1024;
   }
 
   /// The cards the engine can use: the autotuner's list ([cardsFrom]: separate cards of any size and make, a built-in GPU
@@ -348,27 +333,22 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     return cards.isEmpty ? vramSize(headroom.of('')) : vramFreeValue(cards, [for (final k in keys) headroom.of(k)]);
   }
 
-  /// The model's commands for this machine: a large GPU (10 GiB and up), a small one (4 GiB and up), or none, by the
-  /// largest card. With several cards all of them share the model, filled fastest first (cardFlags).
-  /// shortcut: three kinds of machine from the card's memory alone; the full autotuner replaces this
+  /// The model's Auto commands on this PC, one per context length (autoCommand). The app decides only what is the
+  /// user's: which cards are used (the autotuner's list: separate cards, or a built-in GPU with 24 GiB or more; none =
+  /// the CPU), the graphics memory kept free on each, and elastic RAM beside a separate card (a built-in GPU's memory
+  /// is the RAM, so it runs with fixed memory). Everything that depends on the PC's speed - threads, fast cores, SSD
+  /// readers, the card of the expert pool - is the autotuner's, put in when the engine starts.
   Map<int, String> _flagsFor(_LocalModel m, VramHeadroom vramHeadroom) {
-    final cards = _cards;
-    final gib = _largestCardGiB;
-    final table = gib >= 10 ? m.flags : (gib >= 4 ? m.smallFlags : m.cpuFlags);
-    if (identical(table, m.cpuFlags)) return table;
-    // elastic RAM only beside a separate card: a built-in GPU's memory is the RAM, so it runs with fixed memory
-    final flags = sharesRam ? {for (final e in table.entries) e.key: e.value.replaceAll(' --moe-stream-elastic 1', '')} : table;
-    // Windows: the copy from RAM to the GPU without waiting measured slower there (7 of 7 pairs)
-    final extra = [
-      if (Platform.isWindows) '--moe-stream-async-h2d 0',
-      if (cards.length > 1 && cards.every((c) => c.name.isNotEmpty))
-        ...cardFlags(cards)
-      // one card: named, so a built-in GPU chosen for lack of a separate card is the one used
-      else if (cards.length == 1 && cards[0].name.isNotEmpty)
-        '--device ${cards[0].name}',
-    ].join(' ');
-    final free = _vramFree(vramHeadroom);
-    return {for (final e in flags.entries) e.key: withVramFree(extra.isEmpty ? e.value : '${e.value} $extra', free)};
+    final none = _cards.isEmpty;
+    return {
+      for (final length in autoContextLengths)
+        length: autoCommand(
+          length,
+          vramFree: none ? null : _vramFree(vramHeadroom),
+          elastic: !sharesRam,
+          modelFlags: [...m.dataFlags, if (!none) ...m.cardDataFlags],
+        ),
+    };
   }
 
   static _LocalModel _local(ModelFile file) => _models.firstWhere((m) => m.model.files.contains(file));
@@ -427,7 +407,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     final read = modelContextLength(_modelPath(local));
     // (Not kept until the file is there: a model downloaded later is read then.)
     if (read != null) _maxContexts[file.id] = read;
-    return read ?? local.flags.keys.reduce(max);
+    return read ?? autoContextLengths.last;
   }
 
   /// The longest context each model file says it can run with, once read.
@@ -1019,7 +999,7 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
     if (!File(program).existsSync()) throw EngineFailure('The engine is not in this folder: $folder');
     if (!File(_modelPath(local)).existsSync()) throw EngineFailure('The model file is not on this computer: ${_modelPath(local)}');
     final tuned = await _tuned(local);
-    // the table's row as the autotuner's card list now picks it (the first start may have shown another), with the
+    // the Auto command as the autotuner's card list makes it now (the first start may have shown another), with the
     // user's context cache type from the Settings
     final row = _flagsFor(local, run.vramHeadroom)[run.contextLength];
     final flags = EngineFlags.parse(

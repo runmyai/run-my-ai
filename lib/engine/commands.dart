@@ -104,7 +104,7 @@ String withVramFree(String command, String value) {
 String withoutRamFree(String command) =>
     command.replaceAll(RegExp(r'(^|\s)--moe-stream-ram-free([ =])\S+'), '').trim();
 
-/// [row] (an Auto command as the table gives it now) with what the user chose in [chosen] (the command the Settings made):
+/// [row] (an Auto command as it is made now) with what the user chose in [chosen] (the command the Settings made):
 /// Memory headroom (--moe-stream-ram-free, or none) and the context cache type.
 String withUserChoices(String row, String chosen) {
   final free = RegExp(r'(^|\s)--moe-stream-ram-free[ =](\S+)').firstMatch(chosen);
@@ -113,19 +113,46 @@ String withUserChoices(String row, String chosen) {
   return kv == null ? row : withKvType(row, kv[2]!);
 }
 
+/// The context lengths the Auto profile offers.
+const autoContextLengths = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+
+/// The Auto command for [length]: the context length, the context cache type the app starts with, and
+/// `--moe-stream model`, with which the engine switches on its own speed-ups for prompts, replies, the CPU, the RAM
+/// and the graphics memory. What depends on the PC comes from the autotuner at start (withTuning). The rest is the
+/// user's or the model's:
+/// - [vramFree]: the graphics memory kept free on each card (null: no card is used - the engine runs on the CPU);
+/// - [elastic]: the RAM follows the other programs' memory (beside a separate card only);
+/// - [modelFlags]: the model's own data files, where they are not named after the model file.
+String autoCommand(int length, {String? vramFree, bool elastic = false, List<String> modelFlags = const []}) => [
+  '-c $length -ctk q8_0 -ctv q8_0 --moe-stream model',
+  ...modelFlags,
+  if (vramFree == null) '--device none' else '--moe-stream-vram-free $vramFree',
+  if (vramFree != null && elastic) '--moe-stream-elastic 1',
+].join(' ');
+
 /// [args] with the model's data taken from separate files next to the model file at [modelPath] where they exist
-/// (`<model>.correction`, `<model>.vram-experts.json`), instead of the copy inside the model file (`model`): an update of
-/// that data then downloads a few MB, not the model. [exists] is for tests.
+/// (`<model>.correction`, `<model>.vram-experts.json`), instead of the copy inside the model file: an update of that data
+/// then downloads a few MB, not the model. A flag that says `model` gets the file; with a graphics card in use a flag
+/// the command does not have is added (the engine's own default is the copy inside the model file). [exists] is for
+/// tests.
 List<String> withModelData(List<String> args, String modelPath, {bool Function(String path)? exists}) {
   final there = exists ?? (String p) => File(p).existsSync();
   const files = {'--moe-stream-correction': '.correction', '--moe-stream-vram-experts-file': '.vram-experts.json'};
-  return [
+  final out = [
     for (var i = 0; i < args.length; i++)
       if (i > 0 && args[i] == 'model' && files[args[i - 1]] != null && there('$modelPath${files[args[i - 1]]}'))
         '$modelPath${files[args[i - 1]]}'
       else
         args[i],
   ];
+  final device = out.indexOf('--device');
+  final onCpu = device >= 0 && device + 1 < out.length && out[device + 1] == 'none';
+  if (out.contains('--moe-stream') && !onCpu) {
+    for (final MapEntry(key: flag, value: ending) in files.entries) {
+      if (!out.contains(flag) && there('$modelPath$ending')) out.addAll([flag, '$modelPath$ending']);
+    }
+  }
+  return out;
 }
 
 /// The smallest context length a command may use.

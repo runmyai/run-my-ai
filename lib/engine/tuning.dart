@@ -15,44 +15,20 @@ Map<String, dynamic>? parseAutotunerJson(String stdout) {
   return null;
 }
 
-/// The table's command with the measured settings put in: -t (replies), -tb (prompts), the fast cores, the SSD readers.
+/// [args] with the flags the autotuner recommends for this PC and model put in (`recommended_args` of its result [t]:
+/// `--moe-stream model`, the thread counts for replies and prompts, the fast cores, the SSD readers, the card of the
+/// expert pool or the shared-memory mode). A flag the command names already keeps the command's value. Without a result
+/// (the autotuner is missing, failed or was stopped) the command stands as it is: the engine then picks for itself.
 List<String> withTuning(List<String> args, Map<String, dynamic>? t) {
-  if (t == null) return args;
+  final rec = [for (final a in (t?['recommended_args'] as List?) ?? const []) '$a'];
   final out = [...args];
-  final threads = t['threads'] as int;
-  // the autotuner names the fast cores only when it measured them clearly faster than all cores, at this thread count: one
-  // thread per fast core as a mask, and as a range too when they are numbered in one run from 0
-  final mask = t['fast_mask'] as String? ?? '', fast = t['fast_cpus'] as String? ?? '';
-  if (mask.isNotEmpty) {
-    out.addAll(['--cpu-mask', mask]);
-  } else if (fast.isNotEmpty) {
-    out.addAll(['--cpu-range', fast]);
+  for (var i = 0; i < rec.length; i++) {
+    // (no recommended value starts with a dash: a model word, counts, a hex mask, a device name)
+    final valued = i + 1 < rec.length && !rec[i + 1].startsWith('-');
+    if (!out.contains(rec[i])) out.addAll([rec[i], if (valued) rec[i + 1]]);
+    if (valued) i++;
   }
-  // prompts are compute-bound and take every core: without this their threads would be kept on the fast cores too
-  if (t['logical_cores'] case final int n when n > 1 && (mask.isNotEmpty || fast.isNotEmpty)) {
-    out.addAll(['--cpu-range-batch', '0-${n - 1}']);
-  }
-  final i = out.indexOf('-t');
-  if (i >= 0 && i + 1 < out.length) out[i + 1] = '$threads';
-  if (t['threads_batch'] case final int tb when tb > threads) out.addAll(['-tb', '$tb']);
-  if (t['io_threads'] case final int io) out.addAll(['--moe-stream-io-threads', '$io']);
   return out;
-}
-
-/// Several cards share the model, filled fastest first (the autotuner's measured read speed): the slowest card runs the first
-/// layers with the expert pool, RAM and SSD behind it, and each faster card runs a run of the last layers completely, as
-/// whole layers - as many as its memory holds while it keeps its VRAM headroom: the engine counts them (`X=auto`). One
-/// hand-over between cards per run of layers. Measured with two RTX 3060: Flint 72.8 tok/s against 53.2 on one card, Qwen
-/// 25.2 against 19.2, long prompts faster too.
-/// The engine fills the first card named `auto` first (it gets the very last layers), then the next: the faster cards are
-/// named fastest first, so the fastest card is filled fully before the next.
-List<String> cardFlags(List<({String name, int mib})> cards) {
-  final pool = cards.last, fast = cards.sublist(0, cards.length - 1);
-  return [
-    '--device', [pool.name, for (final c in fast) c.name].join(','),
-    '--moe-stream-vram-device', pool.name,
-    for (final c in fast) ...['--moe-stream-gpu-layers-device', '${c.name}=auto'],
-  ];
 }
 
 /// A size of graphics card memory as the engine reads it, in MiB.
