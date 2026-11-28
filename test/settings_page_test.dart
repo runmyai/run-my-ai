@@ -1,4 +1,5 @@
-// The Settings page (lib/ui/pages/settings_page.dart): Storage and Folders as drop-downs that start closed, each
+// The Settings page (lib/ui/pages/settings_page.dart): Folders as a drop-down that starts closed (its rows in order, the
+// saved chat states' disk limit inside their row), each
 // setting's description shown as a tooltip on its name instead of as text under it, and the KV cache quantization
 // picker (lib/ui/context_settings.dart), which sets each length's cache type and never the chat's context length, and
 // the sharing choice as one small line at the end of the page.
@@ -71,15 +72,12 @@ void main() {
     );
   }
 
-  testWidgets('Storage and Folders start closed and open on a click', (tester) async {
+  testWidgets('Folders starts closed and opens on a click; there is no Storage drop-down', (tester) async {
     await show(tester);
+    expect(find.byKey(const Key('fold-Storage')), findsNothing);
+    expect(find.text('Storage'), findsNothing);
     expect(find.byKey(const Key('state-limit')), findsNothing);
     expect(find.byKey(const Key('folder-path-models')), findsNothing);
-
-    await tester.tap(find.byKey(const Key('fold-Storage')));
-    await tester.pump();
-    expect(find.byKey(const Key('state-limit')), findsOneWidget);
-    expect(find.byKey(const Key('folder-path-models')), findsNothing, reason: 'Folders stays closed');
 
     await tester.tap(find.byKey(const Key('fold-Folders')));
     await tester.pump();
@@ -89,15 +87,54 @@ void main() {
     expect(find.byKey(const Key('folder-path-main')), findsNothing, reason: 'the main folder is only in the first start');
   });
 
+  testWidgets('the folders are in order: engine, chats, saved chat states, models, then the folders read under models', (
+    tester,
+  ) async {
+    await show(tester);
+    await tester.tap(find.byKey(const Key('fold-Folders')));
+    await tester.pump();
+    final tops = [
+      for (final id in ['engine', 'chats', 'cache', 'models']) tester.getTopLeft(find.byKey(Key('folder-path-$id'))).dy,
+      tester.getTopLeft(find.text('Also read models from')).dy,
+    ];
+    expect(tops, [...tops]..sort());
+    expect(
+      tester.getTopLeft(find.text('Also read models from')).dx,
+      greaterThan(tester.getTopLeft(find.text('Models')).dx),
+      reason: 'indented under Models',
+    );
+  });
+
+  testWidgets('the disk-space limit is a field in the saved chat states row and saves the setting', (tester) async {
+    await show(tester);
+    await tester.tap(find.byKey(const Key('fold-Folders')));
+    await tester.pump();
+    final field = find.byKey(const Key('state-limit'));
+    expect(field, findsOneWidget);
+    expect(find.text('Up to'), findsOneWidget);
+    // In the same row as the folder's path: level with it, below the chats row and above the models row.
+    final y = tester.getCenter(field).dy;
+    expect(y, greaterThan(tester.getBottomLeft(find.byKey(const Key('folder-path-chats'))).dy));
+    expect(y, lessThan(tester.getTopLeft(find.byKey(const Key('folder-path-models'))).dy));
+    expect(find.text('Saved chats'), findsNothing, reason: 'no separate setting with its own name');
+
+    await tester.enterText(field, '25');
+    await tester.pump();
+    expect(container.read(prefsProvider).stateLimitGiB, 25);
+    await tester.enterText(field, '0');
+    await tester.pump();
+    expect(container.read(prefsProvider).stateLimitGiB, 25, reason: 'a limit of 0 or less is not taken');
+    await tester.enterText(field, 'x');
+    await tester.pump();
+    expect(container.read(prefsProvider).stateLimitGiB, 25, reason: 'nor text that is not a number');
+  });
+
   testWidgets('descriptions are tooltips on the names, never text on the page', (tester) async {
     await show(tester);
-    await tester.tap(find.byKey(const Key('fold-Storage')));
     await tester.tap(find.byKey(const Key('fold-Folders')));
     await tester.pump();
     for (final description in [
       'A sound when a response finishes.',
-      'How much disk space chats may use to continue quickly. When it is full the oldest are removed; your chats '
-          'themselves are never touched.',
       foldersAbout,
       'Downloaded models go here.',
       'Your chats, one file each.',
