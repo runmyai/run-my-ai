@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/prefs.dart';
 import '../../theme.dart';
+import 'setting_name.dart' show descriptionTooltipWait;
 import '../welcome.dart' show shareBenchmarksLabel, shareBenchmarksNote;
 
 /// Whether benchmark results and app stats may be shared: one small, quiet line (a small box and muted text), the same
@@ -56,7 +57,7 @@ class PrivacySection extends ConsumerWidget {
                           Text(shareBenchmarksNote, style: TextStyle(fontSize: 11.5, color: c.textMuted)),
                         ],
                       )
-                    : Tooltip(message: shareBenchmarksNote, child: label),
+                    : Tooltip(message: shareBenchmarksNote, waitDuration: descriptionTooltipWait, child: label),
               ),
             ],
           ),

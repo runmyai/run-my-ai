@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../theme.dart';
 import '../clicky.dart';
+import '../settings/setting_name.dart' show descriptionTooltipWait;
 
 /// A heading that opens its content when clicked: the way the Benchmark tab keeps detail out of the first look (and
 /// Settings its Storage and Folders).
@@ -28,7 +29,7 @@ class Fold extends StatefulWidget {
   /// The title's look, when it is not the small grey one.
   final TextStyle? titleStyle;
 
-  /// Shown when the pointer rests on the title.
+  /// Shown when the pointer has rested on the title for [descriptionTooltipWait].
   final String? tooltip;
 
   @override
@@ -92,5 +93,7 @@ class _FoldState extends State<Fold> {
     );
   }
 
-  Widget _withTooltip(Widget title) => widget.tooltip == null ? title : Tooltip(message: widget.tooltip, child: title);
+  Widget _withTooltip(Widget title) => widget.tooltip == null
+      ? title
+      : Tooltip(message: widget.tooltip, waitDuration: descriptionTooltipWait, child: title);
 }

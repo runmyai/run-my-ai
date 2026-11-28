@@ -24,6 +24,7 @@ import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/buttons.dart';
 import 'package:runmyai/ui/pages/settings_page.dart';
 import 'package:runmyai/ui/settings/folders_section.dart';
+import 'package:runmyai/ui/settings/setting_name.dart';
 import 'package:runmyai/ui/welcome.dart' show shareBenchmarksLabel, shareBenchmarksNote;
 
 /// The app's folders in the test's folder.
@@ -186,17 +187,29 @@ void main() {
     expect(find.byIcon(Icons.info_outline), findsNothing, reason: 'no info buttons');
   });
 
-  testWidgets('resting the pointer on a name shows its description', (tester) async {
+  testWidgets('a description shows only after the pointer has rested on the name for 2 seconds', (tester) async {
     await show(tester);
     const description = 'A sound when a response finishes.';
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(find.text('Notification Sound')));
-    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(milliseconds: 1900));
+    expect(find.text(description), findsNothing, reason: 'not yet');
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 200));
     expect(find.text(description), findsOneWidget);
     await mouse.moveTo(Offset.zero);
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('every description tooltip waits the same 2 seconds', (tester) async {
+    await show(tester);
+    expect(descriptionTooltipWait, const Duration(seconds: 2));
+    for (final message in ['A sound when a response finishes.', foldersAbout, shareBenchmarksNote]) {
+      final tooltip = find.ancestor(of: find.byTooltip(message), matching: find.byType(Tooltip)).first;
+      expect(tester.widget<Tooltip>(tooltip).waitDuration, descriptionTooltipWait, reason: message);
+    }
   });
 
   testWidgets('the KV cache block sets each length\'s cache type and has no buttons that pick a length', (tester) async {
