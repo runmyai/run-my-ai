@@ -201,6 +201,13 @@ void main() {
       expect(openedOld.tokenGaps, [10.0, 20.0, 30.0]);
       expect(openedOld.tokenMillis, [10.0, 20.0, 30.0]);
       expect(openedOld.timeParts, {'CPU-GPU sync': 5.0});
+
+      // A run of one test saved before a run could take several stands for that test, made from its headline.
+      final one = opened.testResults.single;
+      expect((one.testId, one.label, one.turn.replyTokens, one.turn.promptTokens), ('reply', 'Story chat', 50, 100));
+      expect(one.turn.tokens, [10, 20, 30]);
+      final prompt = BenchmarkResult.fromJson({...old, 'promptLabel': 'Prompt 25k'}).testResults.single;
+      expect((prompt.testId, prompt.isReplySpeed, prompt.test.size), ('prompt-25k', false, '25k'));
     });
 
     test('a token has its place on the time axis', () {

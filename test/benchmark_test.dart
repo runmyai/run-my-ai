@@ -55,6 +55,9 @@ class _Backend implements Backend, EngineControl {
   final texts = <String>[];
   final caps = <int?>[];
 
+  /// The whole conversation each reply was asked for.
+  final asked = <List<ChatMessage>>[];
+
   /// The request settings of each reply.
   final runs = <EngineRun>[];
 
@@ -74,6 +77,7 @@ class _Backend implements Backend, EngineControl {
     int? maxTokens,
   }) async* {
     prompts.add(messages.length);
+    asked.add([...messages]);
     texts.add(messages.last.text);
     caps.add(maxTokens);
     runs.add(run);
@@ -267,8 +271,8 @@ void main() {
       expect(BenchmarkTest.all.map((t) => t.label), ['Reply speed', 'Prompt 8k', 'Prompt 25k', 'Prompt 50k', 'Prompt 100k']);
       expect(BenchmarkTest.all.map((t) => t.promptTokens), [null, 8000, 25000, 50000, 100000]);
       expect(BenchmarkTest.all.map((t) => t.replyCap), [2000, 200, 200, 200, 200]);
-      expect(BenchmarkTest.replySpeed.description, 'Two warm-up messages, then a long story.');
-      expect(BenchmarkTest.prompts[1].description, 'Two warm-up messages, then a story of 25k tokens and a short review.');
+      expect(BenchmarkTest.replySpeed.description, 'a long story');
+      expect(BenchmarkTest.prompts[1].description, 'a story of 25k tokens and a short review');
     });
 
     test('every prompt test has a story of its own in the app, longer than three characters for each of its tokens', () {
@@ -322,9 +326,8 @@ void main() {
 
     test('opens with the defaults, keeping the context length', () {
       final setup = BenchmarkSetup.fromJson(before);
-      expect((setup.contextLength, setup.kvCache, setup.test), (32768, KvCache.q8, BenchmarkTest.replySpeed));
+      expect((setup.contextLength, setup.kvCache, setup.tests), (32768, KvCache.q8, BenchmarkSetup.defaultTests));
       expect(setup.warmups, warmupMessages, reason: 'the warm-ups are the test\'s, not the saved ones');
-      expect(setup.replyLength, 2000);
     });
 
     test('a setup with nothing, or with the wrong kinds of values, is the default one', () {
@@ -334,15 +337,15 @@ void main() {
         const {'contextLength': null, 'kvCache': 'q5_9', 'test': 'prompt-1m'},
       ]) {
         final setup = BenchmarkSetup.fromJson(json);
-        expect((setup.contextLength, setup.kvCache, setup.test), (defaultContextLength, KvCache.q8, BenchmarkTest.replySpeed), reason: '$json');
+        expect((setup.contextLength, setup.kvCache, setup.tests), (defaultContextLength, KvCache.q8, BenchmarkSetup.defaultTests), reason: '$json');
       }
     });
 
     test('what it writes now reads back', () {
-      final setup = BenchmarkSetup(contextLength: 8192, kvCache: KvCache.fp16, test: BenchmarkTest.prompts.last);
-      expect(setup.toJson(), {'contextLength': 8192, 'kvCache': 'fp16', 'test': 'prompt-100k'});
+      final setup = BenchmarkSetup(contextLength: 8192, kvCache: KvCache.fp16, tests: [BenchmarkTest.prompts.last]);
+      expect(setup.toJson(), {'contextLength': 8192, 'kvCache': 'fp16', 'tests': ['prompt-100k']});
       final again = BenchmarkSetup.fromJson(setup.toJson());
-      expect((again.contextLength, again.kvCache, again.test), (8192, KvCache.fp16, BenchmarkTest.prompts.last));
+      expect((again.contextLength, again.kvCache, again.tests.single), (8192, KvCache.fp16, BenchmarkTest.prompts.last));
     });
   });
 
@@ -476,7 +479,7 @@ void main() {
     test('a prompt test sends its own story and then its request, cut to its size by the engine\'s own count', () async {
       await open(_InsightBackend());
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(BenchmarkSetup(test: BenchmarkTest.prompts.first));
+      notifier.setSetup(BenchmarkSetup(tests: [BenchmarkTest.prompts.first]));
       await notifier.start(_file, 'M', 65536);
       final r = container.read(benchmarkProvider).result!;
       expect((r.promptLabel, r.replyLength), ('Prompt 8k', 200));
@@ -499,7 +502,7 @@ void main() {
         }
         await open(_InsightBackend());
         final notifier = container.read(benchmarkProvider.notifier);
-        notifier.setSetup(BenchmarkSetup(test: test));
+        notifier.setSetup(BenchmarkSetup(tests: [test]));
         await notifier.start(_file, 'M', 262144);
         expect(backend.texts.take(2), [
           'Hello bro, how are you? what are you doing? tell me in 5 sentences.',
@@ -522,6 +525,53 @@ void main() {
       }
     });
 
+    test('several tests: the warm-ups once, then each test in order from right after the warm-ups, one result', () async {
+      await open(_InsightBackend());
+      final notifier = container.read(benchmarkProvider.notifier);
+      // (Chosen out of order: they run in the list's order, the reply speed first and the prompts small to large.)
+      notifier.setSetup(const BenchmarkSetup(tests: []).toggled(BenchmarkTest.prompt25k).toggled(BenchmarkTest.prompts.first).toggled(BenchmarkTest.replySpeed));
+      expect(container.read(benchmarkProvider).setup.tests, [BenchmarkTest.replySpeed, BenchmarkTest.prompts.first, BenchmarkTest.prompt25k]);
+      await notifier.start(_file, 'M', 65536);
+      expect(backend.texts.take(3), [...warmupMessages, replySpeedRequest]);
+      expect(backend.texts, hasLength(5), reason: 'no warm-up between the tests');
+      expect(backend.texts[3], startsWith('Story ${BenchmarkTest.prompts.first.story}'));
+      expect(backend.texts[4], startsWith('Story ${BenchmarkTest.prompt25k.story}'));
+      // Each test is sent after the warm-ups and their replies, without the test before it.
+      expect(backend.prompts, [1, 3, 5, 5, 5]);
+      for (final later in backend.asked.skip(3)) {
+        expect([for (final m in later.take(4)) (m.role, m.text)], [for (final m in backend.asked[2].take(4)) (m.role, m.text)]);
+      }
+      expect(backend.caps, [2000, 2000, 2000, 200, 200]);
+      // The run's conversation is erased once, at its end, and the engine stopped.
+      expect(backend.calls.where((c) => c == 'erase'), hasLength(1));
+      expect(backend.calls.last, 'stop');
+      final r = container.read(benchmarkProvider).result!;
+      expect([for (final t in r.tests) t.testId], ['reply', 'prompt-8k', 'prompt-25k']);
+      expect(r.turns.map((t) => t.warmup), [true, true, false, false, false]);
+      expect(r.tests.every((t) => t.timeParts.isNotEmpty), isTrue);
+      expect(r.tests[2].promptText, startsWith('Story ${BenchmarkTest.prompt25k.story}'));
+      // The headline is the reply speed's; the label names every test.
+      expect((r.promptLabel, r.replyLength, r.promptText), ('Reply speed + Prompt 8k + Prompt 25k', 2000, replySpeedRequest));
+      // One saved result holds every test, and reads back whole.
+      final saved = (await store.benchmarks()).single;
+      final again = BenchmarkResult.fromJson((jsonDecode(saved.$2) as Map).cast<String, Object?>());
+      expect([for (final t in again.testResults) (t.testId, t.turn.promptTokens, t.timeParts.keys.length)], [
+        for (final t in r.tests) (t.testId, t.turn.promptTokens, t.timeParts.keys.length),
+      ]);
+    });
+
+    test('a test that does not fit the context is left out of the run; the others run', () async {
+      await open(_Backend());
+      final notifier = container.read(benchmarkProvider.notifier);
+      expect(container.read(benchmarkProvider).setup.tests, BenchmarkSetup.defaultTests);
+      expect(notifier.problem(contextLength: 4096), isNull);
+      await notifier.start(_file, 'M', 4096);
+      expect(backend.texts, [...warmupMessages, replySpeedRequest]);
+      expect(container.read(benchmarkProvider).result!.tests.single.testId, 'reply');
+      notifier.setSetup(const BenchmarkSetup(tests: []));
+      expect(notifier.problem(contextLength: 4096), 'Choose a test.');
+    });
+
     test('a run always uses the model\'s automatic preset at the chosen length, whatever the KV cache choice', () async {
       await open(_Backend());
       final notifier = container.read(benchmarkProvider.notifier);
@@ -542,10 +592,10 @@ void main() {
     test('a prompt test that does not fit the context cannot start; the reply-speed test always can', () async {
       await open(_Backend());
       final notifier = container.read(benchmarkProvider.notifier);
-      notifier.setSetup(const BenchmarkSetup(test: BenchmarkTest.replySpeed));
+      notifier.setSetup(const BenchmarkSetup(tests: [BenchmarkTest.replySpeed]));
       expect(notifier.problem(contextLength: 4096), isNull);
-      notifier.setSetup(BenchmarkSetup(test: BenchmarkTest.prompts[2]));
-      expect(notifier.problem(contextLength: 32768), 'Prompt 50k needs a longer context length.');
+      notifier.setSetup(BenchmarkSetup(tests: [BenchmarkTest.prompts[2]]));
+      expect(notifier.problem(contextLength: 32768), 'The chosen tests need a longer context length.');
       expect(notifier.problem(contextLength: 65536), isNull);
     });
 
@@ -562,10 +612,12 @@ void main() {
       });
       final notifier = container.read(benchmarkProvider.notifier);
       final setup = container.read(benchmarkProvider).setup;
-      expect((setup.contextLength, setup.kvCache, setup.test), (32768, KvCache.q8, BenchmarkTest.replySpeed));
+      expect((setup.contextLength, setup.kvCache, setup.tests), (32768, KvCache.q8, BenchmarkSetup.defaultTests));
       await notifier.start(_file, 'M', setup.contextLength);
-      // (The stand-in's presets are 4k and 64k: the run uses what it is given.)
-      expect(backend.texts, [...warmupMessages, replySpeedRequest]);
+      // (The stand-in's presets are 4k and 64k: the run uses what it is given.) Its tests are the default ones.
+      expect(backend.texts.take(3), [...warmupMessages, replySpeedRequest]);
+      expect(backend.texts, hasLength(4));
+      expect(backend.texts.last, endsWith(promptReviewRequest));
       expect(await store.benchmarks(), hasLength(1));
     });
 
@@ -741,9 +793,9 @@ void main() {
 
     test('the setup is remembered', () async {
       await open(_Backend());
-      container.read(benchmarkProvider.notifier).setSetup(BenchmarkSetup(contextLength: 8192, kvCache: KvCache.q4, test: BenchmarkTest.prompts.last));
+      container.read(benchmarkProvider.notifier).setSetup(BenchmarkSetup(contextLength: 8192, kvCache: KvCache.q4, tests: [BenchmarkTest.prompts.last]));
       final again = BenchmarkSetup.fromJson(Storage(dir).readBenchmarkSetup()!);
-      expect((again.contextLength, again.kvCache, again.test), (8192, KvCache.q4, BenchmarkTest.prompts.last));
+      expect((again.contextLength, again.kvCache, again.tests.single), (8192, KvCache.q4, BenchmarkTest.prompts.last));
     });
   });
 }

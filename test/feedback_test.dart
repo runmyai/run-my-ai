@@ -397,6 +397,13 @@ void main() {
       expect(results['layers'], isA<List<Object?>>());
       expect(((results['turns'] as List).first as Map)['tokenGaps'], isNull, reason: 'the engine\'s times are kept');
       expect(results['engineLayout'], {'ram_slots_per_layer': 191});
+      // Each test's full data goes out (a run saved before several tests stands for its one test), without its texts.
+      expect(settings['tests'], ['reply']);
+      final test = (results['tests'] as List).single as Map;
+      expect((test['test'], test['replyLength']), ('reply', 2000));
+      expect(test['timeParts'], {'SSD wait': 2.5, 'CPU': 9.1});
+      expect((test['turn'] as Map)['tokensPerSecond'], closeTo(900 / 19.8, 0.01));
+      expect(test.containsKey('promptText') || test.containsKey('replyText'), isFalse);
       // Every value is one Firestore can hold, and the whole stays well under its limit.
       expect(() => firestoreFields(doc), returnsNormally);
       expect(utf8.encode(jsonEncode(doc)).length, lessThan(benchmarkDocMaxBytes));

@@ -384,11 +384,11 @@ class _BenchmarkSettings extends ConsumerWidget {
           ),
         ),
         row(
-          'Test',
-          SelectBox<BenchmarkTest>(
+          'Tests',
+          SelectBox<BenchmarkTest>.several(
             id: 'benchmark-test',
-            label: 'Test',
-            value: setup.test,
+            label: 'Tests',
+            chosen: setup.tests.toSet(),
             entries: [
               for (final t in BenchmarkTest.all)
                 SelectEntry(
@@ -399,10 +399,16 @@ class _BenchmarkSettings extends ConsumerWidget {
                   reason: t.fits(length) ? null : 'Needs a longer context',
                 ),
             ],
-            onChanged: busy ? null : (t) => notifier.setSetup(setup.copyWith(test: t)),
+            onChanged: busy ? null : (t) => notifier.setSetup(setup.toggled(t)),
           ),
         ),
-        Text(setup.test.description, key: const Key('benchmark-test-line'), style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+        if (setup.runnable(length) case final tests when tests.isNotEmpty)
+          Text(
+            'Two warm-up messages, then ${[for (final t in tests) t.description].join('; ')}. '
+            '${tests.length > 1 ? 'Each test starts from right after the warm-ups.' : ''}'.trim(),
+            key: const Key('benchmark-test-line'),
+            style: TextStyle(fontSize: 12.5, color: c.textMuted),
+          ),
         Container(margin: const EdgeInsets.symmetric(vertical: 16), height: 1, color: c.inputBorder),
         Row(
           children: [
@@ -431,6 +437,10 @@ class _BenchmarkSettings extends ConsumerWidget {
     );
   }
 
+  /// Which test is going on, before the rest of the line: only when the run takes several.
+  static String _testOf(BenchmarkState state) =>
+      state.test == null || state.tests.length < 2 ? '' : '${state.test!.label} (${state.testIndex + 1} of ${state.tests.length}): ';
+
   static String _phaseText(BenchmarkState state) {
     final progress = state.promptProgress;
     final read = progress == null ? '' : ' (${formatNumber(progress.$1.toDouble(), 0)} of ${formatNumber(progress.$2.toDouble(), 0)} tokens)';
@@ -438,7 +448,7 @@ class _BenchmarkSettings extends ConsumerWidget {
       BenchmarkPhase.loading => 'Starting the engine and loading the model…',
       BenchmarkPhase.warmingUp => 'Warm-up ${state.warmup + 1} of ${state.setup.warmups.length}$read…',
       BenchmarkPhase.measuring =>
-        state.replyTokens == 0 ? 'Reading the prompt$read…' : 'Writing the reply: ${state.replyTokens} tokens of at most ${state.setup.replyLength}…',
+        '${_testOf(state)}${state.replyTokens == 0 ? 'Reading the prompt$read…' : 'Writing the reply: ${state.replyTokens} tokens of at most ${state.test?.replyCap ?? 0}…'}',
       BenchmarkPhase.idle => '',
     };
   }

@@ -50,6 +50,8 @@ class BenchmarkState {
     this.turns = const [],
     this.turnFirstTokenMillis,
     this.turnStartSeconds,
+    this.tests = const [],
+    this.testIndex = 0,
   });
 
   final BenchmarkPhase phase;
@@ -99,6 +101,13 @@ class BenchmarkState {
   /// When the turn going on was sent, in seconds on [live]'s time axis; null while no turn is going on.
   final double? turnStartSeconds;
 
+  /// The tests of the running (or last) run in the order they run, and which of them is going on (from 0).
+  final List<BenchmarkTest> tests;
+  final int testIndex;
+
+  /// The test going on; null before the run's tests began.
+  BenchmarkTest? get test => phase == BenchmarkPhase.measuring && testIndex < tests.length ? tests[testIndex] : null;
+
   bool get running => phase != BenchmarkPhase.idle;
 
   BenchmarkState copyWith({
@@ -121,6 +130,8 @@ class BenchmarkState {
     List<TurnRecord>? turns,
     int? Function()? turnFirstTokenMillis,
     double? Function()? turnStartSeconds,
+    List<BenchmarkTest>? tests,
+    int? testIndex,
   }) => BenchmarkState(
     phase: phase ?? this.phase,
     setup: setup ?? this.setup,
@@ -141,6 +152,8 @@ class BenchmarkState {
     turns: turns ?? this.turns,
     turnFirstTokenMillis: turnFirstTokenMillis != null ? turnFirstTokenMillis() : this.turnFirstTokenMillis,
     turnStartSeconds: turnStartSeconds != null ? turnStartSeconds() : this.turnStartSeconds,
+    tests: tests ?? this.tests,
+    testIndex: testIndex ?? this.testIndex,
   );
 }
 
@@ -194,8 +207,9 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
 
   /// What would stop the run from starting with the present setup at [contextLength]; null when it can start.
   String? problem({required int contextLength}) {
-    final test = state.setup.test;
-    return test.fits(contextLength) ? null : '${test.label} needs a longer context length.';
+    final setup = state.setup;
+    if (setup.tests.isEmpty) return 'Choose a test.';
+    return setup.runnable(contextLength).isEmpty ? 'The chosen tests need a longer context length.' : null;
   }
 
   /// Deletes [run] from the history.
@@ -209,10 +223,9 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
     );
   }
 
-  /// The measured message of the setup's test, and its length in tokens as the engine counts them (null for the short
-  /// one of the reply-speed test).
-  Future<({String text, int? tokens})> _prompt(EngineInsight? insight) async {
-    final test = state.setup.test;
+  /// The measured message of [test], and its length in tokens as the engine counts them (null for the short one of the
+  /// reply-speed test).
+  Future<({String text, int? tokens})> _prompt(BenchmarkTest test, EngineInsight? insight) async {
     final tokens = test.promptTokens;
     if (tokens == null) return (text: replySpeedRequest, tokens: null);
     final corpus = await ref.read(promptCorpusProvider(test.story!).future);
@@ -224,10 +237,13 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
   static String _recorded(String text) =>
       text.length <= 20000 ? text : '${text.substring(0, 2000)}\n[… ${text.length} characters in all]';
 
-  /// Runs the benchmark with [file] at [contextLength], with the model's automatic preset.
+  /// Runs the benchmark with [file] at [contextLength], with the model's automatic preset: the warm-ups once, then each
+  /// chosen test that fits, each from the conversation as it was right after the warm-ups.
   Future<void> start(ModelFile file, String modelName, int contextLength, {ModelThinking? thinking}) async {
     final backend = ref.read(backendProvider);
-    if (state.running ||
+    final tests = state.setup.runnable(contextLength);
+    if (tests.isEmpty ||
+        state.running ||
         backend is! EngineControl ||
         ref.read(chatsProvider).replyingId != null ||
         ref.read(serveProvider).busy) {
@@ -259,6 +275,8 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       profileId: () => autoProfileId,
       turns: const [],
       turnStartSeconds: () => null,
+      tests: tests,
+      testIndex: 0,
     );
     final monitor = ref.read(hardwareMonitorProvider)();
     StreamSubscription<SystemSample>? watching;
@@ -318,7 +336,6 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
 
       // The engine's counters, once a second, from when it answers.
       final tracker = EngineStatsTracker();
-      EngineSnapshot? atReplyStart;
       var missing = 0;
       var asking = false;
       Future<EngineSnapshot?> poll() async {
@@ -362,7 +379,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         ModelThinking.optional => ref.read(prefsProvider).thinking,
       };
       final history = <ChatMessage>[];
-      Future<String> say(String text, {required bool warmup, void Function(ReplyEvent)? onEvent}) {
+      Future<String> say(String text, {required bool warmup, required int maxTokens, void Function(ReplyEvent)? onEvent}) {
         history.add(ChatMessage(Role.user, text));
         final replied = Completer<String>();
         _replied = replied;
@@ -385,7 +402,7 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
               messages: [...history],
               run: run,
               thinking: thinkingOn ?? false,
-              maxTokens: setup.replyLength,
+              maxTokens: maxTokens,
             )
             .listen(
               (event) {
@@ -460,53 +477,82 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
         });
       }
 
+      // (The warm-ups' replies may be as long as the first test's, as they were when a run took one test.)
       if (setup.warmups.isNotEmpty) series.beginPhase(PhaseBand.warmUp, now());
       for (var i = 0; i < setup.warmups.length && !_stopped; i++) {
         state = state.copyWith(phase: BenchmarkPhase.warmingUp, warmup: i, promptProgress: () => null);
-        await say(setup.warmups[i], warmup: true);
+        await say(setup.warmups[i], warmup: true, maxTokens: tests.first.replyCap);
       }
       if (_stopped) return;
 
-      state = state.copyWith(phase: BenchmarkPhase.measuring, promptProgress: () => null);
-      final prompt = await _prompt(insight);
-      if (_stopped) return;
-      final clock = Stopwatch()..start();
-      series.beginPhase(PhaseBand.prompt, now());
-      final reply = await say(
-        prompt.text,
-        warmup: false,
-        onEvent: (event) {
-          switch (event) {
-            case ReplyText() || ReplyThinking():
-              // (The prompt's speed keeps its last value through the reply, the way the TTFT does, so the graphs and
-              // the number keep showing it.)
-              if (firstToken == null) {
-                firstToken = clock.elapsedMicroseconds / 1e6;
-                series.beginPhase(PhaseBand.reply, now());
-                if (insight != null) unawaited(poll().then((s) => atReplyStart ??= s));
-              }
-              replyTokens++;
-            default:
-              break;
-          }
-        },
-      );
-      if (_stopped) return;
-      final turn = state.turns.isEmpty ? null : state.turns.last;
+      // Each test starts from the conversation as it was right after the warm-ups: the engine reuses what it has of
+      // that start by itself.
+      final afterWarmups = [...history];
+      final done = <TestResult>[];
+      EngineSnapshot? end;
+      for (var i = 0; i < tests.length; i++) {
+        final test = tests[i];
+        history
+          ..clear()
+          ..addAll(afterWarmups);
+        replyTokens = 0;
+        firstToken = null;
+        EngineSnapshot? atReplyStart;
+        state = state.copyWith(phase: BenchmarkPhase.measuring, testIndex: i, replyTokens: 0, promptProgress: () => null);
+        final prompt = await _prompt(test, insight);
+        if (_stopped) return;
+        final clock = Stopwatch()..start();
+        series.beginPhase(PhaseBand.prompt, now());
+        final reply = await say(
+          prompt.text,
+          warmup: false,
+          maxTokens: test.replyCap,
+          onEvent: (event) {
+            switch (event) {
+              case ReplyText() || ReplyThinking():
+                // (The prompt's speed keeps its last value through the reply, the way the TTFT does, so the graphs and
+                // the number keep showing it.)
+                if (firstToken == null) {
+                  firstToken = clock.elapsedMicroseconds / 1e6;
+                  series.beginPhase(PhaseBand.reply, now());
+                  if (insight != null) unawaited(poll().then((s) => atReplyStart ??= s));
+                }
+                replyTokens++;
+              default:
+                break;
+            }
+          },
+        );
+        if (_stopped) return;
+        final turn = state.turns.last;
+        end = insight == null ? null : await poll();
+        final moeStream = turn.engineStats;
+        // (The request's own figures first; the counters' difference for an engine that only gives those.)
+        var parts = timeParts(moeStream);
+        if (parts.isEmpty && atReplyStart != null && end != null) parts = timePartsBetween(atReplyStart!, end);
+        var layers = layersOf(moeStream);
+        if (layers.isEmpty && atReplyStart != null && end != null) layers = layersBetween(atReplyStart!, end);
+        done.add(
+          TestResult(
+            testId: test.id,
+            label: test.label,
+            turn: turn,
+            promptText: _recorded(prompt.text),
+            replyText: reply.length > 4000 ? reply.substring(0, 4000) : reply,
+            timeParts: parts,
+            layers: layers,
+          ),
+        );
+      }
       series.endPhases(now());
-      final measured = clock.elapsedMilliseconds;
       polling?.cancel();
       polling = null;
-      final end = insight == null ? null : await poll();
       await watching.cancel();
       watching = null;
 
-      final moeStream = turn?.engineStats ?? const {};
-      // (The request's own figures first; the counters' difference for an engine that only gives those.)
-      var parts = timeParts(moeStream);
-      if (parts.isEmpty && atReplyStart != null && end != null) parts = timePartsBetween(atReplyStart!, end);
-      var layers = layersOf(moeStream);
-      if (layers.isEmpty && atReplyStart != null && end != null) layers = layersBetween(atReplyStart!, end);
+      // The headline fields carry the main test: the reply speed when it ran, else the first prompt.
+      final main = done.firstWhere((t) => t.isReplySpeed, orElse: () => done.first);
+      final turn = main.turn;
       final result = BenchmarkResult(
         at: DateTime.now(),
         modelName: modelName,
@@ -518,28 +564,29 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
           if (backend is TuneControl)
             for (final c in (backend as TuneControl).cards) c.key: run.vramHeadroom.of(c.key),
         },
-        promptLabel: setup.test.label,
-        replyLength: setup.replyLength,
+        promptLabel: [for (final t in tests) t.label].join(' + '),
+        replyLength: main.test.replyCap,
         warmups: setup.warmups,
         loadMillis: loadMillis,
-        firstTokenMillis: turn?.firstTokenMillis ?? 0,
-        promptTokens: turn?.promptTokens ?? 0,
-        promptMillis: turn?.promptMillis ?? 0,
-        replyTokens: turn?.replyTokens ?? 0,
-        replyMillis: turn?.replyMillis ?? 0,
-        tokenGaps: turn?.tokenGaps ?? const [],
-        engineStats: moeStream,
+        firstTokenMillis: turn.firstTokenMillis,
+        promptTokens: turn.promptTokens,
+        promptMillis: turn.promptMillis,
+        replyTokens: turn.replyTokens,
+        replyMillis: turn.replyMillis,
+        tokenGaps: turn.tokenGaps,
+        engineStats: turn.engineStats,
         log: control.logLines.length > 200 ? control.logLines.sublist(control.logLines.length - 200) : control.logLines,
         disturbed: disturbances(series, before: before),
-        promptText: _recorded(prompt.text),
+        promptText: main.promptText,
         thinking: thinkingOn,
-        replyText: reply.length > 4000 ? reply.substring(0, 4000) : reply,
-        stopReason: turn?.stopReason,
-        tokenMillis: turn?.tokenMillis ?? const [],
-        totalMillis: measured,
-        timeParts: parts,
-        layers: layers,
+        replyText: main.replyText,
+        stopReason: turn.stopReason,
+        tokenMillis: turn.tokenMillis,
+        totalMillis: turn.totalMillis,
+        timeParts: main.timeParts,
+        layers: main.layers,
         turns: state.turns,
+        tests: done,
         series: series.shrunk(200),
         memory: MemoryLayout.read(
           control.logLines,

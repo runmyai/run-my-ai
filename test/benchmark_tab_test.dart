@@ -610,19 +610,22 @@ void _tab() {
   /// Whether a drop-down's entry can be chosen.
   bool chosable(WidgetTester tester, String key) => tester.widget<MenuItemButton>(find.byKey(Key(key))).onPressed != null;
 
-  testWidgets('the setup is four choices and one Start: model, context length, KV cache, test', (tester) async {
+  testWidgets('the setup is four choices and one Start: model, context length, KV cache, tests', (tester) async {
     await pump(tester, const BenchmarkState());
     final panel = find.byKey(const Key('benchmark-setup'));
-    for (final label in ['Model', 'Context length', 'KV cache', 'Test']) {
+    for (final label in ['Model', 'Context length', 'KV cache', 'Tests']) {
       expect(find.descendant(of: panel, matching: find.text(label)), findsOneWidget, reason: label);
     }
     expect([for (final k in ['benchmark-model', 'benchmark-context', 'benchmark-kv', 'benchmark-test']) faceText(tester, k)], [
       'Test Model  q',
       '65k',
       'Balanced (Q8_0)',
-      'Reply speed',
+      'Reply speed, Prompt 25k',
     ]);
-    expect(find.text('Two warm-up messages, then a long story.'), findsOneWidget);
+    expect(
+      find.text('Two warm-up messages, then a long story; a story of 25k tokens and a short review. Each test starts from right after the warm-ups.'),
+      findsOneWidget,
+    );
     // Everything else that was on the setup is gone.
     for (final key in [
       'benchmark-test-mode',
@@ -653,7 +656,7 @@ void _tab() {
 
   testWidgets('the rows are tidy: labels at one edge, drop-downs of one width at another, the line below, the footer under a divider', (tester) async {
     await pump(tester, const BenchmarkState());
-    final labels = [for (final l in ['Model', 'Context length', 'KV cache', 'Test']) tester.getTopLeft(find.text(l))];
+    final labels = [for (final l in ['Model', 'Context length', 'KV cache', 'Tests']) tester.getTopLeft(find.text(l))];
     expect(labels.map((o) => o.dx).toSet(), hasLength(1), reason: 'all labels on one left edge');
     final boxes = [for (final k in ['benchmark-model', 'benchmark-context', 'benchmark-kv', 'benchmark-test']) tester.getRect(find.byKey(Key(k)))];
     expect(boxes.map((r) => r.left).toSet(), hasLength(1), reason: 'all drop-downs start at one edge');
@@ -710,34 +713,45 @@ void _tab() {
     expect(Storage(dir).readBenchmarkSetup()!['contextLength'], 4096, reason: 'kept for next time');
   });
 
-  testWidgets('a prompt test that does not fit the context length is greyed, with the reason', (tester) async {
+  testWidgets('several tests are chosen in one list; one that does not fit the context length is greyed, with the reason', (tester) async {
     await pump(tester, const BenchmarkState(setup: BenchmarkSetup(contextLength: 4096)));
     await open(tester, 'benchmark-test');
     expect([for (final t in BenchmarkTest.all) chosable(tester, 'benchmark-test-${t.id}')], [true, false, false, false, false]);
     expect(find.text('Needs a longer context'), findsNWidgets(4));
     await tester.tap(find.byKey(const Key('benchmark-test-prompt-8k')));
     await tester.pump(const Duration(milliseconds: 250));
-    expect(faceText(tester, 'benchmark-test'), 'Reply speed', reason: 'a greyed test cannot be chosen');
-    // A longer context, and the tests that fit are open.
+    // A greyed test cannot be chosen, and the chosen one that does not fit is not named.
+    expect(faceText(tester, 'benchmark-test'), 'Reply speed');
+    expect(find.text('Two warm-up messages, then a long story.'), findsOneWidget);
+    // A longer context, and the tests that fit are open; the 25k chosen by default is back.
     await tester.tapAt(const Offset(5, 5));
     await tester.pump(const Duration(milliseconds: 250));
     await choose(tester, 'benchmark-context', '65536');
+    expect(faceText(tester, 'benchmark-test'), 'Reply speed, Prompt 25k');
     await open(tester, 'benchmark-test');
     expect([for (final t in BenchmarkTest.all) chosable(tester, 'benchmark-test-${t.id}')], [true, true, true, true, false]);
     expect(find.text('Needs a longer context'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('benchmark-test-prompt-25k')));
+    // Each click turns one on or off, and the list stays open; they run in the list's order.
+    await tester.tap(find.byKey(const Key('benchmark-test-prompt-8k')));
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.tap(find.byKey(const Key('benchmark-test-reply')));
     await tester.pump(const Duration(milliseconds: 250));
     await tester.pump(const Duration(milliseconds: 250));
-    expect(faceText(tester, 'benchmark-test'), 'Prompt 25k');
-    expect(find.text('Two warm-up messages, then a story of 25k tokens and a short review.'), findsOneWidget);
-    expect(find.text('Two warm-up messages, then a long story.'), findsNothing);
-    expect(Storage(dir).readBenchmarkSetup()!['test'], 'prompt-25k');
+    expect(faceText(tester, 'benchmark-test'), 'Prompt 8k, Prompt 25k');
+    expect(
+      find.text(
+        'Two warm-up messages, then a story of 8k tokens and a short review; a story of 25k tokens and a short review. '
+        'Each test starts from right after the warm-ups.',
+      ),
+      findsOneWidget,
+    );
+    expect(Storage(dir).readBenchmarkSetup()!['tests'], ['prompt-8k', 'prompt-25k']);
   });
 
   testWidgets('a chosen test that no longer fits shows why nothing can start, in the danger colour, and Start waits', (tester) async {
-    await pump(tester, BenchmarkState(setup: BenchmarkSetup(contextLength: 4096, test: BenchmarkTest.prompts[1])));
+    await pump(tester, BenchmarkState(setup: BenchmarkSetup(contextLength: 4096, tests: [BenchmarkTest.prompts[1]])));
     final status = find.byKey(const Key('benchmark-status'));
-    expect(tester.widget<Text>(status).data, 'Prompt 25k needs a longer context length.');
+    expect(tester.widget<Text>(status).data, 'The chosen tests need a longer context length.');
     expect(tester.widget<Text>(status).style!.color, buildTheme(Brightness.dark).extension<AppColors>()!.danger);
     expect(tester.widget<MainButton>(find.byKey(const Key('benchmark-start'))).onTap, isNull);
     expect(find.text('Close other apps for accurate results.'), findsNothing);
@@ -760,7 +774,7 @@ void _tab() {
     expect(faceText(tester, 'benchmark-kv'), 'Efficient (Q4_0)');
     expect(Storage(dir).readBenchmarkSetup()!['kvCache'], 'q4_0');
     // Nothing else moves: the test, the context length and Start stay as they were.
-    expect((faceText(tester, 'benchmark-context'), faceText(tester, 'benchmark-test')), ('65k', 'Reply speed'));
+    expect((faceText(tester, 'benchmark-context'), faceText(tester, 'benchmark-test')), ('65k', 'Reply speed, Prompt 25k'));
     expect(tester.widget<MainButton>(find.byKey(const Key('benchmark-start'))).onTap, isNotNull);
   });
 
