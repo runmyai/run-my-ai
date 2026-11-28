@@ -1,6 +1,7 @@
 // The Settings page (lib/ui/pages/settings_page.dart): Storage and Folders as drop-downs that start closed, each
 // setting's description shown as a tooltip on its name instead of as text under it, and the KV cache quantization
-// picker (lib/ui/context_settings.dart), which sets each length's cache type and never the chat's context length.
+// picker (lib/ui/context_settings.dart), which sets each length's cache type and never the chat's context length, and
+// the sharing choice as one small line at the end of the page.
 // Run: flutter test test/settings_page_test.dart
 import 'dart:io';
 
@@ -12,12 +13,14 @@ import 'package:runmyai/backend/dummy_backend.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
 import 'package:runmyai/state/library.dart';
+import 'package:runmyai/state/prefs.dart';
 import 'package:runmyai/state/profiles.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/system/folders.dart';
 import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/pages/settings_page.dart';
 import 'package:runmyai/ui/settings/folders_section.dart';
+import 'package:runmyai/ui/welcome.dart' show shareBenchmarksLabel, shareBenchmarksNote;
 
 /// The app's folders in the test's folder.
 const _file = ModelFile(id: 'm/f', quantization: 'q', sizeBytes: 1);
@@ -151,5 +154,27 @@ void main() {
     await tester.pumpAndSettle();
     expect(container.read(profilesProvider)[_file.id]!.kv[100000], 'f16');
     expect(container.read(libraryProvider).contextLength, before, reason: 'the chat\'s length is chosen in its picker');
+  });
+
+  testWidgets('the sharing choice is one small muted line at the end, its note a tooltip, and it still switches', (
+    tester,
+  ) async {
+    await show(tester);
+    final label = tester.widget<Text>(find.text(shareBenchmarksLabel));
+    expect((label.style!.fontSize, label.style!.color), (12, tester.element(find.text(shareBenchmarksLabel)).colors.textMuted));
+    expect(find.text(shareBenchmarksNote), findsNothing);
+    expect(find.byTooltip(shareBenchmarksNote), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(const Key('share-check'))).dy,
+      greaterThan(tester.getBottomLeft(find.byKey(const Key('about-link'))).dy),
+      reason: 'low on the page',
+    );
+    expect(container.read(prefsProvider).shareBenchmarks, isTrue);
+    await tester.tap(find.byKey(const Key('share-check')));
+    await tester.pump();
+    expect(container.read(prefsProvider).shareBenchmarks, isFalse);
+    await tester.tap(find.byType(Checkbox));
+    await tester.pump();
+    expect(container.read(prefsProvider).shareBenchmarks, isTrue, reason: 'the small box itself works too');
   });
 }

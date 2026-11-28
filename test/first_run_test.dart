@@ -139,6 +139,20 @@ void main() {
     });
   }
 
+  testWidgets('the sharing choice is a small, quiet line under Get started', (tester) async {
+    await open(tester);
+    final context = tester.element(find.byKey(welcome));
+    final label = tester.widget<Text>(find.text(shareBenchmarksLabel));
+    expect((label.style!.fontSize, label.style!.color), (12, context.colors.textMuted));
+    expect(find.text(shareBenchmarksNote), findsOneWidget, reason: 'its note still readable under it');
+    expect(tester.getSize(find.byType(Checkbox)).width, lessThanOrEqualTo(16), reason: 'a small box');
+    expect(
+      tester.getTopLeft(find.byKey(const Key('welcome-share'))).dy,
+      greaterThan(tester.getBottomLeft(find.byKey(const Key('welcome-start'))).dy),
+      reason: 'low on the screen, under the main button',
+    );
+  });
+
   testWidgets('unticking the box on the welcome screen is saved, and Settings shows and changes the same choice', (
     tester,
   ) async {

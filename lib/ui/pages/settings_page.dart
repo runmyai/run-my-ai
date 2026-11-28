@@ -179,8 +179,6 @@ class _SettingsList extends ConsumerWidget {
         const SizedBox(height: 28),
         const _Context(),
         const SizedBox(height: 28),
-        const PrivacySection(),
-        const SizedBox(height: 28),
         const FeedbackSection(),
         const SizedBox(height: 28),
         const SettingName('About', description: 'Versions, credits and licences.'),
@@ -194,6 +192,8 @@ class _SettingsList extends ConsumerWidget {
             onTap: onAbout,
           ),
         ),
+        const SizedBox(height: 40),
+        const PrivacySection(),
       ],
     );
   }
