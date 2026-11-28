@@ -23,7 +23,7 @@ import 'about_page.dart';
 
 /// Settings: the theme (System, Light or Dark; the developer's build also has the other theme families, reply motion and
 /// the speed's look), the sound when a reply finishes, the saved chats' disk limit and the RAM left free, the engine folder,
-/// the context length track with each length's cache type, and a button that opens About in place of the settings.
+/// the KV cache type for each context length, and a button that opens About in place of the settings.
 /// Each setting's description shows as a tooltip on its name; Storage and Folders are drop-downs, closed at first.
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -320,7 +320,7 @@ class _VramHeadroom extends ConsumerWidget {
   );
 }
 
-/// The context length new chats load the shown model with, and each length's cache type.
+/// The KV cache quantization picker: the type the shown model's context cache is stored in, for each context length.
 class _Context extends ConsumerWidget {
   const _Context();
 
@@ -332,8 +332,9 @@ class _Context extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SettingName(
-          'Context length',
-          description: 'How much text a chat can hold, and how its memory is stored at each length. A change applies the next time the model loads.',
+          'KV cache quantization',
+          description:
+              'How the context cache (KV cache) is stored at each context length: a smaller type uses less memory. A change applies the next time the model loads at that length.',
         ),
         const SizedBox(height: 12),
         if (entry == null)
