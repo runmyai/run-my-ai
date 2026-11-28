@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/commands.dart';
-import '../state/chats.dart';
-import '../state/library.dart';
 import '../state/prefs.dart';
 import '../state/profiles.dart';
 import '../state/providers.dart';
@@ -13,7 +11,7 @@ import 'clicky.dart';
 import 'menu_panel.dart';
 import 'model_picker.dart';
 
-/// A node on the context track line.
+/// A context length the KV cache picker lists.
 class _ContextNode {
   const _ContextNode({required this.tokens, required this.label});
 
@@ -21,7 +19,7 @@ class _ContextNode {
   final String label;
 }
 
-const _contextTrackNodes = [
+const _contextLengths = [
   _ContextNode(tokens: 4096, label: '4k'),
   _ContextNode(tokens: 8192, label: '8k'),
   _ContextNode(tokens: 16384, label: '16k'),
@@ -67,8 +65,9 @@ String _calculateKvCacheSize({required String modelName, required int tokens, re
   }
 }
 
-/// The context length track: the length new chats load the model with, and for each length the context cache's type
-/// (saved per model; applies the next time the model loads at that length) with its memory.
+/// The KV cache quantization picker: for each context length, the type the context cache (KV cache) is stored in, with
+/// its memory (saved per model; applies the next time the model loads at that length). Which length a chat runs with
+/// is chosen in the chat window's picker, not here.
 class ContextSettings extends ConsumerWidget {
   const ContextSettings({super.key, required this.entry});
 
@@ -78,58 +77,46 @@ class ContextSettings extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
     final kv = ref.watch(profilesProvider)[entry.file.id]?.kv ?? const <int, String>{};
-    final shown = ref.watch(shownContextProvider);
-    final currentTokens = shown?.value ?? 65536;
 
-    // Match the active context to the closest node on the track.
-    final selectedNode = _contextTrackNodes.firstWhere(
-      (n) => (n.tokens - currentTokens).abs() < 2500,
-      orElse: () => _contextTrackNodes.firstWhere(
-        (n) => n.tokens <= currentTokens,
-        orElse: () => _contextTrackNodes[4], // Default to 65k
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      decoration: BoxDecoration(
+        color: c.inputFill,
+        border: Border.all(color: c.inputBorder),
+        borderRadius: BorderRadius.circular(12),
       ),
-    );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-          decoration: BoxDecoration(
-            color: c.inputFill,
-            border: Border.all(color: c.inputBorder),
-            borderRadius: BorderRadius.circular(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: c.selected,
+                border: Border.all(color: c.inputBorder),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const ModelPicker(showContext: false),
+            ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
+          const SizedBox(height: 28),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.all(3),
-                  decoration: BoxDecoration(
-                    color: c.selected,
-                    border: Border.all(color: c.inputBorder),
-                    borderRadius: BorderRadius.circular(10),
+              for (final node in _contextLengths)
+                Expanded(
+                  child: _ContextColumn(
+                    node: node,
+                    quant: kv[node.tokens] ?? 'q8_0',
+                    modelName: entry.model.name,
+                    onSelectQuant: (q) => ref.read(profilesProvider.notifier).setKv(entry.file, node.tokens, q),
                   ),
-                  child: const ModelPicker(showContext: false),
                 ),
-              ),
-              const SizedBox(height: 28),
-              _ContextQuantMatrix(
-                modelName: entry.model.name,
-                nodes: _contextTrackNodes,
-                selectedNode: selectedNode,
-                quants: kv,
-                onSelectContext: (node) {
-                  ref.read(chatsProvider.notifier).pickContext(node.tokens);
-                },
-                onSelectQuant: (tokens, quant) => ref.read(profilesProvider.notifier).setKv(entry.file, tokens, quant),
-              ),
             ],
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -221,66 +208,13 @@ class _VramHeadroomInputState extends ConsumerState<VramHeadroomInput> {
   }
 }
 
-/// The matrix of context lengths and their KV cache quantization options (Variation 1).
-class _ContextQuantMatrix extends StatelessWidget {
-  const _ContextQuantMatrix({
-    required this.modelName,
-    required this.nodes,
-    required this.selectedNode,
-    required this.quants,
-    required this.onSelectContext,
-    required this.onSelectQuant,
-  });
-
-  final String modelName;
-  final List<_ContextNode> nodes;
-  final _ContextNode selectedNode;
-  final Map<int, String> quants;
-  final ValueChanged<_ContextNode> onSelectContext;
-  final void Function(int tokens, String quant) onSelectQuant;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (var i = 0; i < nodes.length; i++)
-          Expanded(
-            child: _ContextColumn(
-              node: nodes[i],
-              index: i,
-              totalNodes: nodes.length,
-              isSelected: nodes[i].tokens == selectedNode.tokens,
-              quant: quants[nodes[i].tokens] ?? 'q8_0',
-              modelName: modelName,
-              onSelectContext: () => onSelectContext(nodes[i]),
-              onSelectQuant: (q) => onSelectQuant(nodes[i].tokens, q),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
+/// One context length: its name, its KV cache type (a drop-down) and the memory the cache takes at that type.
 class _ContextColumn extends StatelessWidget {
-  const _ContextColumn({
-    required this.node,
-    required this.index,
-    required this.totalNodes,
-    required this.isSelected,
-    required this.quant,
-    required this.modelName,
-    required this.onSelectContext,
-    required this.onSelectQuant,
-  });
+  const _ContextColumn({required this.node, required this.quant, required this.modelName, required this.onSelectQuant});
 
   final _ContextNode node;
-  final int index;
-  final int totalNodes;
-  final bool isSelected;
   final String quant;
   final String modelName;
-  final VoidCallback onSelectContext;
   final ValueChanged<String> onSelectQuant;
 
   static const _quantOptions = [
@@ -299,73 +233,10 @@ class _ContextColumn extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // Context length label (Clickable to select context)
-        Clicky.builder(
-          onTap: onSelectContext,
-          builder: (context, state) {
-            final active = state.hovered || isSelected;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                node.label,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                  color: isSelected ? c.text : (active ? c.text : c.textSecondary),
-                ),
-              ),
-            );
-          },
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(node.label, style: TextStyle(fontSize: 12.5, color: c.textSecondary)),
         ),
-        // Timeline Track Node with connecting horizontal line
-        SizedBox(
-          height: 22,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Positioned.fill(
-                child: Row(
-                  children: [
-                    Expanded(child: Container(height: 2, color: index > 0 ? c.inputBorder : Colors.transparent)),
-                    Expanded(
-                      child: Container(height: 2, color: index < totalNodes - 1 ? c.inputBorder : Colors.transparent),
-                    ),
-                  ],
-                ),
-              ),
-              Clicky.builder(
-                onTap: onSelectContext,
-                builder: (context, state) {
-                  final active = state.hovered || isSelected;
-                  return Container(
-                    width: 20,
-                    height: 20,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isSelected ? c.text : c.page,
-                      border: Border.all(color: active ? c.text : c.inputBorder, width: isSelected ? 2.0 : 1.5),
-                    ),
-                    child: isSelected
-                        ? Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(shape: BoxShape.circle, color: c.page),
-                          )
-                        : (state.hovered
-                              ? Container(
-                                  width: 6,
-                                  height: 6,
-                                  decoration: BoxDecoration(shape: BoxShape.circle, color: c.textMuted),
-                                )
-                              : null),
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
         // Dropdown for Quantization
         MenuAnchor(
           style: bareMenuStyle,
@@ -415,20 +286,18 @@ class _ContextColumn extends StatelessWidget {
             ),
           ],
           builder: (context, menu, _) => Clicky.builder(
+            key: Key('kv-${node.tokens}'),
             onTap: () => menu.isOpen ? menu.close() : menu.open(),
             builder: (context, state) {
-              final active = isSelected || state.hovered || menu.isOpen;
+              final active = state.hovered || menu.isOpen;
               return Container(
                 height: 32,
                 margin: const EdgeInsets.symmetric(horizontal: 4),
                 padding: const EdgeInsets.symmetric(horizontal: 6),
                 decoration: BoxDecoration(
-                  color: isSelected ? c.buttonPressedFill : (state.hovered ? c.buttonHoverFill : c.inputFill),
+                  color: state.hovered ? c.buttonHoverFill : c.inputFill,
                   borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                    color: isSelected ? c.text : (state.hovered ? c.buttonHoverBorder : c.inputBorder),
-                    width: isSelected ? 1.5 : 1.0,
-                  ),
+                  border: Border.all(color: state.hovered ? c.buttonHoverBorder : c.inputBorder),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -437,7 +306,7 @@ class _ContextColumn extends StatelessWidget {
                       quantItem.tag,
                       style: TextStyle(
                         fontSize: 11.5,
-                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                        fontWeight: FontWeight.w500,
                         color: active ? c.text : c.textSecondary,
                       ),
                     ),
@@ -451,14 +320,7 @@ class _ContextColumn extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         // Memory footprint size
-        Text(
-          size,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-            color: isSelected ? c.textSecondary : c.textMuted,
-          ),
-        ),
+        Text(size, style: TextStyle(fontSize: 11, color: c.textMuted)),
       ],
     );
   }

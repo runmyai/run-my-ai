@@ -3,9 +3,18 @@ import 'package:flutter/material.dart';
 import '../../theme.dart';
 import '../clicky.dart';
 
-/// A heading that opens its content when clicked: the way the Benchmark tab keeps detail out of the first look.
+/// A heading that opens its content when clicked: the way the Benchmark tab keeps detail out of the first look (and
+/// Settings its Storage and Folders).
 class Fold extends StatefulWidget {
-  const Fold({super.key, required this.title, required this.child, this.open = false, this.hint});
+  const Fold({
+    super.key,
+    required this.title,
+    required this.child,
+    this.open = false,
+    this.hint,
+    this.titleStyle,
+    this.tooltip,
+  });
 
   final String title;
   final Widget child;
@@ -15,6 +24,12 @@ class Fold extends StatefulWidget {
 
   /// A few words after the title while it is closed.
   final String? hint;
+
+  /// The title's look, when it is not the small grey one.
+  final TextStyle? titleStyle;
+
+  /// Shown when the pointer rests on the title.
+  final String? tooltip;
 
   @override
   State<Fold> createState() => _FoldState();
@@ -31,35 +46,43 @@ class _FoldState extends State<Fold> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Clicky(
-            key: Key('fold-${widget.title}'),
-            onTap: () => setState(() => _open = !_open),
-            radius: 6,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 2),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AnimatedRotation(
-                    turns: _open ? 0 : -0.25,
-                    duration: const Duration(milliseconds: 150),
-                    child: Icon(Icons.keyboard_arrow_down, size: 16, color: c.textMuted),
-                  ),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(text: widget.title, style: TextStyle(fontSize: 13, color: c.textSecondary)),
-                          if (!_open && widget.hint != null)
-                            TextSpan(text: '    ${widget.hint}', style: TextStyle(fontSize: 12, color: c.textMuted)),
-                        ],
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+          _withTooltip(
+            Clicky(
+              key: Key('fold-${widget.title}'),
+              onTap: () => setState(() => _open = !_open),
+              radius: 6,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedRotation(
+                      turns: _open ? 0 : -0.25,
+                      duration: const Duration(milliseconds: 150),
+                      child: Icon(Icons.keyboard_arrow_down, size: 16, color: c.textMuted),
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: widget.title,
+                              style: widget.titleStyle ?? TextStyle(fontSize: 13, color: c.textSecondary),
+                            ),
+                            if (!_open && widget.hint != null)
+                              TextSpan(
+                                text: '    ${widget.hint}',
+                                style: TextStyle(fontSize: 12, color: c.textMuted),
+                              ),
+                          ],
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -68,4 +91,6 @@ class _FoldState extends State<Fold> {
       ),
     );
   }
+
+  Widget _withTooltip(Widget title) => widget.tooltip == null ? title : Tooltip(message: widget.tooltip, child: title);
 }

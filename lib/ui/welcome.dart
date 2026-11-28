@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/first_run.dart';
-import '../state/prefs.dart';
 import '../state/section.dart';
 import '../theme.dart';
 import 'buttons.dart';
 import 'engine_setup.dart';
+import 'settings/privacy_section.dart';
 import 'title_bar.dart';
 
 /// The app, with the first start over it: the welcome screen, then the engine step (unless an engine is already
@@ -62,15 +62,14 @@ class _FirstRunGateState extends ConsumerState<FirstRunGate> {
   }
 }
 
-class _Welcome extends ConsumerWidget {
+class _Welcome extends StatelessWidget {
   const _Welcome({required this.onStart});
 
   final VoidCallback onStart;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final c = context.colors;
-    final share = ref.watch(prefsProvider.select((p) => p.shareBenchmarks));
     return Material(
       key: const Key('welcome'),
       color: c.page,
@@ -106,45 +105,6 @@ class _Welcome extends ConsumerWidget {
                   style: TextStyle(fontSize: 17, height: 1.5, color: Color.lerp(c.textSecondary, c.text, 0.6)),
                 ),
                 const SizedBox(height: 28),
-                InkWell(
-                  key: const Key('welcome-share'),
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: () => ref.read(prefsProvider.notifier).setShareBenchmarks(!share),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // A little smaller than usual: a second choice under the main text.
-                        Transform.scale(
-                          scale: 0.88,
-                          child: Checkbox(
-                            value: share,
-                            onChanged: (v) => ref.read(prefsProvider.notifier).setShareBenchmarks(v ?? false),
-                            activeColor: c.mainFill,
-                            checkColor: c.mainText,
-                            side: BorderSide(color: c.buttonBorder, width: 1.5),
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 14),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(shareBenchmarksLabel, style: TextStyle(fontSize: 14, color: c.text)),
-                                const SizedBox(height: 3),
-                                Text(shareBenchmarksNote, style: TextStyle(fontSize: 13, color: c.textMuted)),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
                 MainButton(
                   key: const Key('welcome-start'),
                   label: 'Get started',
@@ -152,6 +112,9 @@ class _Welcome extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 6),
                   onTap: onStart,
                 ),
+                // Low on the screen and small: a second choice, not the main one.
+                const SizedBox(height: 48),
+                const PrivacySection(firstStart: true),
               ],
             ),
           ),

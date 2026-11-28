@@ -76,7 +76,7 @@ void main() {
     });
 
     test('the commands the models start with leave out what the app supplies', () {
-      expect(autoContextLengths, [4096, 8192, 16384, 32768, 65536, 131072, 262144]);
+      expect(autoContextLengths, [4096, 8192, 16384, 32768, 65536, 100000, 131072, 200000, 262144]);
       for (final length in autoContextLengths) {
         final flags = EngineFlags.parse(autoCommand(length, vramFree: '512MiB', elastic: true));
         expect(flags.environment, isEmpty);

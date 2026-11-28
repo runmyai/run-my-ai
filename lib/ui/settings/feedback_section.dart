@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../state/feedback.dart';
 import '../../theme.dart';
 import '../buttons.dart';
+import 'setting_name.dart';
 
 /// Settings: a line and a button that opens the feedback form.
 class FeedbackSection extends StatelessWidget {
@@ -11,18 +12,12 @@ class FeedbackSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = context.colors;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
+        const SettingName(
           'Send feedback',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'An idea, a bug, or something you like: it goes straight to us.',
-          style: TextStyle(fontSize: 13, color: c.textSecondary),
+          description: 'An idea, a bug, or something you like: it goes straight to us.',
         ),
         const SizedBox(height: 12),
         AppButton(

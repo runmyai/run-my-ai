@@ -19,7 +19,7 @@ int? contextOf(String command) {
 String contextLabel(int tokens) => tokens >= 1000000 ? '${tokens ~/ 1000000}M' : '${tokens ~/ 1000}k';
 
 const _standardContexts = [
-  4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 5242880, 10485760, //
+  4096, 8192, 16384, 32768, 65536, 100000, 131072, 200000, 262144, 524288, 1048576, 2097152, 5242880, 10485760, //
 ];
 
 /// The context lengths offered for a model whose longest is [maxContext]: the standard ones up to it. Above the last
@@ -114,7 +114,7 @@ String withUserChoices(String row, String chosen) {
 }
 
 /// The context lengths the Auto profile offers.
-const autoContextLengths = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+const autoContextLengths = [4096, 8192, 16384, 32768, 65536, 100000, 131072, 200000, 262144];
 
 /// The Auto command for [length]: the context length, the context cache type the app starts with, and
 /// `--moe-stream model`, with which the engine switches on its own speed-ups for prompts, replies, the CPU, the RAM
