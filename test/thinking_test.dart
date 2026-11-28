@@ -187,36 +187,74 @@ void main() {
       await end(tester);
     });
 
-    testWidgets('is closed while it thinks, with the newest words flowing in one line', (tester) async {
-      await start(tester, text: 'First line\nSecond line');
-      expect(preview, findsOneWidget);
-      // A line break is a space, and the line is not cut.
-      expect(find.descendant(of: preview, matching: find.text('First line Second line')), findsOneWidget);
+    Text lineText(WidgetTester tester) => tester.widget<Text>(find.descendant(of: preview, matching: find.byType(Text)).last);
+
+    testWidgets('shows no line before the first sentence ends, then that sentence at once', (tester) async {
+      await start(tester, text: 'Let me think about');
+      expect(preview, findsNothing);
       expect(find.byType(SelectableText), findsNothing);
 
-      update(text: 'First line\nSecond line\nThird line');
-      await settle(tester);
-      expect(find.descendant(of: preview, matching: find.text('First line Second line Third line')), findsOneWidget);
-      final line = tester.widget<Text>(find.descendant(of: preview, matching: find.byType(Text)));
-      expect(line.overflow, isNot(TextOverflow.ellipsis));
-      // The newest words rest at the right edge of the line.
-      expect(tester.getTopRight(find.descendant(of: preview, matching: find.byType(Text))).dx, tester.getTopRight(preview).dx);
+      now = const Duration(milliseconds: 300);
+      update(text: 'Let me think about this. Then');
+      await tester.pump();
+      expect(lineText(tester).data, 'Let me think about this.');
       await end(tester);
     });
 
-    testWidgets('a long thought keeps only its tail, with the last words in it', (tester) async {
-      await start(tester, text: '${'word ' * 200}\nthe very last words');
-      final line = tester.widget<Text>(find.descendant(of: preview, matching: find.byType(Text)));
-      expect(line.data!.length, lessThanOrEqualTo(300));
-      expect(line.data!.endsWith('the very last words'), isTrue);
+    testWidgets('a newer sentence within 1.2 s waits until 1.2 s, and nothing changes without one', (tester) async {
+      await start(tester, text: 'One. ');
+      expect(lineText(tester).data, 'One.');
+
+      now = const Duration(milliseconds: 500);
+      update(text: 'One. Two? Thr');
+      await tester.pump();
+      expect(lineText(tester).data, 'One.');
+
+      now = const Duration(milliseconds: 1200);
+      await tester.pump(const Duration(milliseconds: 700));
+      await settle(tester);
+      expect(lineText(tester).data, 'Two?');
+      expect(find.descendant(of: preview, matching: find.text('One.')), findsNothing);
+
+      // No newer finished sentence: the line stays as it is.
+      now = const Duration(milliseconds: 4000);
+      update(text: 'One. Two? Three more words');
+      await tester.pump(const Duration(seconds: 3));
+      expect(find.descendant(of: preview, matching: find.byType(Text)), findsOneWidget);
+      expect(lineText(tester).data, 'Two?');
       await end(tester);
+    });
+
+    testWidgets('a line break ends a sentence, and a long one is cut with an ellipsis', (tester) async {
+      await start(tester, text: 'First line\n\nSecond');
+      expect(lineText(tester).data, 'First line');
+
+      now = const Duration(seconds: 2);
+      final long = 'word ' * 100;
+      update(text: 'First line\n$long!\n');
+      await settle(tester);
+      final line = lineText(tester);
+      expect(line.data, '${long.trim()}!');
+      expect(line.maxLines, 1);
+      expect(line.overflow, TextOverflow.ellipsis);
+      expect(tester.getSize(preview).width, lessThanOrEqualTo(400));
+      await end(tester);
+    });
+
+    test('the latest finished sentence skips empty stretches and the unfinished end', () {
+      expect(latestFinishedSentence(''), isNull);
+      expect(latestFinishedSentence('no end yet'), isNull);
+      expect(latestFinishedSentence('Done. ...\n\n  and more'), 'Done.');
+      expect(latestFinishedSentence('A! B?'), 'B?');
     });
 
     testWidgets('the preview goes when the thinking ends, and the block stays closed', (tester) async {
       await start(tester, text: 'One\nTwo');
+      expect(preview, findsOneWidget);
       update(thinking: false, millis: 3000);
       await settle(tester);
       expect(preview, findsNothing);
+      expect(titleText(tester), 'Thought for 3 s');
       expect(find.byType(SelectableText), findsNothing);
       await end(tester);
     });

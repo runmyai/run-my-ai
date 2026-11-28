@@ -10,7 +10,8 @@ import 'clicky.dart';
 /// What the model thought before a reply, as one control that behaves the same while the model thinks and after.
 /// Its header, "Thinking… 12 s" and then "Thought for 12 s", never moves or changes shape, and a click on it opens
 /// or closes the thought at any moment. It is closed to begin with: while the model thinks a light band sweeps across
-/// the header and one line under it flows, the newest words of the thought at its right edge. Open, the thought streams in a window that follows its end
+/// the header and the line under it shows the latest finished sentence of the thought, changing with a short fade at
+/// most every [_ThinkingBlockState._pulseEvery]. Open, the thought streams in a window that follows its end
 /// unless the user has scrolled up. The time and whether it is open belong to the message ([thinkingProvider]), not
 /// to this widget, so scrolling away or leaving the chat changes nothing.
 class ThinkingBlock extends ConsumerStatefulWidget {
@@ -53,6 +54,17 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
   late final _shimmer = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
   Timer? _tick;
 
+  /// The closed line changes at most this often, so it can be read.
+  static const _pulseEvery = Duration(milliseconds: 1200);
+
+  /// How long the old sentence fades out and the new one in.
+  static const _pulse = Duration(milliseconds: 260);
+
+  /// The sentence on the closed line, and when (on the thinking clock) it came.
+  String? _line;
+  Duration? _lineAt;
+  Timer? _lineTimer;
+
   ThinkingKey get _key => (chatId: widget.chatId, index: widget.index);
 
   bool get _isOpen => ref.read(thinkingProvider)[_key]?.open ?? false;
@@ -67,19 +79,27 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
   void didChangeDependencies() {
     super.didChangeDependencies();
     _sync();
+    _pickLine();
   }
 
   @override
   void didUpdateWidget(ThinkingBlock old) {
     super.didUpdateWidget(old);
-    if (old.chatId != widget.chatId || old.index != widget.index) _openness.value = _isOpen ? 1 : 0;
+    final moved = old.chatId != widget.chatId || old.index != widget.index;
+    if (moved) {
+      _openness.value = _isOpen ? 1 : 0;
+      _line = null;
+      _lineAt = null;
+    }
     if (widget.thinking && widget.text != old.text) _follow();
-    if (old.thinking != widget.thinking || old.chatId != widget.chatId || old.index != widget.index) _sync();
+    if (old.thinking != widget.thinking || moved) _sync();
+    if (old.thinking != widget.thinking || moved || widget.text != old.text) _pickLine();
   }
 
   @override
   void dispose() {
     _tick?.cancel();
+    _lineTimer?.cancel();
     _shimmer.dispose();
     _openness.dispose();
     _scroll.dispose();
@@ -114,18 +134,32 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
     });
   }
 
+  /// Puts the latest finished sentence on the closed line: the first one at once, a newer one once [_pulseEvery] has
+  /// passed since the last change (a timer waits for that moment). Returns whether the line changed.
+  bool _pickLine() {
+    _lineTimer?.cancel();
+    if (!widget.thinking) return false;
+    final latest = latestFinishedSentence(widget.text);
+    if (latest == null || latest == _line) return false;
+    final now = ref.read(thinkingClockProvider)();
+    final wait = _lineAt == null ? Duration.zero : _pulseEvery - (now - _lineAt!);
+    if (wait > Duration.zero) {
+      _lineTimer = Timer(wait, () {
+        if (mounted && _pickLine()) setState(() {});
+      });
+      return false;
+    }
+    _line = latest;
+    _lineAt = now;
+    return true;
+  }
+
   void _toggle() => ref.read(thinkingProvider.notifier).toggle(_key);
 
   String get _title {
     if (widget.thinking) return 'Thinking… ${thoughtLength(_elapsed)}';
     final millis = widget.millis;
     return millis == null ? 'Thought' : 'Thought for ${thoughtLength(millis)}';
-  }
-
-  /// The end of the thought as one line: line breaks are spaces, and only the tail is kept so a long thought stays cheap.
-  String get _tail {
-    final flat = widget.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-    return flat.length > 300 ? flat.substring(flat.length - 300) : flat;
   }
 
   /// The header's words; while the model thinks a light band sweeps across them.
@@ -202,16 +236,28 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
       ),
     );
 
-    // While the model thinks and the thought is closed: its end, flowing as one line.
-    final tail = _tail;
-    final Widget preview = widget.thinking && !open && tail.isNotEmpty
+    // While the model thinks and the thought is closed: its latest finished sentence.
+    final line = _line;
+    final Widget preview = widget.thinking && !open && line != null
         ? Padding(
             key: const Key('thinking-preview'),
             padding: const EdgeInsets.only(left: 18, top: 1),
             child: SizedBox(
               height: 20,
               width: double.infinity,
-              child: _FlowLine(text: tail, style: style.copyWith(fontSize: 12.5), animate: !MediaQuery.disableAnimationsOf(context)),
+              child: AnimatedSwitcher(
+                duration: MediaQuery.disableAnimationsOf(context) ? Duration.zero : _pulse,
+                layoutBuilder: (current, previous) =>
+                    Stack(alignment: Alignment.centerLeft, children: [...previous, ?current]),
+                child: Text(
+                  line,
+                  key: ValueKey(line),
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: style.copyWith(fontSize: 12.5),
+                ),
+              ),
             ),
           )
         : const SizedBox(width: double.infinity);
@@ -279,68 +325,23 @@ class _Slide extends GradientTransform {
   Matrix4? transform(Rect bounds, {TextDirection? textDirection}) => Matrix4.translationValues(bounds.width * t, 0, 0);
 }
 
-/// One line of text whose end stays at the right edge: new words slide the line left, and the old ones fade out on
-/// the left.
-class _FlowLine extends StatefulWidget {
-  const _FlowLine({required this.text, required this.style, required this.animate});
-  final String text;
-  final TextStyle style;
-  final bool animate;
-
-  @override
-  State<_FlowLine> createState() => _FlowLineState();
-}
-
-class _FlowLineState extends State<_FlowLine> with SingleTickerProviderStateMixin {
-  late final _slide = AnimationController(vsync: this, duration: const Duration(milliseconds: 220));
-
-  /// How far right the line still is from where it rests, in pixels, when the slide starts.
-  double _from = 0;
-
-  double _width(String t) {
-    final p = TextPainter(text: TextSpan(text: t, style: widget.style), textDirection: TextDirection.ltr, maxLines: 1)..layout();
-    final w = p.width;
-    p.dispose();
-    return w;
+/// The last stretch of [text] ended by `.`, `!`, `?` or a line break, trimmed (an empty stretch is skipped), with its
+/// mark (not a line break); null before any has ended.
+String? latestFinishedSentence(String text) {
+  bool isEnd(int c) => c == 0x2E || c == 0x21 || c == 0x3F || c == 0x0A;
+  var end = text.length - 1;
+  while (end >= 0) {
+    while (end >= 0 && !isEnd(text.codeUnitAt(end))) {
+      end--;
+    }
+    if (end < 0) return null;
+    var start = end - 1;
+    while (start >= 0 && !isEnd(text.codeUnitAt(start))) {
+      start--;
+    }
+    final sentence = text.substring(start + 1, end).trim();
+    if (sentence.isNotEmpty) return text[end] == '\n' ? sentence : '$sentence${text[end]}';
+    end = start;
   }
-
-  @override
-  void didUpdateWidget(_FlowLine old) {
-    super.didUpdateWidget(old);
-    if (!widget.animate || widget.text == old.text) return;
-    // The new line is wider by the new words; start with the old words where they were and slide them left.
-    final left = _from * (1 - Curves.easeOut.transform(_slide.value));
-    _from = (_width(widget.text) - _width(old.text)).clamp(0.0, 400.0) + left;
-    _slide.forward(from: 0);
-  }
-
-  @override
-  void dispose() {
-    _slide.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ShaderMask(
-      blendMode: BlendMode.dstIn,
-      shaderCallback: (rect) => const LinearGradient(
-        colors: [Colors.transparent, Colors.black],
-        stops: [0, 0.22],
-      ).createShader(rect),
-      child: ClipRect(
-        child: OverflowBox(
-          alignment: Alignment.centerRight,
-          minWidth: 0,
-          maxWidth: double.infinity,
-          child: AnimatedBuilder(
-            animation: _slide,
-            builder: (context, child) =>
-                Transform.translate(offset: Offset(_from * (1 - Curves.easeOut.transform(_slide.value)), 0), child: child),
-            child: Text(widget.text, maxLines: 1, softWrap: false, style: widget.style),
-          ),
-        ),
-      ),
-    );
-  }
+  return null;
 }
