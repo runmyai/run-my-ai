@@ -14,7 +14,6 @@ import '../../theme.dart';
 import '../benchmark/fold.dart';
 import '../buttons.dart';
 import '../context_settings.dart';
-import '../settings/feedback_section.dart';
 import '../settings/privacy_section.dart';
 import '../menu_panel.dart';
 import '../settings/folders_section.dart';
@@ -176,8 +175,6 @@ class _SettingsList extends ConsumerWidget {
         Fold(title: 'Folders', titleStyle: settingsFoldTitle(c), tooltip: foldersAbout, child: const FoldersSection()),
         const SizedBox(height: 28),
         const _Context(),
-        const SizedBox(height: 28),
-        const FeedbackSection(),
         const SizedBox(height: 28),
         const SettingName('Credits'),
         const SizedBox(height: 12),

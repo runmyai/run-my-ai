@@ -1,18 +1,20 @@
-import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../state/chats.dart';
 import '../state/prefs.dart';
 import '../system/open_url.dart';
 import '../theme.dart';
+import 'buttons.dart';
 
 const starUsLabel = 'Star us on GitHub';
 const starUsUrl = 'https://github.com/runmyai/run-my-ai';
 const discordUrl = 'https://discord.gg/BfpvUFp58';
 const sponsorUrl = 'https://github.com/sponsors/HarinManiK';
 
-/// The project's accounts, as (name, address) pairs; the About page writes them out in this order.
+/// The project's accounts, as (name, address) pairs; the About and Community pages show them in this order.
 const communityLinks = [
   ('GitHub', 'https://github.com/runmyai'),
   ('Discord', discordUrl),
@@ -22,161 +24,85 @@ const communityLinks = [
   ('Hugging Face', 'https://huggingface.co/runmyai'),
 ];
 
-/// The sidebar's icons: (tooltip, picture in assets/social, address).
-const _icons = [
-  (starUsLabel, 'star', starUsUrl),
-  ('Discord', 'discord', discordUrl),
-  ('YouTube', 'youtube', 'https://www.youtube.com/@RunMyAI'),
-  ('X', 'x', 'https://x.com/runmyai7'),
-  ('LinkedIn', 'linkedin', 'https://www.linkedin.com/company/run-my-ai'),
-  ('Hugging Face', 'huggingface', 'https://huggingface.co/runmyai'),
-  ('Sponsor', 'sponsor', sponsorUrl),
-];
+/// Opens a link in the browser (replaced in tests, which must not start one).
+final linkOpenerProvider = Provider<Future<bool> Function(String)>((_) => openUrl);
 
-/// One row of small muted icons, each opening its link; brighter under the pointer.
-class CommunityIcons extends StatelessWidget {
-  const CommunityIcons({super.key});
+const starCardText = 'Enjoying Run My AI? A star on GitHub helps others find it.';
 
+/// RMAI_SHOW_STAR_CARD=1: the star card shows at every start, whatever was counted or saved, for looking at its design.
+final starCardForcedProvider = Provider<bool>((_) => Platform.environment['RMAI_SHOW_STAR_CARD'] == '1');
+
+/// The star card was closed in this session.
+class _StarClosedNotifier extends Notifier<bool> {
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-    children: [for (final (tip, name, url) in _icons) _Icon(tip: tip, name: name, url: url)],
-  );
+  bool build() => false;
+
+  void close() => state = true;
 }
 
-class _Icon extends StatefulWidget {
-  const _Icon({required this.tip, required this.name, required this.url});
+final _starClosedProvider = NotifierProvider<_StarClosedNotifier, bool>(_StarClosedNotifier.new);
 
-  final String tip, name, url;
+/// The star card shows: after the [starCardAfter]th finished reply ever until one of its buttons closes it for good,
+/// and never while a reply is written.
+final starCardProvider = Provider<bool>((ref) {
+  if (ref.watch(_starClosedProvider) || ref.watch(chatsProvider.select((s) => s.replyingId != null))) return false;
+  if (ref.watch(starCardForcedProvider)) return true;
+  final (count, closed) = ref.watch(prefsProvider.select((p) => (p.starReplies, p.starCardClosed)));
+  return !closed && count >= starCardAfter;
+});
+
+/// A small quiet card asking for a GitHub star, shown once (see [starCardProvider]); it fades in.
+class StarCard extends ConsumerWidget {
+  const StarCard({super.key});
 
   @override
-  State<_Icon> createState() => _IconState();
-}
-
-class _IconState extends State<_Icon> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!ref.watch(starCardProvider)) return const SizedBox.shrink();
     final c = context.colors;
-    return Tooltip(
-      message: widget.tip,
-      child: MouseRegion(
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: InkWell(
-          key: Key('community-icon-${widget.name}'),
-          borderRadius: BorderRadius.circular(6),
-          onTap: () => openUrl(widget.url),
-          child: Padding(
-            padding: const EdgeInsets.all(6),
-            child: Image.asset(
-              'assets/social/${widget.name}.png',
-              width: 16,
-              height: 16,
-              color: _hover ? c.sideText : c.sideMuted,
-              filterQuality: FilterQuality.medium,
-            ),
-          ),
+    void close() {
+      ref.read(_starClosedProvider.notifier).close();
+      if (!ref.read(starCardForcedProvider)) ref.read(prefsProvider.notifier).closeStarCard();
+    }
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+      builder: (context, opacity, child) => Opacity(opacity: opacity, child: child),
+      child: Container(
+        key: const Key('star-card'),
+        width: 290,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: c.inputFill,
+          border: Border.all(color: c.inputBorder),
+          borderRadius: BorderRadius.circular(12),
         ),
-      ),
-    );
-  }
-}
-
-/// How long after the app starts the line under the message box shows.
-const communityLineTime = Duration(minutes: 10);
-
-/// The time the line's ten minutes are counted by (replaced in tests).
-final communityClockProvider = Provider<DateTime Function()>((_) => DateTime.now);
-
-/// Which step of the line under the message box is up this session (0 GitHub, 1 Discord), or null for none: when
-/// the step is closed (the next one waits for the next start), or when all are done..
-class CommunityAskNotifier extends Notifier<int?> {
-  late final DateTime _start;
-
-  @override
-  int? build() {
-    _start = ref.read(communityClockProvider)();
-    final step = ref.read(prefsProvider).communityStep;
-    return step > 1 ? null : step;
-  }
-
-  /// How much of the ten minutes is left.
-  Duration get left => communityLineTime - ref.read(communityClockProvider)().difference(_start);
-
-  void close() {
-    final step = state;
-    if (step == null) return;
-    ref.read(prefsProvider.notifier).setCommunityStep(step + 1);
-    state = null;
-  }
-}
-
-final communityAskProvider = NotifierProvider<CommunityAskNotifier, int?>(CommunityAskNotifier.new);
-
-/// One quiet line under the message box: the step's ask, an open-link icon after it, and a close button. It shows
-/// during the first [communityLineTime] after the app starts.
-class CommunityLine extends ConsumerStatefulWidget {
-  const CommunityLine({super.key});
-
-  @override
-  ConsumerState<CommunityLine> createState() => _CommunityLineState();
-}
-
-class _CommunityLineState extends ConsumerState<CommunityLine> {
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    final left = ref.read(communityAskProvider.notifier).left;
-    if (left > Duration.zero) _timer = Timer(left, () => setState(() {}));
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final step = ref.watch(communityAskProvider);
-    if (step == null || ref.read(communityAskProvider.notifier).left <= Duration.zero) return const SizedBox.shrink();
-    final color = context.colors.textMuted;
-    final (key, text, url) = step == 0
-        ? (const Key('line-star'), '⭐ $starUsLabel', starUsUrl)
-        : (const Key('line-discord'), 'Join us on Discord', discordUrl);
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          InkWell(
-            key: key,
-            borderRadius: BorderRadius.circular(4),
-            onTap: () => openUrl(url),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(starCardText, style: TextStyle(fontSize: 13, height: 1.4, color: c.textSecondary)),
+            const SizedBox(height: 12),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                Text(text, style: TextStyle(fontSize: 12, color: color)),
-                const SizedBox(width: 4),
-                Icon(Icons.open_in_new, size: 12, color: color),
+                AppButton(key: const Key('star-card-later'), label: 'Not now', dense: true, onTap: close),
+                MainButton(
+                  key: const Key('star-card-star'),
+                  label: 'Star on GitHub',
+                  dense: true,
+                  onTap: () {
+                    ref.read(linkOpenerProvider)(starUsUrl);
+                    close();
+                  },
+                ),
               ],
             ),
-          ),
-          const SizedBox(width: 6),
-          InkWell(
-            key: const Key('line-close'),
-            borderRadius: BorderRadius.circular(10),
-            onTap: ref.read(communityAskProvider.notifier).close,
-            child: Padding(
-              padding: const EdgeInsets.all(3),
-              child: Icon(Icons.close, size: 13, semanticLabel: 'Close', color: color),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

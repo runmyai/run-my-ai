@@ -19,7 +19,6 @@ import '../theme.dart';
 import 'buttons.dart';
 import 'chat_list.dart';
 import 'clicky.dart';
-import 'community_links.dart';
 import 'look.dart';
 import 'marked_text.dart';
 import 'title_bar.dart';
@@ -176,6 +175,13 @@ class _FullBody extends ConsumerWidget {
             selected: archiveOpen,
             onTap: () => ref.read(archiveViewProvider.notifier).toggle(kind),
           ),
+        _Row(
+          key: const Key('community'),
+          icon: Icons.groups_outlined,
+          label: 'Community',
+          selected: section == Section.community,
+          onTap: () => select(Section.community),
+        ),
         const StoreHint(),
         _Row(
           key: const Key('store'),
@@ -197,8 +203,6 @@ class _FullBody extends ConsumerWidget {
           selected: section == Section.settings,
           onTap: () => select(Section.settings),
         ),
-        const SizedBox(height: 4),
-        const CommunityIcons(),
       ],
     );
   }
@@ -325,6 +329,13 @@ class _RailBody extends ConsumerWidget {
         if (toggle != null) const SizedBox(height: 10),
         _IconAction(key: const Key('new-chat'), icon: Icons.add, tooltip: 'New chat', onTap: () => newChat(ref)),
         const Spacer(),
+        _IconAction(
+          key: const Key('community'),
+          icon: Icons.groups_outlined,
+          tooltip: 'Community',
+          selected: section == Section.community,
+          onTap: () => select(Section.community),
+        ),
         _IconAction(
           key: const Key('store'),
           icon: Icons.storefront_outlined,

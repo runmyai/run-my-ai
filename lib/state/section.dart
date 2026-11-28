@@ -8,6 +8,7 @@ enum Section {
   code,
   store,
   engine,
+  community,
   settings;
 
   /// The section's own chats (Chat and Code); null for the others.

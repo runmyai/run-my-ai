@@ -464,167 +464,175 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
     return Column(
       children: [
         Expanded(
-          child: Listener(
-            onPointerDown: (_) => handsOn(),
-            onPointerSignal: (_) => handsOn(),
-            onPointerPanZoomStart: (_) => handsOn(),
-            child: loading
-                ? const SizedBox.shrink()
-                : messages.isEmpty
-                ? Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      // Dark 3: the logo, large and barely there, behind it.
-                      if (c.slashes)
-                        IgnorePointer(
-                          child: Opacity(
-                            opacity: c.isLight ? 0.05 : 0.035,
-                            child: Image.asset(
-                              c.isLight ? 'assets/logo/mark-light.png' : 'assets/logo/mark-dark.png',
-                              width: 420,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Listener(
+                  onPointerDown: (_) => handsOn(),
+                  onPointerSignal: (_) => handsOn(),
+                  onPointerPanZoomStart: (_) => handsOn(),
+                  child: loading
+                      ? const SizedBox.shrink()
+                      : messages.isEmpty
+                      ? Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Dark 3: the logo, large and barely there, behind it.
+                            if (c.slashes)
+                              IgnorePointer(
+                                child: Opacity(
+                                  opacity: c.isLight ? 0.05 : 0.035,
+                                  child: Image.asset(
+                                    c.isLight ? 'assets/logo/mark-light.png' : 'assets/logo/mark-dark.png',
+                                    width: 420,
+                                  ),
+                                ),
+                              ),
+                            Text(
+                              model == null ? noModelText : (firstMessage ? sendToLoad(model) : 'Start a new chat'),
+                              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w500, color: c.text),
                             ),
-                          ),
-                        ),
-                      Text(
-                        model == null ? noModelText : (firstMessage ? sendToLoad(model) : 'Start a new chat'),
-                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.w500, color: c.text),
-                      ),
-                    ],
-                  )
-                : Stack(
-                    children: [
-                      NotificationListener<Notification>(
-                        onNotification: (n) {
-                          final m = switch (n) {
-                            ScrollUpdateNotification(:final metrics, depth: 0) => metrics,
-                            ScrollMetricsNotification(:final metrics, depth: 0) => metrics,
-                            _ => null,
-                          };
-                          if (m != null) {
-                            _scrolled.value = m.pixels > m.minScrollExtent + 1;
-                            if (n is ScrollUpdateNotification && (n.scrollDelta ?? 0) != 0) {
-                              _moving.value = true;
-                              _still?.cancel();
-                              _still = Timer(const Duration(milliseconds: 150), () {
-                                if (!mounted) return;
-                                _updateCover();
-                                _moving.value = false;
-                              });
-                            }
-                            _updateCover();
-                            _updateBookmark();
-                          }
-                          return _follow.handle(n);
-                        },
-                        child: Opacity(
-                          opacity: _opening ? 0 : 1,
-                          child: _follow.scrollbar(
-                            context,
-                            // Keyed by chat, so every chat starts afresh.
-                            ListView.builder(
-                              key: ValueKey(chat!.id),
-                              controller: _scroll,
-                              physics: _follow.physics,
-                              // Below: room for the new line of a reply being written, where it shows until
-                              // the page has moved up by it.
-                              padding: const EdgeInsets.only(top: _room, bottom: _bottomRoom),
-                              itemCount: messages.length,
-                              itemBuilder: (context, i) => message(i),
-                            ),
-                          ),
-                        ),
-                      ),
-                      // At the top row: moving, a soft edge; still, a line left cut there is hidden whole.
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        top: 0,
-                        child: IgnorePointer(
-                          child: ListenableBuilder(
-                            listenable: Listenable.merge([_cover, _moving]),
-                            builder: (context, _) =>
-                                _TopCover(cover: _cover.value, moving: _moving.value, color: c.page),
-                          ),
-                        ),
-                      ),
-                      // Scrolled: a very light, short shadow just under the top row.
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        top: 0,
-                        height: 4,
-                        child: IgnorePointer(
-                          child: ValueListenableBuilder<bool>(
-                            valueListenable: _scrolled,
-                            builder: (context, scrolled, _) => AnimatedOpacity(
-                              key: const Key('top-shadow'),
-                              opacity: scrolled ? 1 : 0,
-                              duration: const Duration(milliseconds: 150),
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: [
-                                      c.shadow.withValues(alpha: c.shadow.a * 0.1),
-                                      c.shadow.withValues(alpha: 0),
-                                    ],
+                          ],
+                        )
+                      : Stack(
+                          children: [
+                            NotificationListener<Notification>(
+                              onNotification: (n) {
+                                final m = switch (n) {
+                                  ScrollUpdateNotification(:final metrics, depth: 0) => metrics,
+                                  ScrollMetricsNotification(:final metrics, depth: 0) => metrics,
+                                  _ => null,
+                                };
+                                if (m != null) {
+                                  _scrolled.value = m.pixels > m.minScrollExtent + 1;
+                                  if (n is ScrollUpdateNotification && (n.scrollDelta ?? 0) != 0) {
+                                    _moving.value = true;
+                                    _still?.cancel();
+                                    _still = Timer(const Duration(milliseconds: 150), () {
+                                      if (!mounted) return;
+                                      _updateCover();
+                                      _moving.value = false;
+                                    });
+                                  }
+                                  _updateCover();
+                                  _updateBookmark();
+                                }
+                                return _follow.handle(n);
+                              },
+                              child: Opacity(
+                                opacity: _opening ? 0 : 1,
+                                child: _follow.scrollbar(
+                                  context,
+                                  // Keyed by chat, so every chat starts afresh.
+                                  ListView.builder(
+                                    key: ValueKey(chat!.id),
+                                    controller: _scroll,
+                                    physics: _follow.physics,
+                                    // Below: room for the new line of a reply being written, where it shows until
+                                    // the page has moved up by it.
+                                    padding: const EdgeInsets.only(top: _room, bottom: _bottomRoom),
+                                    itemCount: messages.length,
+                                    itemBuilder: (context, i) => message(i),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                      ),
-                      // "↓": there is text below that the page is not following.
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 8,
-                        child: Center(
-                          child: ValueListenableBuilder<bool>(
-                            valueListenable: _follow.below,
-                            builder: (context, below, _) => IgnorePointer(
-                              ignoring: !below,
-                              child: AnimatedOpacity(
-                                opacity: below ? 1 : 0,
-                                duration: const Duration(milliseconds: 150),
-                                child: AppIconButton(
-                                  key: const Key('jump-newest'),
-                                  tooltip: 'Jump to newest',
-                                  icon: Icons.arrow_downward,
-                                  look: IconButtonLook.outlined,
-                                  round: true,
-                                  onTap: _toNewest,
+                            // At the top row: moving, a soft edge; still, a line left cut there is hidden whole.
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              top: 0,
+                              child: IgnorePointer(
+                                child: ListenableBuilder(
+                                  listenable: Listenable.merge([_cover, _moving]),
+                                  builder: (context, _) =>
+                                      _TopCover(cover: _cover.value, moving: _moving.value, color: c.page),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                      ),
-                      // The bookmarks: dashes at the right edge, a card with their names on hover.
-                      if (messages.any((m) => m.bookmark))
-                        Positioned(
-                          // (Clear of the scroll bar.)
-                          right: 16,
-                          top: 12,
-                          bottom: 12,
-                          child: Center(
-                            child: ValueListenableBuilder<int?>(
-                              valueListenable: _bookmarkHere,
-                              builder: (context, here, _) => _BookmarkRail(
-                                bookmarks: [
-                                  for (var i = 0; i < messages.length; i++)
-                                    if (messages[i].bookmark) (index: i, title: messages[i].text),
-                                ],
-                                here: here,
-                                onJump: _toBookmark,
+                            // Scrolled: a very light, short shadow just under the top row.
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              top: 0,
+                              height: 4,
+                              child: IgnorePointer(
+                                child: ValueListenableBuilder<bool>(
+                                  valueListenable: _scrolled,
+                                  builder: (context, scrolled, _) => AnimatedOpacity(
+                                    key: const Key('top-shadow'),
+                                    opacity: scrolled ? 1 : 0,
+                                    duration: const Duration(milliseconds: 150),
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            c.shadow.withValues(alpha: c.shadow.a * 0.1),
+                                            c.shadow.withValues(alpha: 0),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
+                            // "↓": there is text below that the page is not following.
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 8,
+                              child: Center(
+                                child: ValueListenableBuilder<bool>(
+                                  valueListenable: _follow.below,
+                                  builder: (context, below, _) => IgnorePointer(
+                                    ignoring: !below,
+                                    child: AnimatedOpacity(
+                                      opacity: below ? 1 : 0,
+                                      duration: const Duration(milliseconds: 150),
+                                      child: AppIconButton(
+                                        key: const Key('jump-newest'),
+                                        tooltip: 'Jump to newest',
+                                        icon: Icons.arrow_downward,
+                                        look: IconButtonLook.outlined,
+                                        round: true,
+                                        onTap: _toNewest,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            // The bookmarks: dashes at the right edge, a card with their names on hover.
+                            if (messages.any((m) => m.bookmark))
+                              Positioned(
+                                // (Clear of the scroll bar.)
+                                right: 16,
+                                top: 12,
+                                bottom: 12,
+                                child: Center(
+                                  child: ValueListenableBuilder<int?>(
+                                    valueListenable: _bookmarkHere,
+                                    builder: (context, here, _) => _BookmarkRail(
+                                      bookmarks: [
+                                        for (var i = 0; i < messages.length; i++)
+                                          if (messages[i].bookmark) (index: i, title: messages[i].text),
+                                      ],
+                                      here: here,
+                                      onJump: _toBookmark,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                    ],
-                  ),
+                ),
+              ),
+              // The one-time star card, above the message box at the right.
+              const Positioned(right: 24, bottom: 16, child: StarCard()),
+            ],
           ),
         ),
         Padding(
@@ -632,13 +640,7 @@ class _ChatPageState extends ConsumerState<ChatPage> with TickerProviderStateMix
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: ChatPage.contentWidth),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const _MessageBox(),
-                  const CommunityLine(),
-                ],
-              ),
+              child: const _MessageBox(),
             ),
           ),
         ),

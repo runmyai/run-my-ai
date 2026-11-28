@@ -4,31 +4,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../state/feedback.dart';
 import '../../theme.dart';
 import '../buttons.dart';
-import 'setting_name.dart';
 
-/// Settings: a line and a button that opens the feedback form.
-class FeedbackSection extends StatelessWidget {
-  const FeedbackSection({super.key});
+/// The top bar's feedback button: it opens the feedback form.
+class FeedbackButton extends StatelessWidget {
+  const FeedbackButton({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SettingName(
-          'Send feedback',
-          description: 'An idea, a bug, or something you like: it goes straight to us.',
-        ),
-        const SizedBox(height: 12),
-        AppButton(
-          key: const Key('feedback-open'),
-          label: 'Send feedback',
-          icon: Icons.chat_bubble_outline,
-          onTap: () => showDialog<void>(context: context, builder: (_) => const FeedbackForm()),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => AppIconButton(
+    key: const Key('feedback-open'),
+    icon: Icons.feedback_outlined,
+    tooltip: 'Send feedback',
+    onTap: () => showDialog<void>(context: context, builder: (_) => const FeedbackForm()),
+    size: 32,
+  );
 }
 
 /// The feedback form: the kind, the message, an email for a reply, and whether the engine's log goes with it.

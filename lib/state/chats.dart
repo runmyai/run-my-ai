@@ -916,7 +916,10 @@ class ChatsNotifier extends Notifier<ChatsState> {
       // Saved empty when the user flipped while it was written: it goes again.
       ref.read(chatStoreProvider).removeMessage(chat.id, last.node!);
     }
-    if (finished) ref.read(chimeProvider).replyDone();
+    if (finished) {
+      ref.read(chimeProvider).replyDone();
+      ref.read(prefsProvider.notifier).countReply();
+    }
     state = state.copyWith(
       replyingId: () => null,
       replyingPath: const [],

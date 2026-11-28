@@ -334,7 +334,7 @@ void main() {
           container: scope,
           child: MaterialApp(
             theme: buildTheme(Brightness.light),
-            home: const Scaffold(body: Center(child: FeedbackSection())),
+            home: const Scaffold(body: Center(child: FeedbackButton())),
           ),
         ),
       );
