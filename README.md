@@ -24,7 +24,7 @@
 - **Private.** Everything runs on your machine. Nothing you type leaves it.
 - **No limits, no bill.** No usage caps, no subscription. Free.
 
-## What you get
+## What's in the app
 
 - **A simple desktop app.** No command line, no setup files: it sets up the engine for your PC, then you download a model and start chatting.
 - **A model store.** Every supported model in one place, ready to download. A dropped connection picks up where it stopped.
@@ -53,22 +53,22 @@ Download the file for your system from [Releases](https://github.com/runmyai/run
 
 ## FAQ
 
-**Does it change the model's answers or skip experts?**
+**Does it change the model's answers or skip experts?**<br>
 No. Every expert the model picks is computed, with its full weights in the file's own quantization: no expert skipping, no top-k cut. Computers round numbers slightly differently depending on the order they add them in, so no two engines give bit-identical results. Even llama.cpp gives slightly different results from itself when you only change its batch size. We measured ours against llama.cpp: the difference is no bigger than that.
 
-**What SSD do I need?**
+**What SSD do I need?**<br>
 We suggest an NVMe SSD on PCIe 3.0 or above.
 
-**Will it wear out my SSD?**
+**Will it wear out my SSD?**<br>
 No. SSDs wear when they're written, not when they're read. That's why every SSD's endurance rating counts terabytes written (TBW) and nothing else. Running a model only reads.
 
-**Can I use it with Hermes Agent, Pi or my own tools?**
+**Can I use it with Hermes Agent, Pi or my own tools?**<br>
 Yes. Run My AI has a serve mode with an OpenAI-compatible API. Hermes Agent, Pi, or any tool that can use an OpenAI-compatible endpoint can use the models it runs.
 
-**Is it free?**
+**Is it free?**<br>
 Yes. No usage caps, no subscription, and the code is open source under the MIT licence.
 
-**Does it send anything?**
+**Does it send anything?**<br>
 Your chats never leave your PC. If you leave "Share benchmark results and app stats" on (you can turn it off at first start or in Settings), the app and its engine each send a small anonymous record once a day: a random install id, the app and engine versions, the system, the processor and graphics cards, and the names of the models you downloaded. It also sends a note when a model or engine download finishes, and your Benchmark results when you run one. Once a day it asks runmyai.org whether a new version is out, sending only the app's version and system.
 
 ## Help with anything
