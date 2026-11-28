@@ -30,7 +30,7 @@ import 'package:runmyai/ui/welcome.dart' show shareBenchmarksLabel, shareBenchma
 /// The app's folders in the test's folder.
 const _file = ModelFile(id: 'm/f', quantization: 'q', sizeBytes: 1);
 const CatalogEntry _entry = (
-  model: CatalogModel(id: 'm', name: 'M', lab: 'L', description: '', parameters: '1B', activeParameters: '1B', files: [_file]),
+  model: CatalogModel(id: 'm', name: 'M', lab: 'L', madeBy: '', country: '', released: '', type: '', input: '', output: '', maxContext: '', parameters: '1B', activeParameters: '1B', files: [_file]),
   file: _file,
 );
 

@@ -42,7 +42,7 @@ class _Backend implements Backend {
 
   @override
   Future<List<CatalogModel>> loadCatalog() async => [
-    const CatalogModel(id: 'm', name: 'm', lab: 'L', description: '', parameters: '1B', activeParameters: '1B', files: [_file]),
+    const CatalogModel(id: 'm', name: 'm', lab: 'L', madeBy: '', country: '', released: '', type: '', input: '', output: '', maxContext: '', parameters: '1B', activeParameters: '1B', files: [_file]),
   ];
   @override
   Stream<double> download(ModelFile file) => const Stream.empty();

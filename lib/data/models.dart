@@ -6,9 +6,15 @@ class CatalogModel {
     required this.id,
     required this.name,
     required this.lab,
-    required this.description,
     required this.parameters,
     required this.activeParameters,
+    required this.madeBy,
+    required this.country,
+    required this.released,
+    required this.type,
+    required this.input,
+    required this.output,
+    required this.maxContext,
     required this.files,
     this.thinking = ModelThinking.none,
   });
@@ -16,9 +22,18 @@ class CatalogModel {
   final String id;
   final String name;
   final String lab;
-  final String description;
   final String parameters;
   final String activeParameters;
+
+  /// The details shown under the card: who made it, where, when, what it is for, what it reads and writes, and its
+  /// longest context. Written as the Store shows them.
+  final String madeBy;
+  final String country;
+  final String released;
+  final String type;
+  final String input;
+  final String output;
+  final String maxContext;
   final List<ModelFile> files;
   final ModelThinking thinking;
 }

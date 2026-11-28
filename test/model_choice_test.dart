@@ -17,7 +17,7 @@ const _big = ModelFile(id: 'big/f', quantization: 'q', sizeBytes: 1);
 const _small = ModelFile(id: 'small/f', quantization: 'q', sizeBytes: 1);
 
 CatalogModel _model(String id, ModelFile file) =>
-    CatalogModel(id: id, name: id, lab: 'L', description: '', parameters: '1B', activeParameters: '1B', files: [file]);
+    CatalogModel(id: id, name: id, lab: 'L', madeBy: '', country: '', released: '', type: '', input: '', output: '', maxContext: '', parameters: '1B', activeParameters: '1B', files: [file]);
 
 class _Backend implements Backend {
   final asked = <(String, int)>[];
