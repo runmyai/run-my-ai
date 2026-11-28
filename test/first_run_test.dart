@@ -223,6 +223,22 @@ void main() {
     expect(Storage(dir).readFirstRun()['storeHintClosed'], isTrue);
   });
 
+  testWidgets('the feedback button in the top bar, next to the bell, opens the feedback form', (tester) async {
+    await open(tester, seen: sent);
+    final button = find.byKey(const Key('feedback-open'));
+    expect(button, findsOneWidget);
+    expect(find.byTooltip('Send feedback'), findsOneWidget);
+    expect(tester.getCenter(button).dy, tester.getCenter(find.byKey(const Key('bell'))).dy, reason: 'in the same row');
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('feedback-title')), findsOneWidget);
+    expect(find.byKey(const Key('feedback-message')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('feedback-close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('feedback-title')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('the sidebar shows the seven community icons', (tester) async {
     await open(tester, seen: {'welcomeShown': true, 'storeHintClosed': true, 'firstMessageSent': true});
     for (final name in ['star', 'discord', 'youtube', 'x', 'linkedin', 'huggingface', 'sponsor']) {

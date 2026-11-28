@@ -80,6 +80,12 @@ void main() {
     );
   }
 
+  testWidgets('there is no Send feedback section (it is in the top bar)', (tester) async {
+    await show(tester);
+    expect(find.text('Send feedback'), findsNothing);
+    expect(find.byKey(const Key('feedback-open')), findsNothing);
+  });
+
   testWidgets('Folders starts closed and opens on a click; there is no Storage drop-down', (tester) async {
     await show(tester);
     expect(find.byKey(const Key('fold-Storage')), findsNothing);
@@ -183,7 +189,6 @@ void main() {
       'Other folders that already hold model files. They are used from there, not copied.',
       'How precisely the context cache is stored at each context length. A smaller type uses less memory and is '
           'slightly less exact. Applies the next time the model loads.',
-      'An idea, a bug, or something you like: it goes straight to us.',
     ]) {
       expect(find.text(description), findsNothing, reason: description);
       expect(find.byTooltip(description), findsOneWidget, reason: description);

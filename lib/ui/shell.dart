@@ -16,6 +16,7 @@ import 'pages/engine_page.dart';
 import 'pages/simple_pages.dart';
 import 'pages/store_page.dart';
 import 'serve_panel.dart';
+import 'settings/feedback_section.dart';
 import 'shortcuts.dart';
 import 'sidebar.dart';
 import 'title_bar.dart';
@@ -101,8 +102,8 @@ class Shell extends ConsumerWidget {
   }
 }
 
-/// The page's part of the window's top row: the model picker and the search matches bar (in Chat), and the window
-/// buttons.
+/// The page's part of the window's top row: the model picker and the search matches bar (in Chat), the feedback button,
+/// the bell and the window buttons.
 class _PageTopRow extends StatelessWidget {
   const _PageTopRow({required this.showPicker});
 
@@ -130,6 +131,7 @@ class _PageTopRow extends StatelessWidget {
               if (showPicker) const Padding(padding: EdgeInsets.only(right: 12), child: FindBar()),
               const UpdateButton(),
               const Padding(padding: EdgeInsets.only(right: 8), child: ServeButton()),
+              const Padding(padding: EdgeInsets.only(right: 4), child: FeedbackButton()),
               const Padding(padding: EdgeInsets.only(right: 8), child: _Bell()),
               if (!isMacLook) const WindowButtons() else const SizedBox(width: 8),
             ],
