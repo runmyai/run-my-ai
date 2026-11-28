@@ -66,9 +66,13 @@ class StarCard extends ConsumerWidget {
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
-      builder: (context, opacity, child) => Opacity(opacity: opacity, child: child),
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+      // Rises into place from a little below while it fades in.
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(offset: Offset(0, 28 * (1 - t)), child: child),
+      ),
       child: Container(
         key: const Key('star-card'),
         width: 290,
