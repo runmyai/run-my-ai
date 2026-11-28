@@ -7,9 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../backend/backend.dart';
 import '../../backend/engine_backend.dart';
 import '../../engine/engine_download.dart';
+import '../../state/benchmark.dart';
+import '../../state/chats.dart';
 import '../../state/library.dart';
 import '../../state/prefs.dart';
 import '../../state/providers.dart';
+import '../../state/serve.dart';
 import '../../system/folders.dart';
 import '../../system/relaunch.dart';
 import '../../theme.dart';
@@ -105,13 +108,20 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
     final own = ref.watch(prefsProvider.select((p) => p.engineFolder));
     final engine = EngineBackend.engineFolder(own, folders);
     final busy = _moving != null;
+    // A folder is not changed while the model is in use: a reply being written, a benchmark or hosting. A model that is
+    // only loaded is stopped by the change itself. (Nothing runs yet in the first start.)
+    final inUse =
+        !widget.firstStart &&
+        (ref.watch(chatsProvider.select((s) => s.replyingId != null)) ||
+            ref.watch(benchmarkProvider.select((s) => s.running)) ||
+            ref.watch(serveProvider.select((s) => s.busy)));
     final installed = installedEngine(engine);
     final installedLine = installed == null
         ? ''
         : 'TokenWing ${installed.version}, ${engineBuildLabel(installed.build)}. ';
     final download = AppButton(
       key: const Key('engine-download-open'),
-      label: 'Download engine...',
+      label: 'Reinstall engine...',
       dense: true,
       onTap: busy
           ? null
@@ -121,31 +131,29 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
             },
     );
 
-    Widget row(
-      String id,
-      String title,
-      String about,
-      String path, {
-      required VoidCallback onMove,
-      String label = 'Move...',
-      Widget? extra,
-    }) => _FolderRow(
-      id: id,
-      title: title,
-      about: about,
-      aboutAsTooltip: !widget.firstStart,
-      path: path,
-      button: Row(
-        mainAxisSize: MainAxisSize.min,
-        spacing: 8,
-        children: [
-          ?extra,
-          AppButton(key: Key('folder-move-$id'), label: label, dense: true, onTap: busy ? null : onMove),
-        ],
-      ),
-      progress: _moving == id ? (_done, _total) : null,
-      failure: _failedRow == id ? _failure : null,
-    );
+    Widget row(String id, String title, String about, String path, {required VoidCallback onMove, Widget? extra}) =>
+        _FolderRow(
+          id: id,
+          title: title,
+          about: about,
+          aboutAsTooltip: !widget.firstStart,
+          path: path,
+          button: Row(
+            mainAxisSize: MainAxisSize.min,
+            spacing: 8,
+            children: [
+              ?extra,
+              AppButton(
+                key: Key('folder-move-$id'),
+                label: 'Change...',
+                dense: true,
+                onTap: busy || inUse ? null : onMove,
+              ),
+            ],
+          ),
+          progress: _moving == id ? (_done, _total) : null,
+          failure: _failedRow == id ? _failure : null,
+        );
 
     final sep = Platform.pathSeparator;
     // A folder in the main folder moves along with it.
@@ -232,7 +240,6 @@ class _FoldersSectionState extends ConsumerState<FoldersSection> {
             'Engine',
             '${installedLine}The engine Run My AI runs. A change applies the next time it starts.',
             engine,
-            label: 'Choose...',
             onMove: () async {
               final dir = await getDirectoryPath(initialDirectory: engine);
               if (dir == null || !mounted) return;

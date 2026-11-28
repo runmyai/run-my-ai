@@ -1,6 +1,6 @@
 // The Settings page (lib/ui/pages/settings_page.dart): Folders as a drop-down that starts closed (its rows in order, the
-// saved chat states' disk limit inside their row), each
-// setting's description shown as a tooltip on its name instead of as text under it, and the KV cache quantization
+// saved chat states' disk limit inside their row, its Change buttons held while the model is in use), each setting's
+// description shown as a tooltip on its name instead of as text under it, and the KV cache quantization
 // picker (lib/ui/context_settings.dart), which sets each length's cache type and never the chat's context length, and
 // the sharing choice as one small line at the end of the page.
 // Run: flutter test test/settings_page_test.dart
@@ -11,14 +11,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:runmyai/backend/dummy_backend.dart';
+import 'package:runmyai/data/chat_store.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
+import 'package:runmyai/state/chats.dart';
 import 'package:runmyai/state/library.dart';
 import 'package:runmyai/state/prefs.dart';
 import 'package:runmyai/state/profiles.dart';
 import 'package:runmyai/state/providers.dart';
 import 'package:runmyai/system/folders.dart';
 import 'package:runmyai/theme.dart';
+import 'package:runmyai/ui/buttons.dart';
 import 'package:runmyai/ui/pages/settings_page.dart';
 import 'package:runmyai/ui/settings/folders_section.dart';
 import 'package:runmyai/ui/welcome.dart' show shareBenchmarksLabel, shareBenchmarksNote;
@@ -41,19 +44,23 @@ class _Folders extends FoldersNotifier {
 void main() {
   late Directory dir;
   late ProviderContainer container;
-  setUp(() {
+  late ChatStore store;
+  setUp(() async {
     dir = Directory.systemTemp.createTempSync('runmyai-settings-');
+    store = await ChatStore.open(dir);
     container = ProviderContainer(
       overrides: [
         storageProvider.overrideWithValue(Storage(dir)),
+        chatStoreProvider.overrideWithValue(store),
         shownModelProvider.overrideWithValue(null),
         backendProvider.overrideWithValue(DummyBackend()),
         foldersProvider.overrideWith(() => _Folders('${dir.path}/main')),
       ],
     );
   });
-  tearDown(() {
+  tearDown(() async {
     container.dispose();
+    await store.close();
     dir.deleteSync(recursive: true);
   });
 
@@ -129,6 +136,37 @@ void main() {
     expect(container.read(prefsProvider).stateLimitGiB, 25, reason: 'nor text that is not a number');
   });
 
+  testWidgets('the folder buttons: Reinstall engine and Change, held while a reply is being written', (tester) async {
+    await show(tester);
+    await tester.tap(find.byKey(const Key('fold-Folders')));
+    await tester.pump();
+    expect(find.text('Reinstall engine...'), findsOneWidget);
+    expect(find.text('Download engine...'), findsNothing);
+    expect(find.text('Move...'), findsNothing);
+    expect(find.text('Choose...'), findsNothing);
+    const ids = ['engine', 'chats', 'cache', 'models'];
+    bool enabled(String id) => tester.widget<AppButton>(find.byKey(Key('folder-move-$id'))).onTap != null;
+    for (final id in ids) {
+      expect(tester.widget<AppButton>(find.byKey(Key('folder-move-$id'))).label, 'Change...');
+      expect(enabled(id), isTrue, reason: '$id: nothing is running');
+    }
+
+    final chats = container.read(chatsProvider.notifier);
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    chats.state = chats.state.copyWith(replyingId: () => 'c1');
+    await tester.pump();
+    for (final id in ids) {
+      expect(enabled(id), isFalse, reason: '$id: a reply is being written');
+    }
+
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    chats.state = chats.state.copyWith(replyingId: () => null);
+    await tester.pump();
+    for (final id in ids) {
+      expect(enabled(id), isTrue, reason: '$id: the reply ended');
+    }
+  });
+
   testWidgets('descriptions are tooltips on the names, never text on the page', (tester) async {
     await show(tester);
     await tester.tap(find.byKey(const Key('fold-Folders')));
@@ -166,6 +204,7 @@ void main() {
     container = ProviderContainer(
       overrides: [
         storageProvider.overrideWithValue(Storage(dir)),
+        chatStoreProvider.overrideWithValue(store),
         shownModelProvider.overrideWithValue(_entry),
         backendProvider.overrideWithValue(DummyBackend()),
         foldersProvider.overrideWith(() => _Folders('${dir.path}/main')),
