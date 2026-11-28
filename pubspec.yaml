@@ -38,4 +38,5 @@ flutter:
     - assets/licenses/
     - assets/author/
     - assets/benchmark/
+    - assets/social/
     - assets/benchmark/stories/

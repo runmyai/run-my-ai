@@ -19,6 +19,7 @@ import '../theme.dart';
 import 'buttons.dart';
 import 'chat_list.dart';
 import 'clicky.dart';
+import 'community_links.dart';
 import 'look.dart';
 import 'marked_text.dart';
 import 'title_bar.dart';
@@ -196,6 +197,8 @@ class _FullBody extends ConsumerWidget {
           selected: section == Section.settings,
           onTap: () => select(Section.settings),
         ),
+        const SizedBox(height: 4),
+        const CommunityIcons(),
       ],
     );
   }

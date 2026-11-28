@@ -23,6 +23,7 @@ import 'package:runmyai/state/today.dart';
 import 'package:runmyai/system/folders.dart';
 import 'package:runmyai/theme.dart';
 import 'package:runmyai/ui/buttons.dart';
+import 'package:runmyai/ui/community_links.dart';
 import 'package:runmyai/ui/settings/privacy_section.dart';
 import 'package:runmyai/ui/shell.dart';
 import 'package:runmyai/ui/sidebar.dart';
@@ -56,9 +57,13 @@ class _Folders extends FoldersNotifier {
   FolderSet build() => FolderSet(main: main, models: '$main/models', chats: '$main/chats', cache: '$main/cache');
 }
 
+/// What the line under the message box counts its ten minutes by.
+var clockNow = DateTime(2026);
+
 void main() {
   late Directory dir;
   setUp(() {
+    clockNow = DateTime(2026);
     dir = Directory.systemTemp.createTempSync('runmyai-firstrun-');
     // The window plugin is not there in a test: the window is never maximized.
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -90,6 +95,7 @@ void main() {
         chatStoreProvider.overrideWithValue(store),
         backendProvider.overrideWithValue(_Backend()),
         todayProvider.overrideWith(_Today.new),
+        communityClockProvider.overrideWithValue(() => clockNow),
       ],
     );
     addTearDown(container.dispose);
@@ -215,6 +221,71 @@ void main() {
     tester.takeException();
     expect(find.text('Download models here'), findsNothing);
     expect(Storage(dir).readFirstRun()['storeHintClosed'], isTrue);
+  });
+
+  testWidgets('the sidebar shows the seven community icons', (tester) async {
+    await open(tester, seen: {'welcomeShown': true, 'storeHintClosed': true, 'firstMessageSent': true});
+    for (final name in ['star', 'discord', 'youtube', 'x', 'linkedin', 'huggingface', 'sponsor']) {
+      expect(find.byKey(Key('community-icon-$name')), findsOneWidget, reason: name);
+    }
+    for (final tip in ['Star us on GitHub', 'Discord', 'YouTube', 'X', 'LinkedIn', 'Hugging Face', 'Sponsor']) {
+      expect(find.byTooltip(tip), findsOneWidget, reason: tip);
+    }
+  });
+
+  group('the line under the message box', () {
+    const seen = {'welcomeShown': true, 'storeHintClosed': true, 'firstMessageSent': true};
+    final star = find.byKey(const Key('line-star')), discord = find.byKey(const Key('line-discord'));
+
+    // (The app ends here: the pending timers go with the widgets.)
+    Future<void> end(WidgetTester tester) => tester.pumpWidget(const SizedBox());
+
+    testWidgets('GitHub shows at start, in any chat, and is gone after ten minutes', (tester) async {
+      await open(tester, seen: seen);
+      expect(star, findsOneWidget);
+      expect(discord, findsNothing);
+      await tester.enterText(find.byType(TextField), 'hello');
+      await tester.tap(find.byKey(const Key('send')));
+      await tester.pump();
+      expect(star, findsOneWidget, reason: 'a chat with a message too');
+      clockNow = clockNow.add(communityLineTime);
+      await tester.pump(communityLineTime);
+      expect(star, findsNothing);
+      expect(Storage(dir).readPrefs().communityStep, 0, reason: 'timing out closes nothing for good');
+      await end(tester);
+    });
+
+    testWidgets('closing GitHub hides it for good; Discord comes at the next start, and its close ends it', (
+      tester,
+    ) async {
+      await open(tester, seen: seen);
+      await tester.tap(find.byKey(const Key('line-close')));
+      await tester.pump();
+      expect(star, findsNothing);
+      expect(discord, findsNothing, reason: 'Discord waits for the next start');
+      expect(Storage(dir).readPrefs().communityStep, 1);
+      await end(tester);
+
+      await open(tester, seen: seen);
+      expect(star, findsNothing);
+      expect(discord, findsOneWidget);
+      clockNow = clockNow.add(communityLineTime);
+      await tester.pump(communityLineTime);
+      expect(discord, findsNothing);
+      await end(tester);
+
+      await open(tester, seen: seen);
+      expect(discord, findsOneWidget, reason: 'timing out did not close it');
+      await tester.tap(find.byKey(const Key('line-close')));
+      await tester.pump();
+      expect(Storage(dir).readPrefs().communityStep, 2);
+      await end(tester);
+
+      await open(tester, seen: seen);
+      expect(star, findsNothing);
+      expect(discord, findsNothing);
+      await end(tester);
+    });
   });
 
   testWidgets(
