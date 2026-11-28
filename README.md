@@ -32,23 +32,6 @@ Download the file for your system from [Releases](https://github.com/runmyai/run
 | Ling 3.0 Flash | 124B total, 5.1B active per token, 262k context, by Ant Group | MXFP4, about 70 GB |
 | [Qwen 3.8 Flash Next](https://huggingface.co/runmyai/Qwen3.8-Flash-Next-TokenWing) | 180B total, 6B active per token, 262k context, by Alibaba. | 3.5 bpw by Grawnch, about 84 GB with its n-gram table |
 
-## What you need
-
-| | |
-|---|---|
-| **SSD** | An NVMe SSD on PCIe 3.0 or above. |
-| **Memory** | We're targeting 35-40B-class models on 16 GB RAM CPU-only builds, and 120B-class models on at least 24 GB of RAM and 8 GB of VRAM. With less it still runs, only slower. More memory and a GPU make any model faster. |
-| **GPU** | NVIDIA or AMD, one or several, or CPU only. |
-| **System** | Windows or Linux. macOS on Apple Silicon is coming soon. |
-
-## How it runs models bigger than your memory
-
-[TokenWing](https://github.com/runmyai/tokenwing), the engine under the app, keeps most of the model on your SSD. Routed experts stream into RAM and VRAM up to two layers before the router selects them. [How it works](https://runmyai.org/how-it-works) has the whole story.
-
-## Use it with your own tools
-
-Run My AI has a serve mode with an OpenAI-compatible API. Any tool that can use an OpenAI-compatible endpoint can use the models it runs.
-
 ## FAQ
 
 **Does it change the model's answers?**
