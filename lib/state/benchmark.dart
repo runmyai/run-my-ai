@@ -295,11 +295,15 @@ class BenchmarkNotifier extends Notifier<BenchmarkState> {
       double? liveTokens, livePrompt, firstToken;
       var replyTokens = 0;
       var tickCount = 0;
+      final storage = ref.read(storageProvider);
+      final highestPower = storage.readPowerLimits();
       watching = monitor.samples.listen((s) {
         if (!ref.mounted) return;
         final stale = runClock.elapsed - engineSeen > const Duration(seconds: 4);
+        final values = {...s.values};
+        if (addHighestPowerLimits(values, monitor.info.gpus, highestPower)) storage.writePowerLimits(highestPower);
         series.add(now(), {
-          ...s.values,
+          ...values,
           if (!stale) ...engineValues,
           'speed.tokens': liveTokens,
           'speed.prompt': livePrompt,

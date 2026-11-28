@@ -104,6 +104,7 @@ class WindowData {
 ///   folds.json         the chat list's folded groups, by section
 ///   first_run.json     which first-start screens and hints have been seen
 ///   serve.json         the Serve panel's port and API key
+///   power_limits.json  the highest power limit each graphics card has been given (the Benchmark page's bars)
 ///   chat-index.db      the index of the chats (the list and the search), made from the chat files
 ///   benchmarks.db      the Benchmark page's history of runs
 /// The chats themselves are files in the chats folder ([chatsDir], lib/data/chat_db.dart).
@@ -247,6 +248,15 @@ class Storage {
   Map<String, Object?>? readBenchmarkSetup() => _readJson(File(_path('benchmark.json')));
 
   void writeBenchmarkSetup(Map<String, Object?> setup) => _writeJson(File(_path('benchmark.json')), setup);
+
+  /// The highest power limit each graphics card has been given on this PC, by the card's name, as written by
+  /// [writePowerLimits].
+  Map<String, double> readPowerLimits() => {
+    for (final e in (_readJson(File(_path('power_limits.json'))) ?? const {}).entries)
+      if (e.value is num) e.key: (e.value! as num).toDouble(),
+  };
+
+  void writePowerLimits(Map<String, double> limits) => _writeJson(File(_path('power_limits.json')), limits);
 
   /// What Serve was last set to ({port, apiKey}), as written by [writeServeSetup]; null: never set.
   Map<String, Object?>? readServeSetup() => _readJson(File(_path('serve.json')));

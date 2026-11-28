@@ -233,7 +233,10 @@ class NvmlReader implements GpuSource {
       out['$p.clock'] = _get('nvmlDeviceGetClockInfo', d, 0)?.toDouble();
       out['$p.clockMax'] = _get('nvmlDeviceGetMaxClockInfo', d, 0)?.toDouble();
       out['$p.temp'] = _get('nvmlDeviceGetTemperature', d, 0)?.toDouble();
-      out['$p.tempMax'] = _get('nvmlDeviceGetTemperatureThreshold', d, 1)?.toDouble();
+      // The temperature the card aims to stay under (NVML_TEMPERATURE_THRESHOLD_GPS_CURR); the slowdown point is kept
+      // for the record.
+      out['$p.tempMax'] = _get('nvmlDeviceGetTemperatureThreshold', d, 7)?.toDouble();
+      out['$p.tempSlowdown'] = _get('nvmlDeviceGetTemperatureThreshold', d, 1)?.toDouble();
       final tx = _get('nvmlDeviceGetPcieThroughput', d, 0);
       final rx = _get('nvmlDeviceGetPcieThroughput', d, 1);
       // (The driver gives KB/s.)

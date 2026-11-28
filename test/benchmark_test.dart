@@ -37,7 +37,7 @@ class _Monitor extends HardwareMonitor {
   @override
   Future<void> start() async {
     _timer = Timer.periodic(const Duration(milliseconds: 4), (_) {
-      _ticks.add(SystemSample(0.004 * ++_n, {'cpu.load': 5, 'cpu.other': 1, 'gpu.0.load': 1, 'sys.battery': 0}));
+      _ticks.add(SystemSample(0.004 * ++_n, {'cpu.load': 5, 'cpu.other': 1, 'gpu.0.load': 1, 'gpu.0.powerLimit': 95, 'sys.battery': 0}));
     });
   }
 
@@ -425,6 +425,18 @@ void main() {
       // It comes back whole from the database.
       final again = (await store.benchmarks()).single;
       expect(again.$2, contains('"tokenMillis"'));
+    });
+
+    test("the GPU power bar's top is the card's highest limit on this PC, kept between runs", () async {
+      await open(_Backend());
+      await container.read(benchmarkProvider.notifier).start(_file, 'M', 4096);
+      expect(container.read(benchmarkProvider).result!.series!.peak('gpu.0.powerTop'), 95);
+      expect(Storage(dir).readPowerLimits(), {'Test GPU': 95.0});
+      // A higher limit given once stays the top when the card runs lower.
+      Storage(dir).writePowerLimits({'Test GPU': 105});
+      await container.read(benchmarkProvider.notifier).start(_file, 'M', 4096);
+      expect(container.read(benchmarkProvider).result!.series!.peak('gpu.0.powerTop'), 105);
+      expect(Storage(dir).readPowerLimits(), {'Test GPU': 105.0});
     });
 
     test('the engine\'s counters, once a second, give the parts of a token and each layer; the timing flag is added', () async {
