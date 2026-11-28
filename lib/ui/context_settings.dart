@@ -31,38 +31,40 @@ const _contextLengths = [
   _ContextNode(tokens: 262144, label: '262k'),
 ];
 
-/// Calculates the exact KV cache memory size based on model architecture and quantization format.
-String _calculateKvCacheSize({required String modelName, required int tokens, required String quant}) {
-  final isFlint = modelName.toLowerCase().contains('flint');
-  final double bpe = switch (quant.toLowerCase()) {
-    'fp16' => 2.0,
-    'q4_0' => 18.0 / 32.0, // 0.5625 bytes per element
-    _ => 34.0 / 32.0, // 1.0625 bytes per element (Q8_0)
+/// The KV cache's size in bytes for a context of [tokens] stored as [quant] ('q4_0', 'q8_0' or 'f16') in the model
+/// [modelId] (its catalogue id), or null when no formula is known for that model. The fixed parts are 32-bit floats
+/// whatever the type.
+int? kvCacheBytes({required String modelId, required int tokens, required String quant}) {
+  final double bpe = switch (quant) {
+    'f16' => 2.0,
+    'q4_0' => 18.0 / 32.0, // 0.5625 bytes per value
+    _ => 34.0 / 32.0, // 1.0625 bytes per value (Q8_0)
   };
+  final double bytes = switch (modelId) {
+    // 7 attention layers keep a 576-wide key; the 35 linear-attention layers have a fixed state.
+    'ling-3.0-flash' => tokens * 7 * 576 * bpe + 78561280,
+    // 14 full-attention layers, and the 35 sliding-window layers with their padded window of cells.
+    'flint-40b' => (tokens * 14 * 1024 + (tokens < 262144 ? 2816 : 1792) * 35 * 1024) * bpe,
+    // 12 attention layers (key, value and indexer key); the 36 recurrent layers have a fixed state.
+    'qwen3.8-flash-next' => tokens * 12 * 1280 * bpe + 117669888,
+    _ => -1,
+  };
+  return bytes < 0 ? null : bytes.round();
+}
 
-  final double totalBytes;
-  if (isFlint) {
-    // Flint-40B: 49 layers total (14 full-attention, 35 sliding window attention).
-    // Full-attention layers: 14 layers x 2 (K+V) x 4 heads x 128 dim = 14,336 elements/token.
-    // Sliding-window layers: 35 layers x 2 (K+V) x 4 heads x 128 dim = 35,840 elements/cell.
-    // SWA cell buffer is padded in llama-kv-cache-iswa: GGML_PAD(n_swa + n_ubatch, 256) = PAD(513 + 2048, 256) = 2,816 cells.
-    const fullElemPerTok = 14 * 2 * 4 * 128; // 14,336 elem/tok
-    const swaFixedCells = 2816; // GGML_PAD(513 + 2048, 256)
-    const swaElemPerCell = 35 * 2 * 4 * 128; // 35,840 elem/cell
-    totalBytes = (tokens * fullElemPerTok + swaFixedCells * swaElemPerCell) * bpe;
+/// A size in bytes as the picker shows it: GB from a gigabyte on, else MB.
+String formatKvCacheBytes(int bytes) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   } else {
-    // Ling-3.0-flash: 8 MLA layers (K-only latent + decoupled rope, V absorbed) x 576 dim = 4,608 elem/tok.
-    // Recurrent state for 35 linear layers is fixed at ~11 MB independent of context tokens.
-    const elemPerTok = 8 * 576;
-    const recurrentFixedBytes = 11.0 * 1024 * 1024;
-    totalBytes = (tokens * elemPerTok * bpe) + recurrentFixedBytes;
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
+}
 
-  if (totalBytes >= 1024 * 1024 * 1024) {
-    return '${(totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
-  } else {
-    return '${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
+/// The size text shown for a quantization at a context length, or null for a model with no formula.
+String? _kvSizeLabel({required String modelId, required int tokens, required String quant}) {
+  final bytes = kvCacheBytes(modelId: modelId, tokens: tokens, quant: quant);
+  return bytes == null ? null : formatKvCacheBytes(bytes);
 }
 
 /// The KV cache quantization picker: for each context length, the type the context cache (KV cache) is stored in, with
@@ -109,7 +111,7 @@ class ContextSettings extends ConsumerWidget {
                   child: _ContextColumn(
                     node: node,
                     quant: kv[node.tokens] ?? 'q8_0',
-                    modelName: entry.model.name,
+                    modelId: entry.model.id,
                     onSelectQuant: (q) => ref.read(profilesProvider.notifier).setKv(entry.file, node.tokens, q),
                   ),
                 ),
@@ -210,11 +212,11 @@ class _VramHeadroomInputState extends ConsumerState<VramHeadroomInput> {
 
 /// One context length: its name, its KV cache type (a drop-down) and the memory the cache takes at that type.
 class _ContextColumn extends StatelessWidget {
-  const _ContextColumn({required this.node, required this.quant, required this.modelName, required this.onSelectQuant});
+  const _ContextColumn({required this.node, required this.quant, required this.modelId, required this.onSelectQuant});
 
   final _ContextNode node;
   final String quant;
-  final String modelName;
+  final String modelId;
   final ValueChanged<String> onSelectQuant;
 
   static const _quantOptions = [
@@ -226,7 +228,7 @@ class _ContextColumn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final size = _calculateKvCacheSize(modelName: modelName, tokens: node.tokens, quant: quant);
+    final size = _kvSizeLabel(modelId: modelId, tokens: node.tokens, quant: quant);
     final quantItem = _quantOptions.firstWhere((q) => q.id == quant, orElse: () => _quantOptions[1]);
 
     return Column(
@@ -271,7 +273,7 @@ class _ContextColumn extends StatelessWidget {
                               ),
                               const SizedBox(width: 10),
                               Text(
-                                _calculateKvCacheSize(modelName: modelName, tokens: node.tokens, quant: opt.id),
+                                _kvSizeLabel(modelId: modelId, tokens: node.tokens, quant: opt.id) ?? '',
                                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSecondary),
                               ),
                             ],
@@ -320,7 +322,7 @@ class _ContextColumn extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         // Memory footprint size
-        Text(size, style: TextStyle(fontSize: 11, color: c.textMuted)),
+        if (size != null) Text(size, style: TextStyle(fontSize: 11, color: c.textMuted)),
       ],
     );
   }

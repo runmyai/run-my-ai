@@ -30,7 +30,7 @@ import 'package:runmyai/ui/welcome.dart' show shareBenchmarksLabel, shareBenchma
 /// The app's folders in the test's folder.
 const _file = ModelFile(id: 'm/f', quantization: 'q', sizeBytes: 1);
 const CatalogEntry _entry = (
-  model: CatalogModel(id: 'm', name: 'M', lab: 'L', description: '', parameters: '1B', activeParameters: '1B', files: [_file]),
+  model: CatalogModel(id: 'm', name: 'M', lab: 'L', madeBy: '', country: '', released: '', type: '', input: '', output: '', maxContext: '', parameters: '1B', activeParameters: '1B', files: [_file]),
   file: _file,
 );
 
@@ -194,14 +194,14 @@ void main() {
     }
   });
 
-  testWidgets('a description shows only after the pointer has rested on the name for 2 seconds', (tester) async {
+  testWidgets('a description shows only after the pointer has rested on the name for 1.2 seconds', (tester) async {
     await show(tester);
     const description = 'Plays a sound when a reply is finished.';
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(find.text('Notification Sound')));
-    await tester.pump(const Duration(milliseconds: 1900));
+    await tester.pump(const Duration(milliseconds: 1100));
     expect(find.text(description), findsNothing, reason: 'not yet');
     await tester.pump(const Duration(milliseconds: 200));
     await tester.pump(const Duration(milliseconds: 200));
@@ -210,9 +210,9 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('every description tooltip waits the same 2 seconds', (tester) async {
+  testWidgets('every description tooltip waits the same 1.2 seconds', (tester) async {
     await show(tester);
-    expect(descriptionTooltipWait, const Duration(seconds: 2));
+    expect(descriptionTooltipWait, const Duration(milliseconds: 1200));
     for (final message in ['Plays a sound when a reply is finished.', foldersAbout, shareBenchmarksNote]) {
       final tooltip = find.ancestor(of: find.byTooltip(message), matching: find.byType(Tooltip)).first;
       expect(tester.widget<Tooltip>(tooltip).waitDuration, descriptionTooltipWait, reason: message);

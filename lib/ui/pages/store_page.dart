@@ -10,6 +10,7 @@ import '../../state/providers.dart';
 import '../../state/tuning_runs.dart';
 import '../../system/folders.dart';
 import '../../theme.dart';
+import '../benchmark/fold.dart';
 import '../buttons.dart';
 
 /// The Store: selected models, grouped by company / lab.
@@ -70,8 +71,6 @@ class _ModelCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(model.name, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: c.text)),
-          const SizedBox(height: 4),
-          Text(model.description, style: TextStyle(fontSize: 14, color: c.textSecondary)),
           const SizedBox(height: 10),
           Wrap(spacing: 6, runSpacing: 6, children: [
             _Fact('${model.parameters} parameters'),
@@ -79,11 +78,57 @@ class _ModelCard extends StatelessWidget {
           ]),
           const SizedBox(height: 12),
           for (final f in model.files) _FileRow(file: f, model: model),
+          Fold(title: 'Details', child: _Details(model: model)),
         ],
       ),
     );
   }
 }
+
+/// The labelled lines under a card's drop-down, in the order the Store lists them.
+class _Details extends StatelessWidget {
+  const _Details({required this.model});
+
+  final CatalogModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final lines = [
+      ('Made by', model.madeBy),
+      ('Country', model.country),
+      ('Released', model.released),
+      ('Type', model.type),
+      ('Thinking', _thinkingLine(model.thinking)),
+      ('Input', model.input),
+      ('Output', model.output),
+      ('Max context', model.maxContext),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final (label, value) in lines)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: '$label: ', style: TextStyle(fontSize: 13, color: c.textMuted)),
+                  TextSpan(text: value, style: TextStyle(fontSize: 13, color: c.textSecondary)),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+String _thinkingLine(ModelThinking thinking) => switch (thinking) {
+  ModelThinking.optional => 'Can be toggled on or off',
+  ModelThinking.always => 'Always on',
+  ModelThinking.none => 'None',
+};
 
 class _Fact extends StatelessWidget {
   const _Fact(this.text);

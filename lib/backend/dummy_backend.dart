@@ -30,15 +30,22 @@ class DummyBackend implements Backend {
 
   static const _gb = 1000 * 1000 * 1000;
 
-  // Real model names; descriptions and the Qwen file sizes are placeholders.
+  // Real model names; the Qwen file sizes are placeholders.
   static const catalog = [
     CatalogModel(
       id: 'qwen3.8-flash-next',
       name: 'Qwen3.8 Flash Next',
       lab: 'Qwen',
-      description: 'Everyday chat and long documents. (Placeholder text.)',
-      parameters: '125B',
+      parameters: '180B',
       activeParameters: '6B',
+      madeBy: 'Alibaba (Qwen team)',
+      country: 'China',
+      released: 'August 2026',
+      type: 'General-purpose',
+      input: 'Text, image, video',
+      output: 'Text',
+      maxContext: '262k tokens',
+      thinking: ModelThinking.optional,
       files: [
         ModelFile(id: 'qwen3.8-flash-next/ISTA-IQ3_S', quantization: 'ISTA IQ3_S', sizeBytes: 55 * _gb),
         ModelFile(id: 'qwen3.8-flash-next/UD-Q4_K_XL', quantization: 'UD-Q4_K_XL', sizeBytes: 72 * _gb),
@@ -48,9 +55,16 @@ class DummyBackend implements Backend {
       id: 'flint-40b',
       name: 'Flint 40B',
       lab: 'Recursive',
-      description: 'Coding. (Placeholder text.)',
       parameters: '40B',
       activeParameters: '2.5B',
+      madeBy: 'Recursive',
+      country: 'United States',
+      released: 'October 2026',
+      type: 'Agentic and coding',
+      input: 'Text',
+      output: 'Text',
+      maxContext: '262k tokens',
+      thinking: ModelThinking.always,
       files: [
         ModelFile(id: 'flint-40b/UD-Q4_K_XL', quantization: 'UD-Q4_K_XL', sizeBytes: 24 * _gb),
       ],
@@ -60,9 +74,15 @@ class DummyBackend implements Backend {
       id: 'dummy',
       name: 'Dummy model',
       lab: 'Run My AI',
-      description: 'A stand-in for trying the app; it answers with sample replies. (Temporary.)',
       parameters: '0B',
       activeParameters: '0B',
+      madeBy: 'Run My AI',
+      country: 'Not applicable',
+      released: 'Not applicable',
+      type: 'Stand-in for trying the app',
+      input: 'Text',
+      output: 'Text',
+      maxContext: '0 tokens',
       files: [
         ModelFile(id: 'dummy/test', quantization: 'Test', sizeBytes: 1 * _gb),
       ],

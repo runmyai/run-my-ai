@@ -32,7 +32,7 @@ class _Backend extends DummyBackend {
   @override
   Future<List<CatalogModel>> loadCatalog() async => [
     for (final f in [_gone, _here])
-      CatalogModel(id: f.id, name: f.id, lab: 'L', description: '', parameters: '1B', activeParameters: '1B', files: [f]),
+      CatalogModel(id: f.id, name: f.id, lab: 'L', madeBy: '', country: '', released: '', type: '', input: '', output: '', maxContext: '', parameters: '1B', activeParameters: '1B', files: [f]),
   ];
 }
 
