@@ -13,7 +13,7 @@
 
 <p align="center"><b>Download:</b> <a href="https://github.com/runmyai/run-my-ai/releases/latest/download/RunMyAI-windows-x64.exe">Windows</a> · <a href="https://github.com/runmyai/run-my-ai/releases/latest/download/RunMyAI-windows-arm64.exe">Windows on ARM</a> · <a href="https://github.com/runmyai/run-my-ai/releases/latest/download/RunMyAI-linux-x64.AppImage">Linux</a> · <a href="https://github.com/runmyai/run-my-ai/releases/latest/download/RunMyAI-linux-arm64.AppImage">Linux on ARM</a> · macOS coming soon</p>
 
-<p align="center"><img src="docs/images/demo-ling.gif" alt="Run My AI running Ling 3.0 Flash on a laptop" width="960"></p>
+<p align="center"><img src="docs/images/demo-ling.gif" alt="Run My AI running Ling 3.0 Flash on a laptop" width="960" height="600"></p>
 
 <p align="center"><b>Ling 3.0 Flash on a laptop</b><br>124B parameters, MXFP4 and 262k context, on a laptop with a 12 GB GPU and 32 GB of RAM. The model file is 70 GB.</p>
 
