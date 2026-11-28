@@ -335,8 +335,8 @@ class EngineBackend implements Backend, EngineControl, BranchControl, EngineInsi
 
   /// The model's Auto commands on this PC, one per context length (autoCommand). The app decides only what is the
   /// user's: which cards are used (the autotuner's list: separate cards, or a built-in GPU with 24 GiB or more; none =
-  /// the CPU), the graphics memory kept free on each, and elastic RAM beside a separate card (a built-in GPU's memory
-  /// is the RAM, so it runs with fixed memory). Everything that depends on the PC's speed - threads, fast cores, SSD
+  /// the CPU), the graphics memory kept free on each, and elastic RAM - on a PC with a separate card and on one that
+  /// runs on the CPU alone; a built-in GPU used as the card runs with fixed memory (its memory is the RAM). Everything that depends on the PC's speed - threads, fast cores, SSD
   /// readers, the card of the expert pool - is the autotuner's, put in when the engine starts.
   Map<int, String> _flagsFor(_LocalModel m, VramHeadroom vramHeadroom) {
     final none = _cards.isEmpty;

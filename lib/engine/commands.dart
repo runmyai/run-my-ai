@@ -121,13 +121,13 @@ const autoContextLengths = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
 /// and the graphics memory. What depends on the PC comes from the autotuner at start (withTuning). The rest is the
 /// user's or the model's:
 /// - [vramFree]: the graphics memory kept free on each card (null: no card is used - the engine runs on the CPU);
-/// - [elastic]: the RAM follows the other programs' memory (beside a separate card only);
+/// - [elastic]: the RAM follows the other programs' memory (not with a built-in GPU as the card: its memory is the RAM);
 /// - [modelFlags]: the model's own data files, where they are not named after the model file.
 String autoCommand(int length, {String? vramFree, bool elastic = false, List<String> modelFlags = const []}) => [
   '-c $length -ctk q8_0 -ctv q8_0 --moe-stream model',
   ...modelFlags,
   if (vramFree == null) '--device none' else '--moe-stream-vram-free $vramFree',
-  if (vramFree != null && elastic) '--moe-stream-elastic 1',
+  if (elastic) '--moe-stream-elastic 1',
 ].join(' ');
 
 /// [args] with the model's data taken from separate files next to the model file at [modelPath] where they exist

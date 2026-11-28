@@ -160,7 +160,7 @@ The app adds only what is the user's or the model's:
 
 - which cards are used: the autotuner's list (separate cards of any size, or a built-in GPU with 24 GiB or more); none = `--device none`;
 - `--moe-stream-vram-free`: the graphics memory kept free on each card (Settings);
-- `--moe-stream-elastic 1` beside a separate card;
+- `--moe-stream-elastic 1`, on a PC with a separate card and on one that runs on the CPU alone (not with a built-in GPU used as the card: its memory is the RAM);
 - the context cache type (Settings) and the context length;
 - the model's data files next to the model file (`withModelData`), and for a model whose data files have their own names the flags in its `_LocalModel` (`dataFlags`, `cardDataFlags`).
 
