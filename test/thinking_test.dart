@@ -187,16 +187,28 @@ void main() {
       await end(tester);
     });
 
-    testWidgets('is closed while it thinks, with the latest line under the header', (tester) async {
+    testWidgets('is closed while it thinks, with the newest words flowing in one line', (tester) async {
       await start(tester, text: 'First line\nSecond line');
       expect(preview, findsOneWidget);
-      expect(find.descendant(of: preview, matching: find.text('Second line')), findsOneWidget);
+      // A line break is a space, and the line is not cut.
+      expect(find.descendant(of: preview, matching: find.text('First line Second line')), findsOneWidget);
       expect(find.byType(SelectableText), findsNothing);
 
       update(text: 'First line\nSecond line\nThird line');
       await settle(tester);
-      expect(find.descendant(of: preview, matching: find.text('Third line')), findsOneWidget);
-      expect(find.text('Second line'), findsNothing);
+      expect(find.descendant(of: preview, matching: find.text('First line Second line Third line')), findsOneWidget);
+      final line = tester.widget<Text>(find.descendant(of: preview, matching: find.byType(Text)));
+      expect(line.overflow, isNot(TextOverflow.ellipsis));
+      // The newest words rest at the right edge of the line.
+      expect(tester.getTopRight(find.descendant(of: preview, matching: find.byType(Text))).dx, tester.getTopRight(preview).dx);
+      await end(tester);
+    });
+
+    testWidgets('a long thought keeps only its tail, with the last words in it', (tester) async {
+      await start(tester, text: '${'word ' * 200}\nthe very last words');
+      final line = tester.widget<Text>(find.descendant(of: preview, matching: find.byType(Text)));
+      expect(line.data!.length, lessThanOrEqualTo(300));
+      expect(line.data!.endsWith('the very last words'), isTrue);
       await end(tester);
     });
 
@@ -247,15 +259,15 @@ void main() {
       await end(tester);
     });
 
-    testWidgets('the header pulses while it thinks and rests when it is done', (tester) async {
+    testWidgets('the header shimmers while it thinks and is plain when it is done', (tester) async {
       await start(tester);
-      double opacity() => tester.widget<FadeTransition>(find.ancestor(of: title, matching: find.byType(FadeTransition)).first).opacity.value;
+      final mask = find.descendant(of: title, matching: find.byType(ShaderMask));
       await tester.pump(const Duration(milliseconds: 750));
-      expect(opacity(), lessThan(1));
+      expect(mask, findsOneWidget);
       update(thinking: false, millis: 3000);
-      await tester.pump();
       await settle(tester);
-      expect(opacity(), 1);
+      expect(mask, findsNothing);
+      expect(titleText(tester), 'Thought for 3 s');
       await end(tester);
     });
 

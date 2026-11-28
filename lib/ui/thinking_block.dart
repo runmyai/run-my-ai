@@ -9,8 +9,8 @@ import 'clicky.dart';
 
 /// What the model thought before a reply, as one control that behaves the same while the model thinks and after.
 /// Its header, "Thinking… 12 s" and then "Thought for 12 s", never moves or changes shape, and a click on it opens
-/// or closes the thought at any moment. It is closed to begin with: while the model thinks the header pulses and a
-/// line under it shows the latest line of the thought. Open, the thought streams in a window that follows its end
+/// or closes the thought at any moment. It is closed to begin with: while the model thinks a light band sweeps across
+/// the header and one line under it flows, the newest words of the thought at its right edge. Open, the thought streams in a window that follows its end
 /// unless the user has scrolled up. The time and whether it is open belong to the message ([thinkingProvider]), not
 /// to this widget, so scrolling away or leaving the chat changes nothing.
 class ThinkingBlock extends ConsumerStatefulWidget {
@@ -50,8 +50,7 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
 
   final _scroll = ScrollController();
   late final _openness = AnimationController(vsync: this, duration: _motion, value: _isOpen ? 1 : 0);
-  late final _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-  late final _glow = Tween(begin: 1.0, end: 0.5).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+  late final _shimmer = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
   Timer? _tick;
 
   ThinkingKey get _key => (chatId: widget.chatId, index: widget.index);
@@ -81,23 +80,23 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
   @override
   void dispose() {
     _tick?.cancel();
-    _pulse.dispose();
+    _shimmer.dispose();
     _openness.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
-  /// Starts or stops what moves while the model thinks: the pulse of the header and the count of seconds.
+  /// Starts or stops what moves while the model thinks: the shimmer of the header and the count of seconds.
   void _sync() {
     _tick?.cancel();
     if (!widget.thinking) {
-      _pulse.animateTo(0, duration: _motion);
+      _shimmer.stop();
       return;
     }
     if (MediaQuery.disableAnimationsOf(context)) {
-      _pulse.value = 0;
-    } else if (!_pulse.isAnimating) {
-      _pulse.repeat(reverse: true);
+      _shimmer.stop();
+    } else if (!_shimmer.isAnimating) {
+      _shimmer.repeat();
     }
     _tick = Timer(Duration(milliseconds: millisToNextLength(_elapsed)), () {
       if (!mounted) return;
@@ -123,18 +122,28 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
     return millis == null ? 'Thought' : 'Thought for ${thoughtLength(millis)}';
   }
 
-  /// The latest line of the thought, and a number that changes when a new line begins.
-  (String, int) get _latestLine {
-    final text = widget.text.trimRight();
-    final start = text.lastIndexOf('\n');
-    var line = text.substring(start + 1).trim();
-    // A long line shows its end, from a whole word.
-    if (line.length > 160) {
-      line = line.substring(line.length - 160);
-      final space = line.indexOf(' ');
-      line = '…${space < 0 ? line : line.substring(space + 1)}';
-    }
-    return (line, start);
+  /// The end of the thought as one line: line breaks are spaces, and only the tail is kept so a long thought stays cheap.
+  String get _tail {
+    final flat = widget.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return flat.length > 300 ? flat.substring(flat.length - 300) : flat;
+  }
+
+  /// The header's words; while the model thinks a light band sweeps across them.
+  Widget _shimmering(String title, TextStyle style, AppColors c) {
+    if (!widget.thinking || MediaQuery.disableAnimationsOf(context)) return Text(title, style: style);
+    return AnimatedBuilder(
+      animation: _shimmer,
+      builder: (context, _) => ShaderMask(
+        blendMode: BlendMode.srcIn,
+        shaderCallback: (rect) => LinearGradient(
+          colors: [c.textMuted, c.text, c.textMuted],
+          stops: const [0.35, 0.5, 0.65],
+          // The band starts left of the text and ends right of it.
+          transform: _Slide(_shimmer.value * 2 - 1),
+        ).createShader(rect),
+        child: Text(title, style: style.copyWith(color: Colors.white)),
+      ),
+    );
   }
 
   @override
@@ -184,7 +193,7 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
                     child: Icon(Icons.keyboard_arrow_down, size: 16, color: lit ? c.text : c.textMuted),
                   ),
                   const SizedBox(width: 2),
-                  Text(title, style: style.copyWith(color: lit ? c.text : c.textMuted)),
+                  _shimmering(title, style.copyWith(color: lit ? c.text : c.textMuted), c),
                 ],
               ),
             ),
@@ -193,30 +202,16 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
       ),
     );
 
-    // While the model thinks and the thought is closed: its latest line, fading in as it changes.
-    final (line, lineKey) = _latestLine;
-    final Widget preview = widget.thinking && !open && line.isNotEmpty
+    // While the model thinks and the thought is closed: its end, flowing as one line.
+    final tail = _tail;
+    final Widget preview = widget.thinking && !open && tail.isNotEmpty
         ? Padding(
             key: const Key('thinking-preview'),
             padding: const EdgeInsets.only(left: 18, top: 1),
             child: SizedBox(
               height: 20,
               width: double.infinity,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                layoutBuilder: (current, previous) => Stack(
-                  alignment: Alignment.centerLeft,
-                  children: [...previous, ?current],
-                ),
-                child: Text(
-                  line,
-                  key: ValueKey(lineKey),
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.ellipsis,
-                  style: style.copyWith(fontSize: 12.5),
-                ),
-              ),
+              child: _FlowLine(text: tail, style: style.copyWith(fontSize: 12.5), animate: !MediaQuery.disableAnimationsOf(context)),
             ),
           )
         : const SizedBox(width: double.infinity);
@@ -267,11 +262,84 @@ class _ThinkingBlockState extends ConsumerState<ThinkingBlock> with TickerProvid
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // The header pulses gently while the model thinks.
-          FadeTransition(opacity: _glow, child: header),
+          header,
           AnimatedSize(duration: _motion, curve: Curves.easeOut, alignment: Alignment.topLeft, child: preview),
           body,
         ],
+      ),
+    );
+  }
+}
+
+/// Moves a gradient sideways by [t] times its own width.
+class _Slide extends GradientTransform {
+  const _Slide(this.t);
+  final double t;
+  @override
+  Matrix4? transform(Rect bounds, {TextDirection? textDirection}) => Matrix4.translationValues(bounds.width * t, 0, 0);
+}
+
+/// One line of text whose end stays at the right edge: new words slide the line left, and the old ones fade out on
+/// the left.
+class _FlowLine extends StatefulWidget {
+  const _FlowLine({required this.text, required this.style, required this.animate});
+  final String text;
+  final TextStyle style;
+  final bool animate;
+
+  @override
+  State<_FlowLine> createState() => _FlowLineState();
+}
+
+class _FlowLineState extends State<_FlowLine> with SingleTickerProviderStateMixin {
+  late final _slide = AnimationController(vsync: this, duration: const Duration(milliseconds: 220));
+
+  /// How far right the line still is from where it rests, in pixels, when the slide starts.
+  double _from = 0;
+
+  double _width(String t) {
+    final p = TextPainter(text: TextSpan(text: t, style: widget.style), textDirection: TextDirection.ltr, maxLines: 1)..layout();
+    final w = p.width;
+    p.dispose();
+    return w;
+  }
+
+  @override
+  void didUpdateWidget(_FlowLine old) {
+    super.didUpdateWidget(old);
+    if (!widget.animate || widget.text == old.text) return;
+    // The new line is wider by the new words; start with the old words where they were and slide them left.
+    final left = _from * (1 - Curves.easeOut.transform(_slide.value));
+    _from = (_width(widget.text) - _width(old.text)).clamp(0.0, 400.0) + left;
+    _slide.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _slide.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ShaderMask(
+      blendMode: BlendMode.dstIn,
+      shaderCallback: (rect) => const LinearGradient(
+        colors: [Colors.transparent, Colors.black],
+        stops: [0, 0.22],
+      ).createShader(rect),
+      child: ClipRect(
+        child: OverflowBox(
+          alignment: Alignment.centerRight,
+          minWidth: 0,
+          maxWidth: double.infinity,
+          child: AnimatedBuilder(
+            animation: _slide,
+            builder: (context, child) =>
+                Transform.translate(offset: Offset(_from * (1 - Curves.easeOut.transform(_slide.value)), 0), child: child),
+            child: Text(widget.text, maxLines: 1, softWrap: false, style: widget.style),
+          ),
+        ),
       ),
     );
   }
