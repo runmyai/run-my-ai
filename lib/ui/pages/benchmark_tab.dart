@@ -3,23 +3,18 @@ part of 'engine_page.dart';
 /// The parts of the benchmark, one on screen at a time.
 enum _View { setup, live, history }
 
-/// The Benchmark tab as steps: the setup, the live view of a run (which keeps the whole result of the run once it has
-/// ended), and the history beside them. The stepper on top switches; the setup is the only door into a run. Each part
-/// keeps its detail behind a click.
+/// The Benchmark tab as steps: the setup, the live view of a run (which shows the run's result once it has ended), and
+/// the history beside them. The stepper on top switches; the setup is the only door into a run.
 class _BenchmarkTab extends ConsumerStatefulWidget {
-  const _BenchmarkTab({required this.entry, required this.control});
+  const _BenchmarkTab({required this.entry});
 
   final CatalogEntry entry;
-  final EngineControl control;
 
   @override
   ConsumerState<_BenchmarkTab> createState() => _BenchmarkTabState();
 }
 
 class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
-  /// A moment pinned on the graphs (a token clicked in the charts under them).
-  final _cursor = ValueNotifier<double?>(null);
-
   /// The part on screen; chosen from the state the first time it is built.
   _View? _view;
 
@@ -34,12 +29,6 @@ class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
       _beforeHistory = null;
     }
     setState(() => _view = v);
-  }
-
-  @override
-  void dispose() {
-    _cursor.dispose();
-    super.dispose();
   }
 
   @override
@@ -80,7 +69,7 @@ class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
         switch (view) {
           _View.live => _Panel(
             title: 'Live',
-            child: _LivePanel(state: state, control: widget.control, cursor: _cursor),
+            child: _LivePanel(state: state),
           ),
           _View.history => _Panel(
             title: 'History',
@@ -93,7 +82,6 @@ class _BenchmarkTabState extends ConsumerState<_BenchmarkTab> {
                         HistoryRow(
                           key: ValueKey(run.id ?? run.at),
                           result: run,
-                          others: state.history,
                           onDelete: () => notifier.delete(run),
                         ),
                     ],
@@ -384,11 +372,11 @@ class _BenchmarkSettings extends ConsumerWidget {
           ),
         ),
         row(
-          'Test',
-          SelectBox<BenchmarkTest>(
+          'Tests',
+          SelectBox<BenchmarkTest>.several(
             id: 'benchmark-test',
-            label: 'Test',
-            value: setup.test,
+            label: 'Tests',
+            chosen: setup.tests.toSet(),
             entries: [
               for (final t in BenchmarkTest.all)
                 SelectEntry(
@@ -399,10 +387,16 @@ class _BenchmarkSettings extends ConsumerWidget {
                   reason: t.fits(length) ? null : 'Needs a longer context',
                 ),
             ],
-            onChanged: busy ? null : (t) => notifier.setSetup(setup.copyWith(test: t)),
+            onChanged: busy ? null : (t) => notifier.setSetup(setup.toggled(t)),
           ),
         ),
-        Text(setup.test.description, key: const Key('benchmark-test-line'), style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+        if (setup.runnable(length) case final tests when tests.isNotEmpty)
+          Text(
+            'Two warm-up messages, then ${[for (final t in tests) t.description].join('; ')}. '
+            '${tests.length > 1 ? 'Each test starts from right after the warm-ups.' : ''}'.trim(),
+            key: const Key('benchmark-test-line'),
+            style: TextStyle(fontSize: 12.5, color: c.textMuted),
+          ),
         Container(margin: const EdgeInsets.symmetric(vertical: 16), height: 1, color: c.inputBorder),
         Row(
           children: [
@@ -431,6 +425,10 @@ class _BenchmarkSettings extends ConsumerWidget {
     );
   }
 
+  /// Which test is going on, before the rest of the line: only when the run takes several.
+  static String _testOf(BenchmarkState state) =>
+      state.test == null || state.tests.length < 2 ? '' : '${state.test!.label} (${state.testIndex + 1} of ${state.tests.length}): ';
+
   static String _phaseText(BenchmarkState state) {
     final progress = state.promptProgress;
     final read = progress == null ? '' : ' (${formatNumber(progress.$1.toDouble(), 0)} of ${formatNumber(progress.$2.toDouble(), 0)} tokens)';
@@ -438,82 +436,25 @@ class _BenchmarkSettings extends ConsumerWidget {
       BenchmarkPhase.loading => 'Starting the engine and loading the model…',
       BenchmarkPhase.warmingUp => 'Warm-up ${state.warmup + 1} of ${state.setup.warmups.length}$read…',
       BenchmarkPhase.measuring =>
-        state.replyTokens == 0 ? 'Reading the prompt$read…' : 'Writing the reply: ${state.replyTokens} tokens of at most ${state.setup.replyLength}…',
+        '${_testOf(state)}${state.replyTokens == 0 ? 'Reading the prompt$read…' : 'Writing the reply: ${state.replyTokens} tokens of at most ${state.test?.replyCap ?? 0}…'}',
       BenchmarkPhase.idle => '',
     };
   }
 }
 
-/// The run as it goes on and after it: the turns, the four numbers that matter, what is happening, the graphs and the
-/// engine's output. The turn tabs pick the turn: the current one live, finished ones frozen with their own real numbers
-/// and, under the graphs, their details — the user can go back to an earlier turn, and the view follows the run
-/// otherwise. Each turn has its own graphs (its stretch of the run); the tab before the turns is the whole run. When a run
-/// ends the whole run is shown, with every number taken over all the turns together, the turns side by side, and the
-/// folds of the run (its phases, memory layout, hardware, setup and engine output).
-class _LivePanel extends StatefulWidget {
-  const _LivePanel({required this.state, required this.control, required this.cursor});
+/// The run as it goes on and after it: while it goes on, what it is doing and the live cards; once it has ended, its
+/// result (the same page the history opens).
+class _LivePanel extends StatelessWidget {
+  const _LivePanel({required this.state});
 
   final BenchmarkState state;
-  final EngineControl control;
-  final ValueNotifier<double?> cursor;
-
-  @override
-  State<_LivePanel> createState() => _LivePanelState();
-}
-
-class _LivePanelState extends State<_LivePanel> {
-  bool _overall = false;
-  int? _pickedToken;
-
-  @override
-  void initState() {
-    super.initState();
-    _overall = !widget.state.running;
-    _pickedToken = null;
-  }
-
-  @override
-  void didUpdateWidget(_LivePanel old) {
-    super.didUpdateWidget(old);
-    final (before, now) = (old.state, widget.state);
-    if (!before.running && now.running) {
-      _overall = false;
-      _pickedToken = null;
-      widget.cursor.value = null;
-    } else if (before.running && !now.running && now.result != null) {
-      _overall = true;
-      _pickedToken = null;
-      widget.cursor.value = null;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final state = widget.state;
     final series = state.live;
     final result = state.result;
-    final turns = state.turns.isNotEmpty ? state.turns : (result?.turns ?? const <TurnRecord>[]);
-    final total = state.setup.warmups.length + 1;
-    final liveIndex = state.running ? turns.length.clamp(0, total - 1) : -1;
-    final measuredTurn = turns.isNotEmpty ? turns.lastWhere((t) => !t.warmup, orElse: () => turns.last) : null;
-    final whole = !state.running && measuredTurn != null ? WholeRun([measuredTurn]) : (!state.running && turns.isNotEmpty ? WholeRun(turns) : null);
-    final tokens = measuredTurn != null && measuredTurn.tokens.isNotEmpty
-        ? measuredTurn.tokens
-        : (result?.tokens ?? const <double>[]);
-
-    final String turnTitle = liveIndex == 0
-        ? 'Warm-up 1'
-        : liveIndex == 1
-        ? 'Warm-up 2'
-        : 'Benchmark Run';
-
-    final bool isOverall = !state.running && _overall;
-    final activeTokenMillis = !isOverall && _pickedToken != null && _pickedToken! < tokens.length
-        ? tokens[_pickedToken!]
-        : null;
-
-    final hint = state.note ?? (!state.running && result == null ? 'Press Start. The graphs fill in while the run goes on.' : null);
+    final hint = state.note ?? (!state.running && result == null ? 'Press Start. The numbers fill in while the run goes on.' : null);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -523,104 +464,60 @@ class _LivePanelState extends State<_LivePanel> {
           const SizedBox(height: 12),
         ],
 
-        // In-place live header during run
+        // While the run goes on: what it is doing, and the cards at the latest reading.
         if (state.running) ...[
           Row(
             children: [
               Container(width: 8, height: 8, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
               const SizedBox(width: 8),
-              Text(turnTitle, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.text)),
-              if (state.replyTokens > 0) ...[
+              Text(_liveTitle(state), key: const Key('live-title'), style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.text)),
+              if (_liveLine(state) case final line?) ...[
                 const SizedBox(width: 12),
-                Text('Writing reply: ${state.replyTokens} tokens…', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
-              ] else ...[
-                const SizedBox(width: 12),
-                Text('Reading prompt…', style: TextStyle(fontSize: 12.5, color: c.textMuted)),
+                Flexible(child: Text(line, style: TextStyle(fontSize: 12.5, color: c.textMuted))),
               ],
             ],
           ),
           const SizedBox(height: 12),
-        ],
-
-        // After run finishes: TokenScrubber at the top
-        if (!state.running && tokens.isNotEmpty) ...[
-          TokenScrubber(
-            tokens: tokens,
-            overall: isOverall,
-            picked: _pickedToken,
-            onSelectOverall: () {
-              setState(() {
-                _overall = true;
-                _pickedToken = null;
-              });
-              widget.cursor.value = null;
-            },
-            onPickToken: (index) {
-              setState(() {
-                _overall = false;
-                _pickedToken = index;
-              });
-              final at = measuredTurn != null ? turnTokenSeconds(measuredTurn, index) : (result != null ? tokenTimeSeconds(result, index) : null);
-              if (at != null) {
-                widget.cursor.value = at;
-              }
-            },
-          ),
-          const SizedBox(height: 14),
-        ],
-
-        // Metric Cards (Speed, GPUs, CPU, RAM, SSD, Engine)
-        if (series == null || series.isEmpty)
-          Text(state.running ? 'Starting…' : '', style: TextStyle(fontSize: 13, color: c.textMuted))
-        else
-          MetricCards(
-            series: series,
-            rows: metricRows(series, gpuNames: state.hardware.gpus),
-            cursor: isOverall ? null : widget.cursor.value,
-            overall: isOverall,
-            whole: isOverall ? whole : null,
-            activeTokenMillis: activeTokenMillis,
-          ),
-
-        // Under the cards when run has ended:
-        if (!state.running && whole != null) ...[
-          // 1. Where the time per token went (Turn 3 only)
-          if (measuredTurn != null) ...[
-            Builder(
-              builder: (context) {
-                final parts = timeParts(measuredTurn.engineStats);
-                final totalMs = measuredTurn.replyTokens > 0 ? measuredTurn.replyMillis / measuredTurn.replyTokens : 0.0;
-                if (parts.isEmpty && totalMs <= 0) return const SizedBox.shrink();
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 18),
-                    const SectionLabel('Where the time per token went'),
-                    TimePerToken(total: totalMs, parts: parts),
-                  ],
-                );
+          if (series == null || series.isEmpty)
+            Text('Starting…', style: TextStyle(fontSize: 13, color: c.textMuted))
+          else
+            MetricCards(
+              series: series,
+              rows: metricRows(
+                series,
+                gpuNames: state.hardware.gpus,
+                speed: state.phase != BenchmarkPhase.measuring ? null : (state.replyTokens > 0 ? 'speed.tokens' : 'speed.prompt'),
+              ),
+              speedNote: switch (state.phase) {
+                BenchmarkPhase.loading => 'loading the model',
+                BenchmarkPhase.warmingUp => 'warming up',
+                _ => null,
               },
             ),
-          ],
-
-          // 2. The Run Facts (Load time, Cache hits, Misses, SSD wait, Correct guesses, Wrong guesses)
-          const SizedBox(height: 18),
-          Fold(
-            title: 'The run',
-            child: Facts([
-              if (result?.loadMillis case final load?)
-                ('Load time', '${(load / 1000).toStringAsFixed(1)} s'),
-              ...engineFacts(whole.engine, whole: false),
-            ]),
-          ),
-
-          // 3. Dropdowns / Collapsible folds
-          if (result != null) ...[
-            const SizedBox(height: 14),
-            RunFolds(result: result, others: state.history),
-          ],
         ],
+
+        if (!state.running && result != null) ResultView(result: result),
       ],
     );
+  }
+
+  /// What the run is doing, in the live heading.
+  static String _liveTitle(BenchmarkState state) {
+    final n = state.tests.length;
+    return switch (state.phase) {
+      BenchmarkPhase.warmingUp => 'Warm-up ${state.warmup + 1} of ${state.setup.warmups.length}',
+      BenchmarkPhase.measuring when state.test != null => n > 1 ? '${state.test!.label} (${state.testIndex + 1} of $n)' : state.test!.label,
+      _ => 'Loading the model',
+    };
+  }
+
+  /// How far the test going on is; null at other times.
+  static String? _liveLine(BenchmarkState state) {
+    if (state.phase != BenchmarkPhase.measuring) return null;
+    if (state.replyTokens > 0) return 'Writing the reply: ${state.replyTokens} tokens…';
+    final p = state.promptProgress;
+    return p == null
+        ? 'Reading the prompt…'
+        : 'Reading the prompt: ${formatNumber(p.$1.toDouble(), 0)} of ${formatNumber(p.$2.toDouble(), 0)} tokens…';
   }
 }

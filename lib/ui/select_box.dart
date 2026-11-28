@@ -28,18 +28,31 @@ class SelectBox<T> extends StatefulWidget {
     super.key,
     required this.id,
     required this.label,
-    required this.value,
+    required T this.value,
     required this.entries,
     required this.onChanged,
     this.width = 260,
-  });
+  }) : chosen = null;
+
+  /// A drop-down for choosing several: the [chosen] entries are ticked and named in the box, a click on an entry turns
+  /// it on or off ([onChanged] gets it), and the list stays open.
+  const SelectBox.several({
+    super.key,
+    required this.id,
+    required this.label,
+    required Set<T> this.chosen,
+    required this.entries,
+    required this.onChanged,
+    this.width = 260,
+  }) : value = null;
 
   /// The box's own key is `Key(id)`; its entries' are `Key('<id>-<entry id>')`.
   final String id;
 
   /// What a screen reader says the box is.
   final String label;
-  final T value;
+  final T? value;
+  final Set<T>? chosen;
   final List<SelectEntry<T>> entries;
   final ValueChanged<T>? onChanged;
   final double width;
@@ -59,6 +72,8 @@ class _SelectBoxState<T> extends State<SelectBox<T>> {
 
   FocusNode _node(int i) => _entryNodes.putIfAbsent(i, () => FocusNode(debugLabel: 'select entry $i'));
 
+  bool _isChosen(SelectEntry<T> e) => widget.chosen?.contains(e.value) ?? e.value == widget.value;
+
   @override
   void dispose() {
     _box.dispose();
@@ -71,7 +86,7 @@ class _SelectBoxState<T> extends State<SelectBox<T>> {
   /// Puts the focus into the opened list: on the chosen entry, else on the first one that can be chosen.
   void _enterList() {
     final entries = widget.entries;
-    var at = entries.indexWhere((e) => e.value == widget.value && e.enabled);
+    var at = entries.indexWhere((e) => _isChosen(e) && e.enabled);
     if (at < 0) at = entries.indexWhere((e) => e.enabled);
     if (at < 0) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -83,7 +98,8 @@ class _SelectBoxState<T> extends State<SelectBox<T>> {
   Widget build(BuildContext context) {
     final c = context.colors;
     final entries = widget.entries;
-    final chosen = entries.where((e) => e.value == widget.value).firstOrNull;
+    final several = widget.chosen != null;
+    final chosen = [for (final e in entries) if (_isChosen(e) && (e.enabled || !several)) e];
     return LayoutBuilder(
       builder: (context, constraints) {
         final boxWidth = math.min(widget.width, constraints.maxWidth);
@@ -106,7 +122,8 @@ class _SelectBoxState<T> extends State<SelectBox<T>> {
                     key: Key('${widget.id}-${entries[i].id}'),
                     focusNode: _node(i),
                     onPressed: entries[i].enabled ? () => widget.onChanged?.call(entries[i].value) : null,
-                    trailingIcon: entries[i] == chosen ? Icon(Icons.check, size: 16, color: c.text) : null,
+                    closeOnActivate: !several,
+                    trailingIcon: chosen.contains(entries[i]) ? Icon(Icons.check, size: 16, color: c.text) : null,
                     style: ButtonStyle(
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       minimumSize: WidgetStatePropertyAll(Size(boxWidth, 34)),
@@ -150,7 +167,7 @@ class _SelectBoxState<T> extends State<SelectBox<T>> {
                   children: [
                     Expanded(
                       child: Text(
-                        chosen?.label ?? '',
+                        chosen.map((e) => e.label).join(', '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 13, color: s.enabled ? c.text : c.disabledText),

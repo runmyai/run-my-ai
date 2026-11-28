@@ -3,10 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../backend/backend.dart';
 import '../../benchmark/benchmark.dart';
-import '../../benchmark/engine_stats.dart';
 import '../../benchmark/metrics.dart';
-import '../../benchmark/summary.dart';
-import '../../benchmark/whole_run.dart';
 import '../../engine/commands.dart';
 import '../../state/benchmark.dart';
 import '../../state/chats.dart';
@@ -14,13 +11,9 @@ import '../../state/library.dart';
 import '../../state/profiles.dart';
 import '../../state/providers.dart';
 import '../../theme.dart';
-import '../benchmark/fold.dart';
 import '../benchmark/history_view.dart';
 import '../benchmark/metric_cards.dart';
-import '../benchmark/result_charts.dart';
 import '../benchmark/result_view.dart';
-import '../benchmark/run_details.dart';
-import '../benchmark/token_scrubber.dart';
 import '../buttons.dart';
 import '../select_box.dart';
 
@@ -46,7 +39,7 @@ class EnginePage extends ConsumerWidget {
           Text('Get a model from the Store first.', style: TextStyle(fontSize: 14, color: c.textSecondary))
         else ...[
           const SizedBox(height: 16),
-          _BenchmarkTab(entry: entry, control: control),
+          _BenchmarkTab(entry: entry),
         ],
       ],
     );

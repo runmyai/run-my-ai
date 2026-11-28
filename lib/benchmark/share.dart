@@ -108,6 +108,24 @@ Map<String, Object?> benchmarkDocument({
         'tokenStats': _stats(t.tokenStats),
       }..removeWhere((_, v) => v == null),
   ];
+  // Each test's full data, without its texts.
+  final tests = [
+    for (final t in result.testResults)
+      {
+        'test': t.testId,
+        'label': t.label,
+        'replyLength': t.test.replyCap,
+        'timeParts': t.timeParts,
+        'layers': t.layers,
+        'turn': {
+          ...t.turn.toJson(),
+          if (t.turn.tokenMillis.isNotEmpty) 'tokenGaps': null,
+          'tokensPerSecond': t.turn.tokensPerSecond,
+          'promptTokensPerSecond': t.turn.promptTokensPerSecond,
+          'tokenStats': _stats(t.turn.tokenStats),
+        }..removeWhere((_, v) => v == null),
+      },
+  ];
   final hardware = env.hardware;
   final data = <String, Object?>{
     'at': result.at.toUtc().toIso8601String(),
@@ -131,6 +149,7 @@ Map<String, Object?> benchmarkDocument({
     },
     'settings': {
       'test': result.promptLabel,
+      'tests': [for (final t in result.testResults) t.testId],
       'contextLength': result.contextLength,
       'kvCache': kvCache,
       'memoryHeadroomGiB': result.memoryCapGiB,
@@ -171,6 +190,7 @@ Map<String, Object?> benchmarkDocument({
       'engineLayout': layout,
       'disturbed': result.disturbed,
       'turns': turns,
+      'tests': tests,
       'series': result.series?.toJson(),
     },
   };
@@ -189,6 +209,9 @@ Map<String, Object?> benchmarkDocument({
   if (size() > benchmarkDocMaxBytes) {
     for (final t in (results['turns'] as List?) ?? const []) {
       (t as Map)..remove('tokenMillis')..remove('tokenGaps');
+    }
+    for (final t in (results['tests'] as List?) ?? const []) {
+      ((t as Map)['turn'] as Map)..remove('tokenMillis')..remove('tokenGaps');
     }
   }
   if (size() > benchmarkDocMaxBytes) results.remove('tokenMillis');

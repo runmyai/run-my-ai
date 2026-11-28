@@ -203,7 +203,7 @@ void main() {
     });
 
     shotTest('the setup with a problem line, $name', (tester) async {
-      await pump(tester, BenchmarkState(setup: BenchmarkSetup(contextLength: 8192, test: BenchmarkTest.prompts[2])), brightness);
+      await pump(tester, BenchmarkState(setup: BenchmarkSetup(contextLength: 8192, tests: [BenchmarkTest.prompts[2]])), brightness);
       await save(tester, 'setup-problem-$name');
       expect(tester.takeException(), isNull);
     });

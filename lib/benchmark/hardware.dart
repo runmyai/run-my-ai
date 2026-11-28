@@ -222,6 +222,23 @@ bool runningOnBattery(List<({String? type, String? online})> supplies) {
   return hasBattery && !connected;
 }
 
+/// Puts into [values] each card's highest power limit ever given on this PC (`gpu.<n>.powerTop`): the highest of
+/// [highest] (by the card's name in [names]) and the limit read now (`gpu.<n>.powerLimit`: NVIDIA's enforced limit, AMD's
+/// cap in force). [highest] is raised in place; the answer says whether it rose, so it can be saved.
+bool addHighestPowerLimits(Map<String, double?> values, List<String> names, Map<String, double> highest) {
+  var rose = false;
+  for (var n = 0; n < names.length; n++) {
+    final now = values['gpu.$n.powerLimit'];
+    final before = highest[names[n]];
+    if (now != null && now > 0 && (before == null || now > before)) {
+      highest[names[n]] = now;
+      rose = true;
+    }
+    if (highest[names[n]] case final top?) values['gpu.$n.powerTop'] = top;
+  }
+  return rose;
+}
+
 // ---- Reading files ----------------------------------------------------------------------------------------------
 
 /// Where text comes from: the real files, or a test's.
@@ -459,7 +476,9 @@ class SystemReader {
     out['cpu.temp'] = milli(_packageTemperature, 'temp1_input');
     out['cpu.tempMax'] = milli(_packageTemperature, 'temp1_crit');
     out['ssd.temp'] = milli(_ssdTemperature, 'temp1_input');
-    out['ssd.tempMax'] = milli(_ssdTemperature, 'temp1_crit');
+    // The drive's warning point is its limit; the critical one is kept for the record.
+    out['ssd.tempMax'] = milli(_ssdTemperature, 'temp1_max');
+    out['ssd.tempCrit'] = milli(_ssdTemperature, 'temp1_crit');
     final energy = files.read('$_sys/class/powercap/intel-rapl:0/energy_uj');
     final joules = energy == null ? null : int.tryParse(energy.trim());
     if (joules != null) {

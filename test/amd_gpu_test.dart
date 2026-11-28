@@ -108,6 +108,9 @@ void main() {
       expect((v['gpu.0.power'], v['gpu.0.powerLimit'], v['gpu.0.powerMax']), (25.0, 54.0, 65.0));
       expect((v['gpu.0.temp'], v['gpu.0.tempMax']), (61.0, 100.0));
       expect(v['gpu.0.clockFollowsLoad'], 1);
+      // The power bar's top is the cap in force (power1_cap), not the highest that could be set (power1_cap_max).
+      addHighestPowerLimits(v, reader.names, {});
+      expect(v['gpu.0.powerTop'], 54);
     });
 
     test('power from power1_input stands in for power1_average', () {

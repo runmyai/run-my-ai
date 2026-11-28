@@ -73,6 +73,7 @@ class EngineRun {
     this.vramHeadroom = const VramHeadroom(),
     this.keepState = true,
     this.reportProgress = false,
+    this.addedFlags = '',
   });
 
   final String flags;
@@ -89,6 +90,10 @@ class EngineRun {
   final bool keepState;
   final bool reportProgress;
 
+  /// Flags the benchmark adds on top of the command the engine is started with (the Auto command keeps only the
+  /// user's choices from [flags], so these would be lost there).
+  final String addedFlags;
+
   EngineRun withFlags(String flags) => EngineRun(
     flags: flags,
     contextLength: contextLength,
@@ -96,15 +101,18 @@ class EngineRun {
     vramHeadroom: vramHeadroom,
     keepState: keepState,
     reportProgress: reportProgress,
+    addedFlags: addedFlags,
   );
 
-  EngineRun forBenchmark() => EngineRun(
+  /// The run of a benchmark, with [added] flags on top of its command.
+  EngineRun forBenchmark({String added = ''}) => EngineRun(
     flags: flags,
     contextLength: contextLength,
     memoryCapGiB: memoryCapGiB,
     vramHeadroom: vramHeadroom,
     keepState: false,
     reportProgress: true,
+    addedFlags: added,
   );
 }
 

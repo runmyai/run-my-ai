@@ -33,16 +33,27 @@ class BenchmarkTest {
   static const replySpeed = BenchmarkTest._('reply', 'Reply speed', null);
 
   /// A long story to read and a short reply: the prompt processing speed. Each size has a story of its own.
+  static const prompt25k = BenchmarkTest._('prompt-25k', 'Prompt 25k', 25000, 'assets/benchmark/stories/daisy-miller.txt');
   static const prompts = [
     BenchmarkTest._('prompt-8k', 'Prompt 8k', 8000, 'assets/benchmark/stories/the-fall-of-the-house-of-usher.txt'),
-    BenchmarkTest._('prompt-25k', 'Prompt 25k', 25000, 'assets/benchmark/stories/daisy-miller.txt'),
+    prompt25k,
     BenchmarkTest._('prompt-50k', 'Prompt 50k', 50000, 'assets/benchmark/stories/a-study-in-scarlet.txt'),
     BenchmarkTest._('prompt-100k', 'Prompt 100k', 100000, 'assets/benchmark/stories/kidnapped.txt'),
   ];
+
+  /// Every test, in the order a run takes them: the reply speed first, then the prompts small to large.
   static const all = [replySpeed, ...prompts];
 
   /// The test with this id; the reply-speed test for one that is not known (a setup saved by an older version).
   static BenchmarkTest byId(Object? id) => all.firstWhere((t) => t.id == id, orElse: () => replySpeed);
+
+  /// The test with this label (how a run saved by an older version names its one test); null for one not known.
+  static BenchmarkTest? byLabel(String label) => all.where((t) => t.label == label).firstOrNull;
+
+  bool get isReplySpeed => promptTokens == null;
+
+  /// The size alone ("25k"), for a prompt test's line in a result.
+  String get size => label.replaceFirst('Prompt ', '');
 
   /// The most tokens the reply may have; it stops sooner when the model stops.
   int get replyCap => promptTokens == null ? replySpeedMaxTokens : promptReviewMaxTokens;
@@ -50,10 +61,8 @@ class BenchmarkTest {
   /// Whether the test fits a context of [contextLength]: its text, the warm-ups' room and its reply, by [promptFits].
   bool fits(int contextLength) => promptTokens == null || promptFits(promptTokens! + warmupRoomTokens, replyCap, contextLength);
 
-  /// What the test does, in a line.
-  String get description => promptTokens == null
-      ? 'Two warm-up messages, then a long story.'
-      : 'Two warm-up messages, then a story of ${promptTokens! ~/ 1000}k tokens and a short review.';
+  /// What the test sends after the warm-ups, in a few words.
+  String get description => promptTokens == null ? 'a long story' : 'a story of ${promptTokens! ~/ 1000}k tokens and a short review';
 }
 
 /// A type of the KV cache, named as the Run page names it.
@@ -83,9 +92,12 @@ int contextChoice(List<int> presets, int saved) {
   return presets.lastWhere((n) => n <= defaultContextLength, orElse: () => presets.first);
 }
 
-/// What the Benchmark tab was last set to: three choices.
+/// What the Benchmark tab was last set to: the context length, the KV cache and the tests.
 class BenchmarkSetup {
-  const BenchmarkSetup({this.contextLength = defaultContextLength, this.kvCache = KvCache.q8, this.test = BenchmarkTest.replySpeed});
+  const BenchmarkSetup({this.contextLength = defaultContextLength, this.kvCache = KvCache.q8, this.tests = defaultTests});
+
+  /// The tests chosen when nothing else was.
+  static const defaultTests = [BenchmarkTest.replySpeed, BenchmarkTest.prompt25k];
 
   /// The context length asked for; a model whose preset lacks it runs the default one ([contextChoice]).
   final int contextLength;
@@ -93,23 +105,40 @@ class BenchmarkSetup {
   /// The KV cache type chosen. A placeholder for now: it is kept and shown, and changes nothing in a run (every
   /// preset runs `q8_0`).
   final KvCache kvCache;
-  final BenchmarkTest test;
 
-  /// The messages sent before the measured one, and the most tokens of every reply: the test's own.
+  /// The tests chosen, in the order a run takes them ([BenchmarkTest.all]). One that does not fit the context length is
+  /// kept chosen for a longer one, and left out of a run ([runnable]).
+  final List<BenchmarkTest> tests;
+
+  /// The messages sent before the tests.
   List<String> get warmups => warmupMessages;
-  int get replyLength => test.replyCap;
 
-  BenchmarkSetup copyWith({int? contextLength, KvCache? kvCache, BenchmarkTest? test}) =>
-      BenchmarkSetup(contextLength: contextLength ?? this.contextLength, kvCache: kvCache ?? this.kvCache, test: test ?? this.test);
+  /// The chosen tests that fit a context of [contextLength], in the order they run.
+  List<BenchmarkTest> runnable(int contextLength) => [for (final t in tests) if (t.fits(contextLength)) t];
 
-  Map<String, Object?> toJson() => {'contextLength': contextLength, 'kvCache': kvCache.id, 'test': test.id};
+  /// The setup with [test] chosen or no longer chosen.
+  BenchmarkSetup toggled(BenchmarkTest test) {
+    final on = tests.contains(test);
+    return copyWith(tests: [for (final t in BenchmarkTest.all) if (t == test ? !on : tests.contains(t)) t]);
+  }
 
-  /// Reads a saved setup; what it lacks, or what an older version wrote in its place (the profile, the prompt, the
-  /// custom text, the reply length, the warm-ups, the test flags, the memory cap), is the default.
+  BenchmarkSetup copyWith({int? contextLength, KvCache? kvCache, List<BenchmarkTest>? tests}) => BenchmarkSetup(
+    contextLength: contextLength ?? this.contextLength,
+    kvCache: kvCache ?? this.kvCache,
+    tests: tests ?? this.tests,
+  );
+
+  Map<String, Object?> toJson() => {'contextLength': contextLength, 'kvCache': kvCache.id, 'tests': [for (final t in tests) t.id]};
+
+  /// Reads a saved setup; what it lacks, or what an older version wrote in its place (the one test it ran, the
+  /// profile, the prompt, the custom text, the reply length, the warm-ups, the test flags, the memory cap), is the
+  /// default.
   factory BenchmarkSetup.fromJson(Map<String, Object?> json) => BenchmarkSetup(
     contextLength: json['contextLength'] is num ? (json['contextLength']! as num).toInt() : defaultContextLength,
     kvCache: KvCache.byId(json['kvCache']),
-    test: BenchmarkTest.byId(json['test']),
+    tests: json['tests'] is List
+        ? [for (final t in BenchmarkTest.all) if ((json['tests']! as List).contains(t.id)) t]
+        : defaultTests,
   );
 }
 
@@ -289,7 +318,60 @@ class TurnRecord {
   );
 }
 
-/// Everything kept about one finished run.
+/// One test of a run: its measured message and reply ([turn], with that turn's own numbers and engine counters), the
+/// parts of a token's time and each layer's counters over its reply.
+class TestResult {
+  const TestResult({
+    required this.testId,
+    required this.label,
+    required this.turn,
+    this.promptText = '',
+    this.replyText = '',
+    this.timeParts = const {},
+    this.layers = const [],
+  });
+
+  /// The test's id and name ([BenchmarkTest]).
+  final String testId;
+  final String label;
+  final TurnRecord turn;
+
+  /// The test's message (all of a short one, the start of a long one) and the start of its reply.
+  final String promptText;
+  final String replyText;
+  final Map<String, double> timeParts;
+  final List<Map<String, double>> layers;
+
+  BenchmarkTest get test => BenchmarkTest.byId(testId);
+  bool get isReplySpeed => test.isReplySpeed;
+
+  Map<String, Object?> toJson() => {
+    'testId': testId,
+    'label': label,
+    'turn': turn.toJson(),
+    if (promptText.isNotEmpty) 'promptText': promptText,
+    if (replyText.isNotEmpty) 'replyText': replyText,
+    if (timeParts.isNotEmpty) 'timeParts': timeParts,
+    if (layers.isNotEmpty) 'layers': layers,
+  };
+
+  factory TestResult.fromJson(Map<String, Object?> j) => TestResult(
+    testId: j['testId']! as String,
+    label: j['label']! as String,
+    turn: TurnRecord.fromJson((j['turn']! as Map).cast<String, Object?>()),
+    promptText: j['promptText'] as String? ?? '',
+    replyText: j['replyText'] as String? ?? '',
+    timeParts: {for (final e in ((j['timeParts'] as Map?) ?? const {}).entries) e.key as String: (e.value as num).toDouble()},
+    layers: [
+      for (final l in (j['layers'] as List?) ?? const [])
+        {for (final e in (l as Map).entries) e.key as String: (e.value as num).toDouble()},
+    ],
+  );
+}
+
+/// Everything kept about one finished run. A run takes one or more tests ([tests]); the headline fields carry its main
+/// test (the reply speed when it ran, else the first prompt), as they carried the one test of a run saved by an older
+/// version.
 class BenchmarkResult {
   const BenchmarkResult({
     required this.at,
@@ -322,6 +404,7 @@ class BenchmarkResult {
     this.timeParts = const {},
     this.layers = const [],
     this.turns = const [],
+    this.tests = const [],
     this.series,
     this.memory = const MemoryLayout(),
     this.environment = const RunEnvironment(),
@@ -386,6 +469,10 @@ class BenchmarkResult {
   /// numbers (a run saved by an older app version has none; the headline stays the measured turn).
   final List<TurnRecord> turns;
 
+  /// Each test of the run in the order it ran; empty in a run saved before a run could take several ([testResults]
+  /// stands in).
+  final List<TestResult> tests;
+
   /// The machine's numbers over the run, on one time axis, shrunk to keep little.
   final RunSeries? series;
   final MemoryLayout memory;
@@ -423,6 +510,37 @@ class BenchmarkResult {
   double? get ramHitPercent => engineNumber('reply', 'ram_hit_percent');
   double? get vramHitPercent => engineNumber('reply', 'vram_hit_percent');
 
+  /// Each test of the run: [tests], or for a run saved by an older version its one test, made from the headline fields.
+  List<TestResult> get testResults {
+    if (tests.isNotEmpty) return tests;
+    final test = BenchmarkTest.byLabel(promptLabel) ?? BenchmarkTest.replySpeed;
+    final measured = turns.where((t) => !t.warmup).lastOrNull;
+    return [
+      TestResult(
+        testId: test.id,
+        label: promptLabel,
+        turn: measured ??
+            TurnRecord(
+              warmup: false,
+              firstTokenMillis: firstTokenMillis,
+              promptTokens: promptTokens,
+              promptMillis: promptMillis,
+              replyTokens: replyTokens,
+              replyMillis: replyMillis,
+              totalMillis: totalMillis,
+              stopReason: stopReason,
+              tokenGaps: tokenGaps,
+              tokenMillis: tokenMillis,
+              engineStats: engineStats,
+            ),
+        promptText: promptText,
+        replyText: replyText,
+        timeParts: timeParts,
+        layers: layers,
+      ),
+    ];
+  }
+
   BenchmarkResult withId(int id) => BenchmarkResult(
     id: id,
     at: at,
@@ -454,6 +572,7 @@ class BenchmarkResult {
     timeParts: timeParts,
     layers: layers,
     turns: turns,
+    tests: tests,
     series: series,
     memory: memory,
     environment: environment,
@@ -489,6 +608,7 @@ class BenchmarkResult {
     if (timeParts.isNotEmpty) 'timeParts': timeParts,
     if (layers.isNotEmpty) 'layers': layers,
     if (turns.isNotEmpty) 'turns': [for (final t in turns) t.toJson()],
+    if (tests.isNotEmpty) 'tests': [for (final t in tests) t.toJson()],
     if (series != null) 'series': series!.toJson(),
     if (!memory.isEmpty) 'memory': memory.toJson(),
     'environment': environment.toJson(),
@@ -538,6 +658,7 @@ class BenchmarkResult {
     ],
     // Runs saved by older app versions have no per-turn list; the headline fields carry the measured turn.
     turns: [for (final t in (j['turns'] as List?) ?? const []) TurnRecord.fromJson((t as Map).cast<String, Object?>())],
+    tests: [for (final t in (j['tests'] as List?) ?? const []) TestResult.fromJson((t as Map).cast<String, Object?>())],
     series: j['series'] == null ? null : RunSeries.fromJson((j['series']! as Map).cast<String, Object?>()),
     memory: j['memory'] == null ? const MemoryLayout() : MemoryLayout.fromJson((j['memory']! as Map).cast<String, Object?>()),
     environment: j['environment'] == null

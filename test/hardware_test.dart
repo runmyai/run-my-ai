@@ -106,7 +106,8 @@ void main() {
         '/sys/class/hwmon/hwmon3/temp1_input': '55000\n',
         '/sys/class/hwmon/hwmon5/name': 'nvme\n',
         '/sys/class/hwmon/hwmon5/temp1_input': '41000\n',
-        '/sys/class/hwmon/hwmon5/temp1_crit': '84800\n',
+        '/sys/class/hwmon/hwmon5/temp1_max': '83850\n',
+        '/sys/class/hwmon/hwmon5/temp1_crit': '87850\n',
         '/sys/class/nvme/nvme0/device/current_link_speed': '16.0 GT/s PCIe\n',
         '/sys/class/nvme/nvme0/device/current_link_width': '4\n',
         '/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq': '2400000\n',
@@ -144,7 +145,11 @@ void main() {
       expect(first['sys.battery'], 1);
       expect(first['cpu.temp'], 55);
       expect(first['ssd.temp'], 41);
-      expect(first['ssd.tempMax'], 84.8);
+      // The drive's warning point is its limit; the critical one is kept beside it. The CPU (k10temp) reports no
+      // limit: no bar.
+      expect(first['ssd.tempMax'], 83.85);
+      expect(first['ssd.tempCrit'], 87.85);
+      expect(first['cpu.tempMax'], isNull);
       expect(first['ssd.readMax'], closeTo(7.876, 0.001));
       expect(first['cpu.core.0.mhz'], 2400);
       expect(first['cpu.core.0.mhzMax'], 5100);
@@ -185,6 +190,23 @@ void main() {
       expect(info.os, 'Fedora Linux 44, kernel 7.2.7');
       expect(HardwareInfo.fromJson(info.toJson()).cpu, 'Test CPU 9');
     });
+  });
+
+  test("each card's highest power limit is kept by its name and raised when a higher one is read", () {
+    final highest = <String, double>{'RTX A': 105};
+    final low = <String, double?>{'gpu.0.powerLimit': 95, 'gpu.1.powerLimit': 54};
+    expect(addHighestPowerLimits(low, ['RTX A', 'Radeon B'], highest), isTrue);
+    expect((low['gpu.0.powerTop'], low['gpu.1.powerTop']), (105.0, 54.0));
+    expect(highest, {'RTX A': 105.0, 'Radeon B': 54.0});
+    final same = <String, double?>{'gpu.0.powerLimit': 95, 'gpu.1.powerLimit': 54};
+    expect(addHighestPowerLimits(same, ['RTX A', 'Radeon B'], highest), isFalse);
+    final higher = <String, double?>{'gpu.0.powerLimit': 115};
+    expect(addHighestPowerLimits(higher, ['RTX A'], highest), isTrue);
+    expect((higher['gpu.0.powerTop'], highest['RTX A']), (115.0, 115.0));
+    // A card that reports no limit gets none.
+    final none = <String, double?>{'gpu.0.power': 30};
+    expect(addHighestPowerLimits(none, ['Other'], highest), isFalse);
+    expect(none.containsKey('gpu.0.powerTop'), isFalse);
   });
 
   test('the graphics library: read where there is a card, null where there is none', () {
