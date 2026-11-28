@@ -173,7 +173,6 @@ class _SettingsList extends ConsumerWidget {
         const _Sound(),
         const SizedBox(height: 28),
         const _VramHeadroom(),
-        const SizedBox(height: 28),
         Fold(title: 'Folders', titleStyle: settingsFoldTitle(c), tooltip: foldersAbout, child: const FoldersSection()),
         const SizedBox(height: 28),
         const _Context(),
@@ -198,8 +197,8 @@ class _SettingsList extends ConsumerWidget {
   }
 }
 
-/// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs: one row per card the
-/// engine can use (the same for every model).
+/// The graphics card memory (VRAM) left free for the desktop and other apps while a model runs: a drop-down with one row
+/// per card the engine can use (the same for every model), shown only when there is such a card.
 class _VramHeadroom extends ConsumerWidget {
   const _VramHeadroom();
 
@@ -223,31 +222,32 @@ class _VramHeadroom extends ConsumerWidget {
     return '${gb.endsWith('.0') ? gb.substring(0, gb.length - 2) : gb} GB';
   }
 
+  // A drop-down, closed at first, with one row per card; the gap under it comes with it, so nothing is left when hidden.
   Widget _section(AppColors c, List<({String key, String name, String desc, int mib})> cards) => Padding(
-    padding: const EdgeInsets.only(top: 20),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SettingName(
-          'VRAM headroom',
-          size: 14,
-          description: 'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
-        ),
-        for (final card in cards) ...[
-          const SizedBox(height: 12),
-          Text(
-            [
-              if (card.desc.isNotEmpty) card.desc else if (card.name.isEmpty) 'Graphics card',
-              if (card.name.isNotEmpty) card.name,
-              _gb(card.mib),
-            ].join(', '),
-            key: Key('vram-card-${card.key}'),
-            style: TextStyle(fontSize: 13, color: c.text),
-          ),
-          const SizedBox(height: 6),
-          VramHeadroomInput(card: card.key),
+    padding: const EdgeInsets.only(bottom: 28),
+    child: Fold(
+      title: 'VRAM headroom',
+      titleStyle: settingsFoldTitle(c),
+      tooltip: 'Graphics card memory (VRAM) left free for your desktop and other apps, so they have room to grow while a model runs. A change applies the next time the model loads.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final (i, card) in cards.indexed) ...[
+            if (i > 0) const SizedBox(height: 12),
+            Text(
+              [
+                if (card.desc.isNotEmpty) card.desc else if (card.name.isEmpty) 'Graphics card',
+                if (card.name.isNotEmpty) card.name,
+                _gb(card.mib),
+              ].join(', '),
+              key: Key('vram-card-${card.key}'),
+              style: TextStyle(fontSize: 13, color: c.text),
+            ),
+            const SizedBox(height: 6),
+            VramHeadroomInput(card: card.key),
+          ],
         ],
-      ],
+      ),
     ),
   );
 }

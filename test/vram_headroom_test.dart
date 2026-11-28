@@ -244,7 +244,10 @@ void main() {
           (key: 'CUDA0', name: 'CUDA0', desc: '', mib: 8192),
         ];
       final container = await show(tester, backend);
-      expect(find.text('VRAM headroom'), findsOneWidget, reason: 'one explanation above the rows');
+      expect(find.text('VRAM headroom'), findsOneWidget, reason: 'one heading above the rows');
+      expect(find.byType(VramHeadroomInput), findsNothing, reason: 'a drop-down, closed at first');
+      await tester.tap(find.byKey(const Key('fold-VRAM headroom')));
+      await tester.pump();
       expect(find.text('NVIDIA GeForce RTX 4070, CUDA1, 12 GB'), findsOneWidget, reason: 'the full name first when known');
       expect(find.text('CUDA0, 8 GB'), findsOneWidget);
       expect(tester.widget<TextField>(find.byKey(const Key('vram-headroom-CUDA1'))).controller!.text, '2');
@@ -271,6 +274,15 @@ void main() {
     testWidgets('no section when the backend does not measure the PC (no engine)', (tester) async {
       await show(tester, _Backend());
       expect(find.text('VRAM headroom'), findsNothing);
+    });
+
+    testWidgets('no heading at all when the only GPU is built in and shares the RAM', (tester) async {
+      final backend = _GpuBackend()
+        ..cards = const [(key: 'Vulkan0', name: 'Vulkan0', desc: 'Radeon 890M', mib: 16384)]
+        ..sharesRam = true;
+      await show(tester, backend);
+      expect(find.text('VRAM headroom'), findsNothing);
+      expect(find.byKey(const Key('fold-VRAM headroom')), findsNothing);
     });
 
     Future<EngineBackend> withCards(List<Map<String, Object?>> cards, {List<int> built = const []}) async {
