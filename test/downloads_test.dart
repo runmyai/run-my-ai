@@ -1,5 +1,6 @@
-// Model downloads: parts over several connections, continuing after a stop, checksums, the space check, the line of
-// downloads in the Store. Against a small local server that answers as Hugging Face does.
+// Model downloads: one request per file, continuing after a break or a stop with one request from the last byte
+// written, checksums, the space check, the line of downloads in the Store. Against a small local server that answers
+// as Hugging Face does.
 // Run: flutter test test/downloads_test.dart
 import 'dart:async';
 import 'dart:convert';
@@ -29,6 +30,15 @@ class _Hub {
   /// The ranges asked, as "name first-last", in order.
   final asked = <String>[];
 
+  /// The files asked for at Hugging Face's own address (each is one download there), in order.
+  final requests = <String>[];
+
+  /// Whether a request for a range gets the whole file (200), as from a server that does not do ranges.
+  var ignoreRange = false;
+
+  /// How many requests for a range get 416 (no such range).
+  var refuseRange = 0;
+
   /// Files the list says another checksum for.
   final wrongChecksum = <String>{};
 
@@ -41,11 +51,8 @@ class _Hub {
   /// The status every file request gets instead of the file.
   int? refuse;
 
-  /// The wait before each part is sent.
+  /// The wait before each answer is sent.
   var delay = Duration.zero;
-
-  /// When set, each part waits up to 15 ms more, so the parts finish out of order.
-  Random? jitter;
 
   late HttpServer _server;
 
@@ -87,6 +94,7 @@ class _Hub {
         return response.close();
       }
       if (path.startsWith('/$repo/resolve/main/')) {
+        requests.add(path.split('/').last);
         if (refuse case final status?) {
           response.statusCode = status;
           return response.close();
@@ -96,11 +104,18 @@ class _Hub {
       if (path.startsWith('/cdn/$repo/')) {
         final name = path.split('/').last;
         final bytes = files[name]!;
-        final range = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(request.headers.value(HttpHeaders.rangeHeader) ?? '');
+        var range = RegExp(r'bytes=(\d+)-(\d*)').firstMatch(request.headers.value(HttpHeaders.rangeHeader) ?? '');
+        if (range != null && refuseRange > 0) {
+          refuseRange--;
+          asked.add('$name ${range[1]}- refused');
+          response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+          return response.close();
+        }
+        if (ignoreRange) range = null;
         final first = range == null ? 0 : int.parse(range[1]!),
-            last = range == null ? bytes.length - 1 : int.parse(range[2]!);
+            last = range == null || range[2]!.isEmpty ? bytes.length - 1 : int.parse(range[2]!);
         asked.add('$name $first-$last');
-        await Future<void>.delayed(delay + Duration(milliseconds: jitter?.nextInt(15) ?? 0));
+        await Future<void>.delayed(delay);
         response.statusCode = range == null ? 200 : 206;
         response.headers.set(HttpHeaders.contentRangeHeader, 'bytes $first-$last/${bytes.length}');
         if (hangHalfWay > 0) {
@@ -163,46 +178,108 @@ void main() {
   ModelDownload download({
     Future<int?> Function(String)? free,
     void Function(DownloadProgress)? onProgress,
-    int connections = 4,
-    int partBytes = 1000,
     Duration idleTimeout = const Duration(seconds: 30),
   }) => ModelDownload(
     _model,
     '${dir.path}/models',
     server: hub.uri,
-    connections: connections,
-    partBytes: partBytes,
     free: free ?? (_) async => 1 << 40,
     onProgress: onProgress,
     retryDelay: Duration.zero,
     idleTimeout: idleTimeout,
   );
 
-  test('a part record splits the file into ranges and remembers the parts written', () {
-    final record = PartRecord(size: 2500, partBytes: 1000, sha256: 'abc');
-    expect(record.parts, 3);
-    expect([for (var i = 0; i < 3; i++) record.range(i)], [(0, 999), (1000, 1999), (2000, 2499)]);
-    record.done.addAll([0, 2]);
-    record.started[1] = 300;
-    expect(record.missing, [1]);
-    expect(record.doneBytes, 1800);
+  /// A download stopped when half of the weights came (the connection hangs there), as a pause or a closed app does;
+  /// the progress it told.
+  Future<List<int>> stoppedHalfWay() async {
+    hub.hangHalfWay = 1;
+    final seen = <int>[];
+    final first = download(onProgress: (p) => seen.add(p.done));
+    final going = first.run();
+    for (var i = 0; i < 200 && (seen.isEmpty || seen.last < 10000); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(seen.last, 10000, reason: 'the half that came counts');
+    first.stop();
+    expect(await going, isFalse);
+    return seen;
+  }
+
+  List<String> weightsAsked() => hub.asked.where((a) => a.startsWith('m.gguf')).toList();
+
+  /// Writes an unfinished download of the weights: [good] right bytes, then [junk] wrong ones, and [record].
+  void unfinished(int good, int junk, Map<String, Object?> record) {
+    final models = Directory('${dir.path}/models')..createSync();
+    File('${models.path}/m.gguf.part').writeAsBytesSync([..._weights.sublist(0, good), ...List.filled(junk, 7)]);
+    File('${models.path}/m.gguf.part.json').writeAsStringSync(jsonEncode(record));
+  }
+
+  test('a record keeps the bytes written; an older version\'s parts record keeps its stretch from the start', () {
     final file = File('${dir.path}/r.json');
-    record.write(file);
+    PartRecord(size: 2500, sha256: 'abc', written: 1300).write(file);
+    expect(jsonDecode(file.readAsStringSync()), {'size': 2500, 'sha256': 'abc', 'gitSha1': null, 'written': 1300});
     final back = PartRecord.read(file)!;
-    expect(back.done, {0, 2});
-    expect(back.started, {1: 300});
-    // what an older version of the app wrote (no started parts) is read; a started count that does not fit is not
-    file.writeAsStringSync('{"size": 2500, "partBytes": 1000, "sha256": "abc", "done": [0]}');
-    expect(PartRecord.read(file)!.started, isEmpty);
-    file.writeAsStringSync('{"size": 2500, "partBytes": 1000, "done": [0], "started": {"0": 5, "1": 1000, "2": 7}}');
-    expect(PartRecord.read(file)!.started, {2: 7});
+    expect(back.written, 1300);
     expect(back.isFor(const RemoteFile('x', 2500, sha256: 'abc')), isTrue);
     expect(back.isFor(const RemoteFile('x', 2500, sha256: 'abd')), isFalse);
     expect(back.isFor(const RemoteFile('x', 2501, sha256: 'abc')), isFalse);
-    expect(PartRecord(size: 0, partBytes: 1000).parts, 0);
+    int? old(Map<String, Object?> json) {
+      file.writeAsStringSync(jsonEncode({'size': 2500, 'sha256': 'abc', ...json}));
+      return PartRecord.read(file)?.written;
+    }
+
+    expect(
+      old({
+        'partBytes': 1000,
+        'done': [0, 2],
+        'started': {'1': 300},
+      }),
+      1300,
+    );
+    expect(
+      old({
+        'partBytes': 1000,
+        'done': [0, 2],
+      }),
+      1000,
+    );
+    expect(
+      old({
+        'partBytes': 1000,
+        'done': [1, 2],
+        'started': {'0': 5},
+      }),
+      5,
+    );
+    expect(
+      old({
+        'partBytes': 1000,
+        'done': [0, 1, 2],
+      }),
+      2500,
+    );
+    // a started count that does not fit its part is not kept
+    expect(
+      old({
+        'partBytes': 1000,
+        'done': [0],
+        'started': {'1': 1000, '2': 7},
+      }),
+      1000,
+    );
+    expect(
+      old({
+        'partBytes': 0,
+        'done': [0],
+      }),
+      isNull,
+    );
+    expect(old({'written': 9999}), 2500);
+    file.writeAsStringSync('not json');
+    expect(PartRecord.read(file), isNull);
   });
 
-  test('every file comes in parts over several connections, is checked, and only then gets its name', () async {
+  test('every file comes with one request, is checked, and only then gets its name', () async {
     var checked = false;
     expect(await download(onProgress: (p) => checked |= p.checking).run(), isTrue);
     expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
@@ -211,151 +288,125 @@ void main() {
       'm.gguf',
       'm.vram-experts.json',
     });
-    expect(hub.asked.where((a) => a.startsWith('m.gguf')).length, 20);
+    expect(hub.requests, ['m.gguf', 'm.vram-experts.json']);
+    expect(weightsAsked(), ['m.gguf 0-19999']);
     expect(checked, isTrue);
     expect(dir.listSync().length, 1);
     // A second run finds it all there.
-    hub.asked.clear();
+    hub.requests.clear();
     expect(await download().run(), isTrue);
-    expect(hub.asked, isEmpty);
+    expect(hub.requests, isEmpty);
   });
 
-  test('stopped, it continues where it stopped: the parts written are not fetched again', () async {
-    hub.delay = const Duration(milliseconds: 20);
-    final first = download();
-    final going = first.run();
-    while (hub.asked.length < 6) {
-      await Future<void>.delayed(const Duration(milliseconds: 5));
-    }
-    first.stop();
-    expect(await going, isFalse);
-    final record = PartRecord.read(File('${dir.path}/models/m.gguf.part.json'))!;
-    expect(record.done, isNotEmpty);
-    expect(record.missing, isNotEmpty);
-    expect(downloadedBytes('${dir.path}/models', _model), record.doneBytes);
-    expect(File('${dir.path}/models/m.gguf').existsSync(), isFalse);
-
-    hub.asked.clear();
-    hub.delay = Duration.zero;
+  test('a connection that breaks off continues with one request from the last byte written', () async {
+    hub.cutShort = 3;
     expect(await download().run(), isTrue);
-    expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
-    for (final i in record.done) {
-      expect(hub.asked, isNot(contains('m.gguf ${i * 1000}-${i * 1000 + 999}')));
-    }
-    expect(downloadedBytes('${dir.path}/models', _model), isNull);
+    final whole = File('${dir.path}/models/m.gguf');
+    expect(sha256.convert(whole.readAsBytesSync()).toString(), _sha256(_weights));
+    expect(weightsAsked(), ['m.gguf 0-19999', 'm.gguf 10000-19999', 'm.gguf 15000-19999', 'm.gguf 17500-19999']);
+    expect(hub.requests, ['m.gguf', 'm.gguf', 'm.gguf', 'm.gguf', 'm.vram-experts.json']);
   });
 
   test(
-    'paused part way through a part, Resume continues it from its last byte; the progress never goes back',
+    'a connection that stops sending without closing is dropped after the idle time, and the file continues',
     () async {
-      hub.hangHalfWay = 1;
-      final seen = <int>[];
-      final first = download(connections: 1, onProgress: (p) => seen.add(p.done));
-      final going = first.run();
-      for (var i = 0; i < 200 && (seen.isEmpty || seen.last < 500); i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
-      expect(seen.last, 500, reason: 'the half that came counts');
-      first.stop();
-      expect(await going, isFalse);
-      final record = PartRecord.read(File('${dir.path}/models/m.gguf.part.json'))!;
-      expect(record.done, isEmpty);
-      expect(record.started, {0: 500});
-      expect(downloadedBytes('${dir.path}/models', _model), 500);
-
-      hub.asked.clear();
-      final again = <int>[];
-      expect(await download(connections: 1, onProgress: (p) => again.add(p.done)).run(), isTrue);
-      expect(hub.asked.first, 'm.gguf 500-999');
-      expect(hub.asked, isNot(contains('m.gguf 0-999')));
-      for (final (a, b) in [for (var i = 1; i < seen.length; i++) (seen[i - 1], seen[i])]) {
-        expect(b, greaterThanOrEqualTo(a));
-      }
-      expect(again.first, greaterThanOrEqualTo(seen.last));
-      for (final (a, b) in [for (var i = 1; i < again.length; i++) (again[i - 1], again[i])]) {
-        expect(b, greaterThanOrEqualTo(a));
-      }
-      final whole = File('${dir.path}/models/m.gguf');
-      expect(whole.readAsBytesSync(), _weights);
-      expect(sha256.convert(whole.readAsBytesSync()).toString(), _sha256(_weights));
+      hub.hangHalfWay = 2;
+      expect(await download(idleTimeout: const Duration(milliseconds: 200)).run(), isTrue);
+      expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
+      expect(weightsAsked(), ['m.gguf 0-19999', 'm.gguf 10000-19999', 'm.gguf 15000-19999']);
     },
   );
 
-  test('a download paused by an older version of the app (larger parts, no started bytes) still finishes', () async {
-    final models = Directory('${dir.path}/models')..createSync();
-    File('${models.path}/m.gguf.part').writeAsBytesSync([..._weights.sublist(0, 8000), ...List.filled(3000, 0)]);
-    File('${models.path}/m.gguf.part.json').writeAsStringSync(
-      jsonEncode({
-        'size': 20000,
-        'partBytes': 8000,
-        'sha256': _sha256(_weights),
-        'gitSha1': null,
-        'done': [0],
-      }),
-    );
-    expect(await download().run(), isTrue);
-    expect(File('${models.path}/m.gguf').readAsBytesSync(), _weights);
-    expect(hub.asked.where((a) => a.startsWith('m.gguf')), ['m.gguf 8000-15999', 'm.gguf 16000-19999']);
+  test('paused half way, Resume continues with one request from the last byte; the progress never goes back', () async {
+    final seen = await stoppedHalfWay();
+    expect(PartRecord.read(File('${dir.path}/models/m.gguf.part.json'))!.written, 10000);
+    expect(File('${dir.path}/models/m.gguf.part').lengthSync(), 10000);
+    expect(downloadedBytes('${dir.path}/models', _model), 10000);
+    expect(File('${dir.path}/models/m.gguf').existsSync(), isFalse);
+
+    hub.asked.clear();
+    hub.requests.clear();
+    final again = <int>[];
+    expect(await download(onProgress: (p) => again.add(p.done)).run(), isTrue);
+    expect(weightsAsked(), ['m.gguf 10000-19999']);
+    expect(hub.requests, ['m.gguf', 'm.vram-experts.json']);
+    for (final (a, b) in [for (var i = 1; i < seen.length; i++) (seen[i - 1], seen[i])]) {
+      expect(b, greaterThanOrEqualTo(a));
+    }
+    expect(again.first, greaterThanOrEqualTo(seen.last));
+    for (final (a, b) in [for (var i = 1; i < again.length; i++) (again[i - 1], again[i])]) {
+      expect(b, greaterThanOrEqualTo(a));
+    }
+    final whole = File('${dir.path}/models/m.gguf');
+    expect(sha256.convert(whole.readAsBytesSync()).toString(), _sha256(_weights));
+    expect(downloadedBytes('${dir.path}/models', _model), isNull);
   });
 
-  test('the checksum is worked out as the parts arrive out of order, also across a pause; the check at the end says so '
-      'until it is done', () async {
-    for (final seed in [1, 2, 3]) {
-      hub.jitter = Random(seed);
-      // a part size that does not divide the file
-      final first = download(connections: 6, partBytes: 768);
-      final going = first.run();
-      while (hub.asked.length < 8) {
-        await Future<void>.delayed(const Duration(milliseconds: 2));
-      }
-      first.stop();
-      expect(await going, isFalse);
-      // after the check started, every progress says checking until the file has its name
-      var checking = false, checkingDropped = false;
-      final whole = File('${dir.path}/models/m.gguf');
-      expect(
-        await download(
-          connections: 6,
-          partBytes: 768,
-          onProgress: (p) {
-            if (p.checking) checking = true;
-            if (checking && !p.checking && !whole.existsSync()) checkingDropped = true;
-          },
-        ).run(),
-        isTrue,
-      );
-      expect(checking, isTrue);
-      expect(checkingDropped, isFalse);
-      expect(whole.readAsBytesSync(), _weights, reason: 'seed $seed');
+  test('a record ahead of its file continues from the end of the file', () async {
+    unfinished(6000, 0, {'size': 20000, 'sha256': _sha256(_weights), 'gitSha1': null, 'written': 9000});
+    expect(await download().run(), isTrue);
+    expect(weightsAsked(), ['m.gguf 6000-19999']);
+    expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
+  });
+
+  test('a server that answers a range with the whole file (200) or with 416 starts the file over', () async {
+    for (final refuse in [false, true]) {
+      // the bytes past the first 1000 are wrong, so only a real start from byte 0 ends with the right file
+      unfinished(1000, 7000, {'size': 20000, 'sha256': _sha256(_weights), 'gitSha1': null, 'written': 8000});
+      hub.ignoreRange = !refuse;
+      hub.refuseRange = refuse ? 1 : 0;
+      expect(await download().run(), isTrue);
+      expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights, reason: 'refuse $refuse');
+      expect(weightsAsked(), refuse ? ['m.gguf 8000- refused', 'm.gguf 0-19999'] : ['m.gguf 0-19999']);
       deleteModelFiles('${dir.path}/models', _model);
       hub.asked.clear();
     }
   });
 
-  test('a connection that breaks off is retried, and the file is still right', () async {
-    hub.cutShort = 3;
-    expect(await download().run(), isTrue);
-    expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
-    final asked = hub.asked.where((a) => a.startsWith('m.gguf'));
-    expect(asked.length, 23);
-    // each of the three cut answers sent half its part, and its retry asked only for the other half
-    final bytes = asked
-        .map((a) => a.split(' ').last.split('-').map(int.parse).toList())
-        .fold(0, (n, r) => n + r[1] - r[0] + 1);
-    expect(bytes, _weights.length + 3 * 500);
-  });
+  test(
+    'a download paused by an older version of the app (in parts) continues from its stretch written from the start',
+    () async {
+      // parts of 8000: the first done, the second partly written but not tracked; the rest is fetched with one request
+      unfinished(8000, 3000, {
+        'size': 20000,
+        'partBytes': 8000,
+        'sha256': _sha256(_weights),
+        'gitSha1': null,
+        'done': [0],
+      });
+      expect(downloadedBytes('${dir.path}/models', _model), 8000);
+      expect(await download().run(), isTrue);
+      expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
+      expect(weightsAsked(), ['m.gguf 8000-19999']);
+      deleteModelFiles('${dir.path}/models', _model);
+      hub.asked.clear();
 
-  test('a connection that stops sending without closing is dropped after the idle time, and the part continues', () async {
-    hub.hangHalfWay = 2;
-    expect(await download(idleTimeout: const Duration(milliseconds: 200)).run(), isTrue);
-    expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
-    // the two hung answers sent half their part; each retry asked only for the other half
-    final asked = hub.asked.where((a) => a.startsWith('m.gguf'));
-    final bytes = asked
-        .map((a) => a.split(' ').last.split('-').map(int.parse).toList())
-        .fold(0, (n, r) => n + r[1] - r[0] + 1);
-    expect(bytes, _weights.length + 2 * 500);
-  });
+      // parts of 1000 over several connections: 0, 1 and 3 done, 400 bytes of 2 written; part 3 is fetched again
+      unfinished(2400, 1600, {
+        'size': 20000,
+        'partBytes': 1000,
+        'sha256': _sha256(_weights),
+        'done': [0, 1, 3],
+        'started': {'2': 400, '4': 10},
+      });
+      expect(await download().run(), isTrue);
+      expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
+      expect(weightsAsked(), ['m.gguf 2400-19999']);
+      deleteModelFiles('${dir.path}/models', _model);
+      hub.asked.clear();
+
+      // every part written, the app closed before the check: nothing is fetched again
+      unfinished(20000, 0, {
+        'size': 20000,
+        'partBytes': 8000,
+        'sha256': _sha256(_weights),
+        'done': [0, 1, 2],
+      });
+      expect(await download().run(), isTrue);
+      expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
+      expect(weightsAsked(), isEmpty);
+    },
+  );
 
   test('a file that does not match its checksum is deleted and reported as damaged', () async {
     hub.wrongChecksum.add('m.gguf');
@@ -448,7 +499,7 @@ void main() {
       await until(() => library().downloaded.containsAll(['m/q', 'n/q']));
       expect(library().downloads, isEmpty);
       expect(library().picked, 'm/q');
-      // Every part of the first came before any of the second.
+      // All of the first came before any of the second.
       final firstOfSecond = hub.asked.indexWhere((a) => a.startsWith('n.gguf'));
       expect(hub.asked.skip(firstOfSecond).where((a) => a.startsWith('m.')), isEmpty);
       expect(chime.rings, 2);
@@ -480,14 +531,7 @@ void main() {
       'an unfinished download shows as paused after the app was closed, and a model in the folder as downloaded',
       () async {
         // A download stopped part way, as when the app is closed.
-        hub.delay = const Duration(milliseconds: 20);
-        final first = download();
-        final going = first.run();
-        while (hub.asked.length < 6) {
-          await Future<void>.delayed(const Duration(milliseconds: 5));
-        }
-        first.stop();
-        expect(await going, isFalse);
+        await stoppedHalfWay();
         File('${dir.path}/models/n.gguf').writeAsBytesSync(secondBytes);
 
         container = open();
@@ -498,7 +542,6 @@ void main() {
         expect(status.phase, DownloadPhase.paused);
         expect(status.done, greaterThan(0));
         expect(library().downloaded, {'n/q'});
-        hub.delay = Duration.zero;
         container.read(libraryProvider.notifier).download(_model);
         await until(() => library().downloaded.contains('m/q'));
         expect(File('${dir.path}/models/m.gguf').readAsBytesSync(), _weights);
@@ -520,7 +563,7 @@ void main() {
   });
 
   test('a public Hugging Face model downloads and passes its checksums', () async {
-    // Small files of a public repo (no token): the real redirects, ranges and both kinds of checksum.
+    // Small files of a public repo (no token): the real redirects and both kinds of checksum.
     const tiny = ModelFile(
       id: 'tiny/gpt2',
       quantization: '',
@@ -529,7 +572,7 @@ void main() {
       parts: ['model.safetensors', 'config.json'],
     );
     try {
-      final ok = await ModelDownload(tiny, '${dir.path}/hf', partBytes: 100000, free: (_) async => 1 << 40).run();
+      final ok = await ModelDownload(tiny, '${dir.path}/hf', free: (_) async => 1 << 40).run();
       expect(ok, isTrue);
       expect(File('${dir.path}/hf/model.safetensors').lengthSync(), 453864);
       expect(jsonDecode(File('${dir.path}/hf/config.json').readAsStringSync())['model_type'], 'gpt2');
