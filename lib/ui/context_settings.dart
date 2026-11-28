@@ -225,7 +225,7 @@ class _ContextColumn extends StatelessWidget {
 
   static const _quantOptions = [
     (id: 'q4_0', name: 'Efficient', tag: 'Q4_0', desc: 'Lowest RAM consumption'),
-    (id: 'q8_0', name: 'Balanced', tag: 'Q8_0', desc: '50% compared to FP16, near-lossless'),
+    (id: 'q8_0', name: 'Balanced', tag: 'Q8_0', desc: 'Near-lossless'),
     (id: 'f16', name: 'Full Quality', tag: 'F16', desc: 'Maximum precision'),
   ];
 
