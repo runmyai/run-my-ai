@@ -2,6 +2,7 @@
 // the same choice, the chat window without a model (Send off), the bubble at the Store (shown once), and the chat's
 // texts before the very first message.
 // Run: flutter test test/first_run_test.dart
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -45,8 +46,14 @@ class _Backend extends DummyBackend {
     required EngineRun run,
     bool thinking = false,
     int? maxTokens,
-  }) => Stream.value(const ReplyText('ok'));
+  }) => held?.stream ?? Stream.value(const ReplyText('ok'));
 }
+
+/// While set, a reply is written until the test closes it.
+StreamController<ReplyEvent>? held;
+
+/// The links opened (no browser in a test).
+final opened = <String>[];
 
 /// The app's folders in the test's folder.
 class _Folders extends FoldersNotifier {
@@ -64,6 +71,8 @@ void main() {
   late Directory dir;
   setUp(() {
     clockNow = DateTime(2026);
+    held = null;
+    opened.clear();
     dir = Directory.systemTemp.createTempSync('runmyai-firstrun-');
     // The window plugin is not there in a test: the window is never maximized.
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -80,6 +89,7 @@ void main() {
     Map<String, Object?> seen = const {},
     bool downloaded = true,
     Brightness brightness = Brightness.light,
+    bool starForced = false,
   }) async {
     tester.view.physicalSize = const Size(1600, 800);
     tester.view.devicePixelRatio = 1;
@@ -96,6 +106,11 @@ void main() {
         backendProvider.overrideWithValue(_Backend()),
         todayProvider.overrideWith(_Today.new),
         communityClockProvider.overrideWithValue(() => clockNow),
+        starCardForcedProvider.overrideWithValue(starForced),
+        linkOpenerProvider.overrideWithValue((url) async {
+          opened.add(url);
+          return true;
+        }),
       ],
     );
     addTearDown(container.dispose);
@@ -300,6 +315,103 @@ void main() {
       await open(tester, seen: seen);
       expect(star, findsNothing);
       expect(discord, findsNothing);
+      await end(tester);
+    });
+  });
+
+  group('the star card', () {
+    const seen = {'welcomeShown': true, 'storeHintClosed': true, 'firstMessageSent': true};
+    final card = find.byKey(const Key('star-card'));
+
+    Future<void> send(WidgetTester tester, String text) async {
+      await tester.enterText(find.byType(TextField), text);
+      await tester.tap(find.byKey(const Key('send')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+    }
+
+    // (The app ends here: the pending timers go with the widgets.)
+    Future<void> end(WidgetTester tester) => tester.pumpWidget(const SizedBox());
+
+    testWidgets('it shows after the third finished reply, not before and not while a reply is written', (tester) async {
+      await open(tester, seen: seen);
+      await send(tester, 'one');
+      await send(tester, 'two');
+      expect(Storage(dir).readPrefs().starReplies, 2);
+      expect(card, findsNothing);
+
+      held = StreamController<ReplyEvent>();
+      await send(tester, 'three');
+      expect(card, findsNothing, reason: 'the third reply is still being written');
+      held!.add(const ReplyText('ok'));
+      await held!.close();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(Storage(dir).readPrefs().starReplies, 3);
+      expect(card, findsOneWidget);
+      expect(find.text(starCardText), findsOneWidget);
+      expect(
+        tester.getBottomLeft(card).dy,
+        lessThan(tester.getTopLeft(find.byType(TextField)).dy),
+        reason: 'it never covers the message box',
+      );
+
+      held = StreamController<ReplyEvent>();
+      await send(tester, 'four');
+      expect(card, findsNothing, reason: 'hidden while the next reply is written');
+      await held!.close();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(card, findsOneWidget, reason: 'back once it finished');
+      expect(Storage(dir).readPrefs().starReplies, 3, reason: 'the count stops at three');
+      await end(tester);
+
+      await open(tester, seen: seen);
+      expect(card, findsOneWidget, reason: 'not handled yet: it is still there after a restart');
+      await end(tester);
+    });
+
+    for (final button in ['star-card-star', 'star-card-later']) {
+      testWidgets('$button closes it for good, also after a restart', (tester) async {
+        Storage(dir).writePrefs(const PrefsData(starReplies: 3));
+        await open(tester, seen: seen);
+        expect(card, findsOneWidget);
+        await tester.tap(find.byKey(Key(button)));
+        await tester.pump();
+        expect(card, findsNothing);
+        expect(opened, button == 'star-card-star' ? [starUsUrl] : isEmpty);
+        expect(Storage(dir).readPrefs().starCardClosed, isTrue);
+        await send(tester, 'more');
+        expect(card, findsNothing);
+        await end(tester);
+
+        await open(tester, seen: seen);
+        expect(card, findsNothing);
+        await end(tester);
+      });
+    }
+
+    testWidgets('the design switch shows it at once whatever was saved; a button closes it for this session only', (
+      tester,
+    ) async {
+      Storage(dir).writePrefs(const PrefsData(starCardClosed: true));
+      await open(tester, seen: seen, starForced: true);
+      expect(card, findsOneWidget);
+      await tester.tap(find.byKey(const Key('star-card-later')));
+      await tester.pump();
+      expect(card, findsNothing);
+      expect(Storage(dir).readPrefs().starReplies, 0, reason: 'nothing counted or saved by it');
+      await end(tester);
+
+      Storage(dir).writePrefs(const PrefsData());
+      await open(tester, seen: seen, starForced: true);
+      expect(card, findsOneWidget);
+      await tester.tap(find.byKey(const Key('star-card-later')));
+      await tester.pump();
+      expect(Storage(dir).readPrefs().starCardClosed, isFalse);
+      await end(tester);
+      await open(tester, seen: seen, starForced: true);
+      expect(card, findsOneWidget, reason: 'again at the next start');
       await end(tester);
     });
   });

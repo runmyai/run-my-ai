@@ -26,6 +26,8 @@ class Prefs {
     this.vramHeadroomGiB,
     this.vramHeadroom = const {},
     this.communityStep = 0,
+    this.starReplies = 0,
+    this.starCardClosed = false,
   });
 
   /// System until the user picks one in Settings: then Run My AI Dark, unless the computer is set to light (see
@@ -76,6 +78,10 @@ class Prefs {
   /// The line under the message box: 0 GitHub, 1 Discord, 2 done (see [PrefsData.communityStep]).
   final int communityStep;
 
+  /// Finished replies counted toward the star card (see [starCardAfter]), and whether it was closed for good.
+  final int starReplies;
+  final bool starCardClosed;
+
   /// What the engine is started with.
   VramHeadroom get vramHeadroomSetting =>
       VramHeadroom(byCard: vramHeadroom, others: vramHeadroomGiB ?? defaultVramHeadroomGiB);
@@ -98,6 +104,8 @@ class Prefs {
     bool? shareBenchmarks,
     Map<String, double>? vramHeadroom,
     int? communityStep,
+    int? starReplies,
+    bool? starCardClosed,
   }) => Prefs(
     theme: theme ?? this.theme,
     darkStyle: darkStyle ?? this.darkStyle,
@@ -115,6 +123,8 @@ class Prefs {
     vramHeadroomGiB: vramHeadroomGiB,
     vramHeadroom: vramHeadroom ?? this.vramHeadroom,
     communityStep: communityStep ?? this.communityStep,
+    starReplies: starReplies ?? this.starReplies,
+    starCardClosed: starCardClosed ?? this.starCardClosed,
   );
 }
 
@@ -152,6 +162,8 @@ class PrefsNotifier extends Notifier<Prefs> {
       vramHeadroomGiB: saved.vramHeadroomGiB,
       vramHeadroom: saved.vramHeadroom,
       communityStep: saved.communityStep,
+      starReplies: saved.starReplies,
+      starCardClosed: saved.starCardClosed,
     );
   }
 
@@ -183,6 +195,14 @@ class PrefsNotifier extends Notifier<Prefs> {
       _save(state.copyWith(vramHeadroom: {...state.vramHeadroom, card: max(gib, minVramHeadroomGiB)}));
 
   void setCommunityStep(int step) => _save(state.copyWith(communityStep: step));
+
+  /// One more finished reply toward the star card, until it has shown or was closed.
+  void countReply() {
+    if (state.starCardClosed || state.starReplies >= starCardAfter) return;
+    _save(state.copyWith(starReplies: state.starReplies + 1));
+  }
+
+  void closeStarCard() => _save(state.copyWith(starCardClosed: true));
 
   void toggleThinking() => _save(state.copyWith(thinking: !state.thinking));
 
@@ -227,9 +247,14 @@ class PrefsNotifier extends Notifier<Prefs> {
             vramHeadroomGiB: prefs.vramHeadroomGiB,
             vramHeadroom: prefs.vramHeadroom,
             communityStep: prefs.communityStep,
+            starReplies: prefs.starReplies,
+            starCardClosed: prefs.starCardClosed,
           ),
         );
   }
 }
+
+/// The star card shows after this many finished replies ever.
+const starCardAfter = 3;
 
 final prefsProvider = NotifierProvider<PrefsNotifier, Prefs>(PrefsNotifier.new);

@@ -31,6 +31,8 @@ class PrefsData {
     this.vramHeadroomGiB,
     this.vramHeadroom = const {},
     this.communityStep = 0,
+    this.starReplies = 0,
+    this.starCardClosed = false,
   });
 
   static const defaultStateLimitGiB = 10.0;
@@ -74,6 +76,10 @@ class PrefsData {
 
   /// The line under the message box: 0 asks for a GitHub star, 1 for joining Discord, 2 is done (nothing shows).
   final int communityStep;
+
+  /// Finished replies counted toward the star card (up to the count it shows after), and whether it was closed for good.
+  final int starReplies;
+  final bool starCardClosed;
 }
 
 /// Where the window was when it was last moved or resized: its normal size and place (also kept
@@ -144,6 +150,8 @@ class Storage {
           if (value is num) '$key': value.toDouble(),
       },
       communityStep: json['communityStep'] as int? ?? 0,
+      starReplies: json['starReplies'] as int? ?? 0,
+      starCardClosed: json['starCardClosed'] as bool? ?? false,
     );
   }
 
@@ -162,6 +170,8 @@ class Storage {
     if (data.vramHeadroomGiB != null) 'vramHeadroomGiB': data.vramHeadroomGiB,
     if (data.vramHeadroom.isNotEmpty) 'vramHeadroom': data.vramHeadroom,
     if (data.communityStep != 0) 'communityStep': data.communityStep,
+    if (data.starReplies != 0) 'starReplies': data.starReplies,
+    if (data.starCardClosed) 'starCardClosed': true,
   });
 
   WindowData? readWindow() {
