@@ -12,7 +12,7 @@ Run My AI is a Flutter desktop app for Linux and Windows; a macOS runner exists 
 | `lib/benchmark/` | The Benchmark tab's logic, pure Dart (section 10): the run's setup and result (`benchmark.dart`), the readings of the machine (`hardware.dart`, `nvml.dart`, `amd_gpu.dart`), the series on one time axis (`series.dart`), the lines of the live view (`metrics.dart`), the disturbed rules (`disturbance.dart`), the engine's counters (`engine_stats.dart`), the numbers of all the turns of a run together (`whole_run.dart`), the memory layout, the long prompts, comparing runs and the summaries. |
 | `lib/data/` | `models.dart` (plain data classes), `storage.dart` (small JSON files), `chat_db.dart` (SQLite), `chat_store.dart` (the database on a background isolate), `reply_stats.dart` (how a reply went, for the card under it). |
 | `lib/dev/` | `screenshot.dart`: developer screenshots, switched on by environment variables. |
-| `lib/engine/` | Running the engine: its process (`engine_process.dart`), the flag text and its rules (`engine_flags.dart`, `commands.dart`), the Auto commands (`auto_commands.dart`, generated: section 8) and the engine's version (`engine_version.dart`); also the chats' saved states, the live speed, the GGUF reader and the context fit. |
+| `lib/engine/` | Running the engine: its process (`engine_process.dart`), the flag text and its rules (`engine_flags.dart`, `commands.dart`), the Auto commands (`autoCommand` in `commands.dart`, the autotuner's flags in `tuning.dart`: section 8) and the engine's version (`engine_version.dart`); also the chats' saved states, the live speed, the GGUF reader and the context fit. |
 | `lib/search/` | `chat_search.dart`: query parsing, matching and ranking for chat search. Pure Dart. |
 | `lib/state/` | Riverpod notifiers with their state classes, mostly one per file (section 2). |
 | `lib/system/` | `appearance.dart` (is the computer set to light) and `chime.dart` (the reply-finished sound and its FFI player). |
@@ -20,7 +20,6 @@ Run My AI is a Flutter desktop app for Linux and Windows; a macOS runner exists 
 | `lib/ui/benchmark/` | The Benchmark tab's widgets: `live_graphs.dart` (the rows of graphs), `result_view.dart` and `result_charts.dart` (a saved run's full result, the run-level folds and the charts), `run_details.dart` (the details under the graphs of a turn and of the whole run), `history_view.dart`, `fold.dart`, `chart_colors.dart`. `lib/ui/reply_card.dart` is the card under a reply (section 11). |
 | `lib/ui/pages/` | One page per section: `chat_page.dart`, `store_page.dart`, `engine_page.dart` (the Engine page; its Benchmark tab is `benchmark_tab.dart`), `settings_page.dart`, `about_page.dart` (About, section 9) and `simple_pages.dart` (the Code page). |
 | `lib/window/` | `app_window.dart`: window set-up, saved size and place, window-state providers. |
-| `tool/` | `sync_auto_commands.sh`: writes `lib/engine/auto_commands.dart` from the engine's presets (section 8). |
 | `native/` | `sound.c`, the sound player in C, and `third_party/` with miniaudio and stb_vorbis. |
 
 `assets/` holds the logo, the app icon, the reply-finished sound, the licence texts (`assets/licenses/`, section 9) and the texts the Benchmark tab's long prompts are made of (`assets/benchmark/`, with the story in `assets/dummy/`). `linux/`, `windows/` and `macos/` are the Flutter runners.
@@ -123,7 +122,6 @@ Run from the app folder. `flutter test` runs every file in `test/` and needs no 
 | `motion_test.dart`, `follow_test.dart` | The `Motion` presets; the `ReplyFollower` rules. |
 | `folded_text_test.dart`, `cut_title_test.dart` | `FoldedText`; `CutTitle`. |
 | `shortcuts_test.dart` | `listOrder` (the order Alt+Up / Alt+Down walk) and the text-size steps of `PrefsNotifier`. |
-| `auto_commands_test.dart` | `auto_commands.dart` equals what `tool/sync_auto_commands.sh` writes from the presets (it runs the script's `--check` through bash), and the check finds a changed flag. Skipped without bash or the presets folder next to the app. |
 | `about_test.dart` | The engine's `--version` output (parsed, and read from a stand-in program), `appVersion` equal to pubspec.yaml, the bundled licence files equal to their sources, every project of the engine's Thanks section named on the page, and the page itself: opened from Settings, versions, credits, a licence opening, Back. |
 | `colors_test.dart` | The contrast rules of every theme: button, option and focus-ring borders at least 3:1 against the page, text at least 4.5:1, each button state one clear step from the next, rows visible on the page and the sidebar. |
 | `benchmark_test.dart` | A run in `BenchmarkNotifier` with a stand-in engine and machine: the order of its messages in one conversation, nothing saved for it, the phases, the word times, the record, the timing flag added only when the engine lists it, the long prompt cut by the engine's count, Stop, the history and its bound, and the context options. |
@@ -154,7 +152,19 @@ Run from the app folder. `flutter test` runs every file in `test/` and needs no 
 
 ## 8. Auto commands
 
-`lib/engine/auto_commands.dart` (`lingAuto`, `flintAuto`: one command per context length, 4k to 262k) is the Auto profile's flags. It is generated: never edit it. `tool/sync_auto_commands.sh` sources `presets/ling.sh` and `presets/flint.sh` (Flint with its default case), calls `preset_command <size>` for every size in the preset's `PRESET_SIZES`, and keeps what the app stores: the environment settings first (`GGML_CUDA_*=...`, kept as `EngineFlags.parse` reads them), then the flags. What the app supplies itself when it starts the engine is cut out: the `systemd-run` memory-cap wrapper (it must be the words `_memoryCap` in `engine_backend.dart` writes, else the script stops), the program, `-m` and the model file, `--host` and `--port`. It also stops on anything the app refuses in a command (the flags `commands.dart` lists as supplied by the app, `LD_*`, `DYLD_*`, `PATH`), a quote, `$` or `\` in a flag, or a path into the presets' folder left over. Run it from anywhere after a preset changes: `runmyai/tool/sync_auto_commands.sh`. `--check [FILE]` writes nothing and exits 1, showing the difference, when the file is not what the presets give; `test/auto_commands_test.dart` runs it. Today every flag of both presets can be stored; Flint's other machine cases (`FLINT_CASE=2`, `3`) are not generated: the app has one Auto command per context length.
+The Auto profile's command is short: `autoCommand` (`lib/engine/commands.dart`) writes, for each context length in `autoContextLengths` (4k to 262k), the context length, the context cache type and `--moe-stream model`. With that word the engine switches on its own speed-ups for prompts, replies, the CPU, the RAM and the graphics memory, so the app keeps no list of engine flags.
+
+What depends on the PC comes from the engine's `autotuner` program. The app runs it once per model, right after the model's download is checked (and again when the user presses Tune), keeps its result in `autotuner.json`, and at every start `withTuning` (`lib/engine/tuning.dart`) appends the flags the autotuner recommends (`recommended_args`: the thread counts for replies and prompts, the fast cores, the SSD readers, the card of the expert pool or the shared-memory mode). Without a result the command stands as it is and the engine picks for itself.
+
+The app adds only what is the user's or the model's:
+
+- which cards are used: the autotuner's list (separate cards of any size, or a built-in GPU with 24 GiB or more); none = `--device none`;
+- `--moe-stream-vram-free`: the graphics memory kept free on each card (Settings);
+- `--moe-stream-elastic 1` beside a separate card;
+- the context cache type (Settings) and the context length;
+- the model's data files next to the model file (`withModelData`), and for a model whose data files have their own names the flags in its `_LocalModel` (`dataFlags`, `cardDataFlags`).
+
+While a model is tuned the app's downloads stand still (`holdDownloads` / `releaseDownloads` in `lib/state/library.dart`). Other programs may keep the PC busy: `BusyMeter` (`lib/system/busy.dart`, Windows counters in `win32_busy.dart`) watches the CPU time and the model drive's traffic of everything but the autotuner while it runs; more than one core's worth or more than 40 MB/s counts as busy. The model is tuned all the same and its row says so for 30 seconds.
 
 ## 9. About
 

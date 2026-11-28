@@ -70,7 +70,7 @@ BenchmarkResult _result() {
     modelName: 'Ling 3.0 Flash',
     contextLength: 65536,
     profileName: 'Automatic',
-    flags: '-c 65536 -t 8 --moe-stream model --moe-stream-correction {models}/ling.correction '
+    flags: '-c 65536 --moe-stream model --moe-stream-correction {models}/ling.correction '
         '--moe-stream-vram-experts-file "$_home/Run My AI/models/ling.vram-experts.json" -ctk q8_0',
     memoryCapGiB: 1.5,
     promptLabel: 'Reply speed',
@@ -360,7 +360,12 @@ void main() {
         file: _file,
         kvCache: 'q8_0',
         machine: {'kernel': '7.2.7', 'drive': {'filesystem': 'ntfs3', 'type': 'NVMe SSD'}},
-        tuned: (fileName: 'ling.gguf', result: {'threads': 10, 'io_threads': 12, 'gpus': [{'name': 'CUDA0', 'mib': 12000}]}),
+        tuned: (fileName: 'ling.gguf', result: {
+          'threads': 10,
+          'io_threads': 12,
+          'gpus': [{'name': 'CUDA0', 'mib': 12000}],
+          'recommended_args': ['--moe-stream', 'model', '-t', '10', '--moe-stream-io-threads', '12'],
+        }),
         layout: const {'ram_slots_per_layer': 191},
         folders: const [_home],
       );

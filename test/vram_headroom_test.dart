@@ -12,7 +12,6 @@ import 'package:runmyai/backend/engine_backend.dart';
 import 'package:runmyai/benchmark/benchmark.dart';
 import 'package:runmyai/data/models.dart';
 import 'package:runmyai/data/storage.dart';
-import 'package:runmyai/engine/auto_commands.dart';
 import 'package:runmyai/engine/commands.dart';
 import 'package:runmyai/engine/tuning.dart';
 import 'package:runmyai/state/library.dart';
@@ -63,17 +62,13 @@ class _GpuBackend extends _Backend implements TuneControl {
 }
 
 void main() {
-  const gpuTables = [lingAuto, lingAutoSmall, flintAuto, flintAutoSmall, qwenAuto, qwenAutoSmall];
-  const cpuTables = [lingAutoCpu, flintAutoCpu, qwenAutoCpu];
-
   group('the command', () {
-    test('the default reaches every GPU recipe command; the rest of the command stays', () {
-      for (final table in gpuTables) {
-        for (final command in table.values) {
-          final set = withVramFree(command, vramSize(defaultVramHeadroomGiB));
-          expect(set, contains('--moe-stream-vram-free 512MiB'));
-          expect(set.replaceAll('512MiB', '200MiB'), command);
-        }
+    test('the default reaches every Auto command with a card; the rest of the command stays', () {
+      for (final length in autoContextLengths) {
+        final command = autoCommand(length, vramFree: '200MiB', elastic: true);
+        final set = withVramFree(command, vramSize(defaultVramHeadroomGiB));
+        expect(set, contains('--moe-stream-vram-free 512MiB'));
+        expect(set.replaceAll('512MiB', '200MiB'), command);
       }
     });
 
@@ -84,12 +79,11 @@ void main() {
       expect(withVramFree('--x --moe-stream-vram-free 200MiB', 'CUDA0=1GiB,CUDA1=512MiB'), '--x --moe-stream-vram-free CUDA0=1GiB,CUDA1=512MiB');
     });
 
-    test('a CPU recipe has no VRAM flag, and gets none', () {
-      for (final table in cpuTables) {
-        for (final command in table.values) {
-          expect(command, isNot(contains('vram-free')));
-          expect(withVramFree(command, vramSize(1)), command);
-        }
+    test('a command for the CPU has no VRAM flag, and gets none', () {
+      for (final length in autoContextLengths) {
+        final command = autoCommand(length);
+        expect(command, isNot(contains('vram-free')));
+        expect(withVramFree(command, vramSize(1)), command);
       }
     });
   });
@@ -314,36 +308,28 @@ void main() {
       final built = await withCards([], built: [32 * 1024]);
       expect(built.sharesRam, isTrue);
       expect(built.autoCommands(file)[4096], isNot(contains('--moe-stream-elastic')));
-      expect((await withCards([])).sharesRam, isFalse, reason: 'no card at all: the CPU-only table, already fixed');
-      expect(lingAutoCpu.values.any((c) => c.contains('--moe-stream-elastic')), isFalse);
+      expect((await withCards([])).sharesRam, isFalse, reason: 'no card at all');
+      expect((await withCards([])).autoCommands(file)[4096], isNot(contains('--moe-stream-elastic')), reason: 'the CPU: fixed memory');
     });
 
-    String extra(String flags) => '${Platform.isWindows ? '--moe-stream-async-h2d 0 ' : ''}$flags';
-
-    test('one card with a name: its own list form; the table\'s command otherwise as it was', () async {
+    test('one card with a name: its own list form; nothing else about the cards from the app', () async {
       final backend = await withCards([card('CUDA0', 12 * 1024, 10)]);
       final file = (await backend.loadCatalog()).first.files.first;
       Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA0': 1.5}));
-      expect(
-        backend.autoCommands(file)[4096],
-        '${withVramFree(lingAuto[4096]!, 'CUDA0=1536MiB')} ${extra('--device CUDA0')}',
-      );
+      expect(backend.autoCommands(file)[4096], autoCommand(4096, vramFree: 'CUDA0=1536MiB', elastic: true));
       Storage(dir).writePrefs(const PrefsData());
       expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free CUDA0=512MiB '));
     });
 
-    test('two cards: the pool card, the faster card named auto, each with its own value; no -ts, no layer ranges', () async {
+    test("several cards: each keeps its own value free; which card does what is the autotuner's and the engine's", () async {
       final backend = await withCards([card('CUDA0', 12 * 1024, 10), card('CUDA1', 12 * 1024, 20)]);
       final file = (await backend.loadCatalog()).first.files.first;
       Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA0': 1, 'CUDA1': 0.75}));
       final c = backend.autoCommands(file)[4096]!;
-      expect(
-        c,
-        '${withVramFree(lingAuto[4096]!, 'CUDA0=1024MiB,CUDA1=768MiB')} '
-        '${extra('--device CUDA0,CUDA1 --moe-stream-vram-device CUDA0 --moe-stream-gpu-layers-device CUDA1=auto')}',
-      );
-      expect(c, isNot(contains(' -ts ')));
-      expect(RegExp(r'gpu-layers-device \S+=\d').hasMatch(c), isFalse);
+      expect(c, autoCommand(4096, vramFree: 'CUDA0=1024MiB,CUDA1=768MiB', elastic: true));
+      for (final flag in [' -ts ', '--device', '--moe-stream-vram-device', 'gpu-layers']) {
+        expect(c, isNot(contains(flag)));
+      }
       // a card without a value takes the default
       Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA1': 4}));
       expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free CUDA0=512MiB,CUDA1=4096MiB '));
@@ -352,27 +338,23 @@ void main() {
       expect(backend.autoCommands(file)[4096], contains('--moe-stream-vram-free CUDA0=2048MiB,CUDA1=2048MiB '));
     });
 
-    test('three cards: the pool is the slowest, the faster ones are named fastest first (the fastest card is filled first)', () async {
-      final backend = await withCards([card('CUDA0', 8 * 1024, 5), card('CUDA1', 24 * 1024, 20), card('CUDA2', 12 * 1024, 10)]);
-      final file = (await backend.loadCatalog()).first.files.first;
-      Storage(dir).writePrefs(const PrefsData(vramHeadroom: {'CUDA0': 1, 'CUDA1': 0.75, 'CUDA2': 2}));
-      final c = backend.autoCommands(file)[4096]!;
-      expect(
-        c,
-        '${withVramFree(lingAuto[4096]!, 'CUDA0=1024MiB,CUDA1=768MiB,CUDA2=2048MiB')} '
-        '${extra('--device CUDA0,CUDA1,CUDA2 --moe-stream-vram-device CUDA0 '
-            '--moe-stream-gpu-layers-device CUDA1=auto --moe-stream-gpu-layers-device CUDA2=auto')}',
-      );
-      expect(c, isNot(contains(' -ts ')));
-      expect(RegExp(r'gpu-layers-device \S+=\d').hasMatch(c), isFalse);
+    test("no card: the CPU. A small separate card is the engine's to use", () async {
+      final none = await withCards([]);
+      final file = (await none.loadCatalog()).first.files.first;
+      expect(none.autoCommands(file)[4096], autoCommand(4096));
+      expect((await withCards([card('CUDA0', 2 * 1024, 5)])).autoCommands(file)[4096],
+          autoCommand(4096, vramFree: 'CUDA0=512MiB', elastic: true));
     });
 
-    test('CPU-only: no card, or a card under 4 GB, gets the CPU table as it is', () async {
-      for (final cards in [<Map<String, Object?>>[], [card('CUDA0', 2 * 1024, 5)]]) {
-        final backend = await withCards(cards);
-        final file = (await backend.loadCatalog()).first.files.first;
-        expect(backend.autoCommands(file)[4096], lingAutoCpu[4096]);
-      }
+    test('a model whose data files have their own names: named in its command, the VRAM list only with a card', () async {
+      final backend = await withCards([card('CUDA0', 12 * 1024, 10)]);
+      final qwen = (await backend.loadCatalog()).last.files.first;
+      final c = backend.autoCommands(qwen)[4096]!;
+      expect(c, contains('--moe-stream-correction {models}/Qwen3.8-Flash-Next-WV-v5-3.5bpw.correction'));
+      expect(c, contains('--moe-stream-vram-experts-file {models}/Qwen3.8-Flash-Next-WV-v5-3.5bpw.vram-experts.json'));
+      final onCpu = (await withCards([])).autoCommands(qwen)[4096]!;
+      expect(onCpu, contains('--moe-stream-correction {models}/Qwen3.8-Flash-Next-WV-v5-3.5bpw.correction'));
+      expect(onCpu, isNot(contains('vram-experts')));
     });
   });
 }

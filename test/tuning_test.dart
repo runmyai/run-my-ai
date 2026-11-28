@@ -2,40 +2,37 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:runmyai/engine/tuning.dart';
 
 void main() {
-  const table = ['-c', '8192', '-t', '8', '--moe-stream', 'model'];
+  const auto = ['-c', '8192', '-ctk', 'q8_0', '-ctv', 'q8_0', '--moe-stream', 'model'];
 
-  test('no measurement keeps the table', () => expect(withTuning(table, null), table));
-
-  test('the measured threads and SSD readers go in', () {
-    expect(withTuning(table, {'threads': 7, 'fast_cpus': '', 'io_threads': 4}),
-        ['-c', '8192', '-t', '7', '--moe-stream', 'model', '--moe-stream-io-threads', '4']);
+  test('no measurement keeps the command: the engine picks for itself', () {
+    expect(withTuning(auto, null), auto);
+    expect(withTuning(auto, {'threads': 7}), auto, reason: 'a result without the flag list');
   });
 
-  test('fast cores: the measured threads stay on them', () {
-    expect(withTuning(table, {'threads': 6, 'fast_cpus': '0-15'}),
-        ['-c', '8192', '-t', '6', '--moe-stream', 'model', '--cpu-range', '0-15']);
+  test("the autotuner's flags go in as it gives them", () {
+    expect(
+      withTuning(auto, {
+        'threads': 7,
+        'recommended_args': ['--moe-stream', 'model', '-t', '7', '-tb', '11', '--moe-stream-io-threads', '4'],
+      }),
+      [...auto, '-t', '7', '-tb', '11', '--moe-stream-io-threads', '4'],
+    );
   });
 
-  test('prompts get their own thread count when the autotuner measured more for them', () {
-    expect(withTuning(table, {'threads': 9, 'threads_batch': 11, 'fast_cpus': '', 'fast_mask': ''}),
-        ['-c', '8192', '-t', '9', '--moe-stream', 'model', '-tb', '11']);
-    expect(withTuning(table, {'threads': 9, 'threads_batch': 9}), ['-c', '8192', '-t', '9', '--moe-stream', 'model']);
+  test("fast cores, the card of the expert pool and the shared-memory mode are the autotuner's too", () {
+    expect(
+      withTuning(auto, {
+        'recommended_args': ['--moe-stream', 'model', '-t', '6', '--cpu-mask', 'fc03', '--cpu-strict', '1', '--moe-stream-vram-device', 'CUDA1'],
+      }),
+      [...auto, '-t', '6', '--cpu-mask', 'fc03', '--cpu-strict', '1', '--moe-stream-vram-device', 'CUDA1'],
+    );
+    expect(withTuning(auto, {'recommended_args': ['--moe-stream', 'model', '-t', '10', '--moe-stream-uma', '1']}),
+        [...auto, '-t', '10', '--moe-stream-uma', '1']);
   });
 
-  test('fast cores as a mask (one thread per core, any numbering); prompts keep every core', () {
-    expect(withTuning(table, {'threads': 6, 'threads_batch': 13, 'fast_cpus': '', 'fast_mask': '0xfc03', 'logical_cores': 24}), [
-      '-c', '8192', '-t', '6', '--moe-stream', 'model', '--cpu-mask', '0xfc03', '--cpu-range-batch', '0-23', '-tb', '13',
-    ]);
-  });
-
-  test('several cards: the slowest holds the pool, the faster ones are named fastest first and the engine counts their layers', () {
-    expect(cardFlags([(name: 'CUDA1', mib: 11911), (name: 'CUDA0', mib: 11909)]), [
-      '--device', 'CUDA0,CUDA1', '--moe-stream-vram-device', 'CUDA0', '--moe-stream-gpu-layers-device', 'CUDA1=auto',
-    ]);
-    expect(cardFlags([(name: 'CUDA0', mib: 24576), (name: 'CUDA2', mib: 12288), (name: 'CUDA1', mib: 8192)]), [
-      '--device', 'CUDA1,CUDA0,CUDA2', '--moe-stream-vram-device', 'CUDA1',
-      '--moe-stream-gpu-layers-device', 'CUDA0=auto', '--moe-stream-gpu-layers-device', 'CUDA2=auto',
-    ]);
+  test("a flag the command names keeps its value (a profile of the user's own)", () {
+    expect(withTuning(['-c', '8192', '-t', '4'], {'recommended_args': ['--moe-stream', 'model', '-t', '7', '-tb', '11']}),
+        ['-c', '8192', '-t', '4', '--moe-stream', 'model', '-tb', '11']);
   });
 
   test('cards are ranked by measured speed, then size', () {
