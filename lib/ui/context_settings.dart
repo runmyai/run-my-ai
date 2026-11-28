@@ -40,13 +40,16 @@ int? kvCacheBytes({required String modelId, required int tokens, required String
     'q4_0' => 18.0 / 32.0, // 0.5625 bytes per value
     _ => 34.0 / 32.0, // 1.0625 bytes per value (Q8_0)
   };
+  // The engine rounds the context up to a multiple of 256 cells.
+  final cells = (tokens + 255) ~/ 256 * 256;
+  // Each formula equals the sizes the engine reports at load, for every context length and type the app offers.
   final double bytes = switch (modelId) {
     // 7 attention layers keep a 576-wide key; the 35 linear-attention layers have a fixed state.
-    'ling-3.0-flash' => tokens * 7 * 576 * bpe + 78561280,
+    'ling-3.0-flash' => cells * 7 * 576 * bpe + 78561280,
     // 14 full-attention layers, and the 35 sliding-window layers with their padded window of cells.
-    'flint-40b' => (tokens * 14 * 1024 + (tokens < 262144 ? 2816 : 1792) * 35 * 1024) * bpe,
-    // 12 attention layers (key, value and indexer key); the 36 recurrent layers have a fixed state.
-    'qwen3.8-flash-next' => tokens * 12 * 1280 * bpe + 117669888,
+    'flint-40b' => (cells * 14 * 1024 + (tokens < 262144 ? 2816 : 1792) * 35 * 1024) * bpe,
+    // 12 attention layers (key, value and indexer key); the recurrent layers and the n-gram layer have a fixed state.
+    'qwen3.8-flash-next' => cells * 12 * 1280 * bpe + 118038528,
     _ => -1,
   };
   return bytes < 0 ? null : bytes.round();
