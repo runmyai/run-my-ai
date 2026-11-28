@@ -24,13 +24,14 @@
 - **Private.** Everything runs on your machine. Nothing you type leaves it.
 - **No limits, no bill.** No usage caps, no subscription. Free.
 
-## What you can do
+## What you get
 
-- **Pick a model from the store.** Downloads resume where they stopped, and the app tunes itself to your PC once a model is downloaded.
-- **Chat, and branch a chat** from any earlier message. Old chats continue instantly: the engine's memory of each chat is saved on disk.
-- **Benchmark your PC** on the Benchmark page.
-- **Host a model for your own tools**, as an OpenAI-compatible API with an API key.
-- **Stay up to date.** Updates download only the files that changed.
+- **A simple desktop app.** No command line, no setup files: it sets up the engine for your PC, then you download a model and start chatting.
+- **A model store.** Every supported model in one place, ready to download. A dropped connection picks up where it stopped.
+- **Tuned to your PC.** After a model downloads, the autotuner measures your processor, graphics card and SSD, and picks the settings that run it fastest on your machine.
+- **Your PC stays smooth.** The engine auto-adjusts to your free RAM: it gives memory back when your other apps need it and takes it again when they're done. Whatever doesn't fit is read from your SSD.
+- **A benchmark for your PC.** Measure how fast each model replies and reads long prompts on your machine, at the context length and cache type you pick.
+- **Serve mode.** Use the models from your own tools through an OpenAI-compatible API, protected with an API key.
 
 ## Get it
 
