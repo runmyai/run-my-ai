@@ -86,14 +86,34 @@ class StarCard extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(starCardText, style: TextStyle(fontSize: 13, height: 1.4, color: c.textSecondary)),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Tooltip(
+                  message: 'Close',
+                  child: InkWell(
+                    key: const Key('star-card-close'),
+                    mouseCursor: SystemMouseCursors.click,
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: close,
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(Icons.close, size: 15, semanticLabel: 'Close', color: c.textMuted),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(starCardText, style: TextStyle(fontSize: 13, height: 1.4, color: c.textSecondary)),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             Wrap(
               alignment: WrapAlignment.end,
               spacing: 8,
               runSpacing: 8,
               children: [
-                AppButton(key: const Key('star-card-later'), label: 'Not now', dense: true, onTap: close),
                 MainButton(
                   key: const Key('star-card-star'),
                   label: 'Star on GitHub',

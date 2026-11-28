@@ -362,7 +362,7 @@ void main() {
       await end(tester);
     });
 
-    for (final button in ['star-card-star', 'star-card-later']) {
+    for (final button in ['star-card-star', 'star-card-close']) {
       testWidgets('$button closes it for good, also after a restart', (tester) async {
         Storage(dir).writePrefs(const PrefsData(starReplies: 3));
         await open(tester, seen: seen);
@@ -388,7 +388,7 @@ void main() {
       Storage(dir).writePrefs(const PrefsData(starCardClosed: true));
       await open(tester, seen: seen, starForced: true);
       expect(card, findsOneWidget);
-      await tester.tap(find.byKey(const Key('star-card-later')));
+      await tester.tap(find.byKey(const Key('star-card-close')));
       await tester.pump();
       expect(card, findsNothing);
       expect(Storage(dir).readPrefs().starReplies, 0, reason: 'nothing counted or saved by it');
@@ -397,7 +397,7 @@ void main() {
       Storage(dir).writePrefs(const PrefsData());
       await open(tester, seen: seen, starForced: true);
       expect(card, findsOneWidget);
-      await tester.tap(find.byKey(const Key('star-card-later')));
+      await tester.tap(find.byKey(const Key('star-card-close')));
       await tester.pump();
       expect(Storage(dir).readPrefs().starCardClosed, isFalse);
       await end(tester);

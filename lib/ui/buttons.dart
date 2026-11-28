@@ -20,6 +20,7 @@ class _ButtonFace extends StatelessWidget {
     required this.label,
     required this.onTap,
     required this.icon,
+    this.iconAsset,
     required this.trailing,
     required this.danger,
     required this.chosen,
@@ -34,6 +35,9 @@ class _ButtonFace extends StatelessWidget {
   final String label;
   final VoidCallback? onTap;
   final IconData? icon;
+
+  /// A picture (white on transparent) drawn in the label's colour in place of [icon].
+  final String? iconAsset;
   final IconData? trailing;
   final bool danger;
   final bool chosen;
@@ -101,7 +105,10 @@ class _ButtonFace extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (icon != null) ...[Icon(icon, size: fontSize + 3, color: text), const SizedBox(width: 6)],
+              if (iconAsset != null)
+                ...[Image.asset(iconAsset!, width: fontSize + 3, height: fontSize + 3, color: text), const SizedBox(width: 6)]
+              else if (icon != null)
+                ...[Icon(icon, size: fontSize + 3, color: text), const SizedBox(width: 6)],
               Text(label, style: style),
               if (trailing != null) ...[const SizedBox(width: 6), Icon(trailing, size: 16, color: text)],
             ],
@@ -123,6 +130,7 @@ class AppButton extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.icon,
+    this.iconAsset,
     this.trailingIcon,
     this.danger = false,
     this.dense = false,
@@ -135,6 +143,9 @@ class AppButton extends StatelessWidget {
   final String label;
   final VoidCallback? onTap;
   final IconData? icon;
+
+  /// A picture drawn in place of [icon] (see [_ButtonFace.iconAsset]).
+  final String? iconAsset;
   final IconData? trailingIcon;
   final bool danger;
 
@@ -153,6 +164,7 @@ class AppButton extends StatelessWidget {
     label: label,
     onTap: onTap,
     icon: icon,
+    iconAsset: iconAsset,
     trailing: trailingIcon,
     danger: danger,
     chosen: false,

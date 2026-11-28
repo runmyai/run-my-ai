@@ -19,6 +19,7 @@ class CommunityPage extends ConsumerWidget {
     final cards = [
       _Card(
         id: 'star',
+        icon: 'github',
         title: starUsLabel,
         line: 'A star helps more people find Run My AI.',
         button: MainButton(
@@ -105,10 +106,13 @@ class CommunityPage extends ConsumerWidget {
 
 /// One of the three cards: its icon, a title, one line and a button at the bottom.
 class _Card extends StatelessWidget {
-  const _Card({required this.id, required this.title, required this.line, required this.button});
+  const _Card({required this.id, String? icon, required this.title, required this.line, required this.button})
+    : icon = icon ?? id;
 
-  /// Also the name of its picture in assets/social.
   final String id;
+
+  /// The name of its picture in assets/social.
+  final String icon;
   final String title, line;
   final Widget button;
 
@@ -131,7 +135,7 @@ class _Card extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _SocialIcon(id, color: c.text, size: 22),
+              _SocialIcon(icon, color: c.text, size: 22),
               const SizedBox(height: 12),
               Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: c.text)),
               const SizedBox(height: 6),

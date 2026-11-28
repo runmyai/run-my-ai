@@ -161,7 +161,7 @@ class _AboutPageState extends ConsumerState<AboutPage> {
             AppButton(
               key: const Key('community-star'),
               label: starUsLabel,
-              icon: Icons.star_outline,
+              iconAsset: 'assets/social/github.png',
               dense: true,
               onTap: () => openUrl(starUsUrl),
             ),
